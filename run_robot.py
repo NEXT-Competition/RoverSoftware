@@ -59,6 +59,8 @@ def main():
                         default=os.environ.get("RS_IMU_ENABLED", "1").strip().lower()
                         in ("1", "true", "yes", "on"),
                         help="disable the BNO055 IMU (heading falls back to GPS course)")
+    parser.add_argument("--imu-calib", default=os.environ.get("RS_IMU_CALIB", cfg.imu.calibration_path),
+                        help="path to persist/restore BNO055 calibration ('' to disable)")
     args = parser.parse_args()
 
     if args.mock_motors:
@@ -76,6 +78,7 @@ def main():
     cfg.imu.enabled = args.imu
     cfg.imu.i2c_address = args.imu_address
     cfg.imu.heading_offset_deg = args.imu_offset
+    cfg.imu.calibration_path = args.imu_calib
 
     motors = "MOCK" if args.mock_motors else "real"
     gps = f"{cfg.gps.port}@{cfg.gps.baud}" if cfg.gps.enabled else "off"

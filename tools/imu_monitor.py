@@ -12,6 +12,11 @@ Calibration levels are 0-3 (3 = fully calibrated). heading() only reports a
 value once sys and mag reach the driver's min_calib; below that it prints
 "(uncalibrated -> GPS fallback)", which is exactly how the rover behaves.
 
+Once sys and mag reach 3 the driver auto-saves the calibration offsets to the
+shared file (default /var/lib/roversoftware/bno055_calibration.json) so the robot
+boots pre-calibrated. Run this with sudo so it can write that path. Use
+--calibration to change it, or --no-save for a dry run.
+
 Off-hardware (no adafruit-circuitpython-bno055 / Blinka): prints a clear note
 and exits, so this is safe to run on a laptop.
 """
@@ -25,6 +30,7 @@ from time import sleep
 # when run as `python tools/imu_monitor.py`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from robot.config import IMUConfig
 from robot.sensors.bno055 import IMU, adafruit_bno055
 
 
@@ -38,6 +44,10 @@ def main():
     p.add_argument("--min-calib", type=int, default=1,
                    help="min sys/mag calibration (0-3) before heading is reported")
     p.add_argument("--rate", type=float, default=5.0, help="print rate (Hz)")
+    p.add_argument("--calibration", default=IMUConfig().calibration_path,
+                   help="where to auto-save calibration once sys/mag hit 3")
+    p.add_argument("--no-save", action="store_true",
+                   help="don't persist calibration (monitor only)")
     args = p.parse_args()
 
     if adafruit_bno055 is None:
@@ -47,9 +57,12 @@ def main():
         return
 
     imu = IMU(i2c_address=args.address, heading_offset_deg=args.offset,
-              invert=args.invert, min_calib=args.min_calib)
+              invert=args.invert, min_calib=args.min_calib,
+              calibration_path=None if args.no_save else args.calibration)
     imu.start()
-    print("Move the rover in figure-8s until mag/sys reach 3. Ctrl-C to stop.\n")
+    dest = "off" if args.no_save else args.calibration
+    print(f"Move the rover in figure-8s until mag/sys reach 3 (auto-save -> {dest}). "
+          "Ctrl-C to stop.\n")
     period = 1.0 / args.rate if args.rate > 0 else 0.2
     try:
         while True:

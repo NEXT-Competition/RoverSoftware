@@ -60,7 +60,8 @@ class Robot:
         # lookup. Disabled/uncalibrated -> heading falls back to GPS course.
         self.imu: Optional[IMU] = (
             IMU(config.imu.i2c_address, config.imu.heading_offset_deg,
-                config.imu.invert, config.imu.min_calib)
+                config.imu.invert, config.imu.min_calib,
+                config.imu.calibration_path or None)
             if config.imu.enabled else None
         )
 

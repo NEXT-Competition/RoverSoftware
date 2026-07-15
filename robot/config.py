@@ -98,6 +98,10 @@ class IMUConfig:
     # Minimum system/magnetometer calibration level (0-3) before we trust the
     # heading. Below this, heading() returns None and the fusion falls back to GPS.
     min_calib: int = 1
+    # Where to persist/restore BNO055 calibration offsets (the sensor forgets them
+    # on every power cycle). A fixed, shared path so the root systemd service and a
+    # manually-run calibration tool use the same file. Empty disables persistence.
+    calibration_path: str = "/var/lib/roversoftware/bno055_calibration.json"
 
 
 @dataclass
