@@ -35,7 +35,8 @@ default:
 # BNO055 note: it clock-stretches on the Pi's hardware I2C. Add
 #     dtparam=i2c_arm_baudrate=100000
 # to /boot/firmware/config.txt (older Pi OS: /boot/config.txt) and reboot, or
-# IMU reads will be flaky. Verify wiring with: python3 tools/imu_monitor.py
+# IMU reads will be flaky. Verify the sensor with: python3 tools/imu_selftest.py
+# (one-shot PASS/FAIL diagnostic), then calibrate with tools/imu_monitor.py.
 bootstrap:
     ssh -t {{target}} "curl -sSL https://raw.githubusercontent.com/sunfounder/fusion-hat/v1/install.sh | sudo bash"
     ssh -t {{target}} "pip install --break-system-packages adafruit-circuitpython-bno055 || pip install adafruit-circuitpython-bno055"
