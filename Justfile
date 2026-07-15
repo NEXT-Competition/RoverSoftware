@@ -32,15 +32,17 @@ default:
 # Python library, and the BNO055 IMU driver. This may enable I2C and require a
 # reboot afterwards. Run this ONCE per robot before the first `just deploy`.
 #
-# BNO055 note: it clock-stretches on the Pi's hardware I2C. Add
-#     dtparam=i2c_arm_baudrate=100000
-# to /boot/firmware/config.txt (older Pi OS: /boot/config.txt) and reboot, or
-# IMU reads will be flaky. Verify the sensor with: python3 tools/imu_selftest.py
-# (one-shot PASS/FAIL diagnostic), then calibrate with tools/imu_monitor.py.
+# BNO055 note: it clock-stretches on the Pi's hardware I2C, which corrupts reads.
+# 100 kHz (the Pi default) is NOT slow enough — add
+#     dtparam=i2c_arm_baudrate=10000
+# to /boot/firmware/config.txt (older Pi OS: /boot/config.txt) and reboot (or use
+# a software i2c-gpio bus to keep full speed). Verify the sensor with
+# python3 tools/imu_selftest.py (one-shot PASS/FAIL), then calibrate with
+# tools/imu_monitor.py.
 bootstrap:
     ssh -t {{target}} "curl -sSL https://raw.githubusercontent.com/sunfounder/fusion-hat/v1/install.sh | sudo bash"
     ssh -t {{target}} "pip install --break-system-packages adafruit-circuitpython-bno055 || pip install adafruit-circuitpython-bno055"
-    @echo "==> Fusion HAT + BNO055 driver installed on {{host}}. Set dtparam=i2c_arm_baudrate=100000 then reboot: just reboot"
+    @echo "==> Fusion HAT + BNO055 driver installed on {{host}}. Set dtparam=i2c_arm_baudrate=10000 then reboot: just reboot"
 
 # Reboot the Pi (handy after bootstrap enables I2C).
 reboot:

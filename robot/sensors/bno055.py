@@ -34,8 +34,10 @@ Graceful degradation: if the adafruit/Blinka libraries aren't installed, or the
 device can't be opened on the I2C bus, `start()` logs why and the reader stays
 inert — every accessor returns None and the stack runs unchanged on a dev laptop.
 
-Wiring caveat: the BNO055 clock-stretches on the Pi's hardware I2C. Slow the bus
-to 100 kHz (dtparam=i2c_arm_baudrate=100000, then reboot) or reads will be flaky.
+Wiring caveat: the BNO055 clock-stretches on the Pi's hardware I2C, corrupting
+reads. 100 kHz (the Pi default) is not slow enough — set
+dtparam=i2c_arm_baudrate=10000 and reboot, or use a software i2c-gpio bus for
+full speed. Verify with tools/imu_selftest.py.
 """
 
 from __future__ import annotations

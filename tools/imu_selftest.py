@@ -182,23 +182,37 @@ def _summary(results):
 
 
 def _troubleshoot(fails):
-    """Implausible accel/mag/temp *together* almost always means bad I2C reads,
-    not a dead sensor — point at the usual culprits in order."""
-    physical = {
+    """Different failures point at different causes. Accel/temperature garbage
+    means bad I2C reads (bus); a lone, stable magnetometer failure means a real
+    magnetic field (interference), not the bus."""
+    bus_checks = {
         "Accelerometer sane (|a| ~ 9.8 m/s^2 at rest)",
-        "Magnetometer plausible (earth field ~25-65 uT)",
         "Temperature plausible",
     }
-    if not any(f in physical for f in fails):
-        return
-    print("\nImplausible raw values usually mean corrupted reads, not a dead chip:")
-    print("  1. I2C clock stretching — the BNO055 needs the Pi bus slowed to 100 kHz.")
-    print("       grep i2c_arm_baudrate /boot/firmware/config.txt   # older OS: /boot/config.txt")
-    print("       # if missing, add 'dtparam=i2c_arm_baudrate=100000', then: sudo reboot")
-    print("  2. Power / wiring — solid 3.3V, short leads, common ground; a brown-out")
-    print("       skews accel & temperature. Avoid long/loose jumpers.")
-    print("  3. Re-run with --raw: jumpy samples => bus/wiring; stable-but-wrong => power")
-    print("       or a counterfeit BNO055 (common on cheap GY-BNO055 clones).")
+    mag_check = "Magnetometer plausible (earth field ~25-65 uT)"
+    bus_failed = [f for f in fails if f in bus_checks]
+
+    if bus_failed:
+        print("\nAccel/temperature garbage means corrupted I2C reads:")
+        print("  1. I2C clock stretching — the Pi's hardware I2C mishandles it, and")
+        print("       100 kHz (the DEFAULT) is not slow enough. Drop the bus right down:")
+        print("       set 'dtparam=i2c_arm_baudrate=10000' in /boot/firmware/config.txt,")
+        print("       then reboot. (Older Pi OS: /boot/config.txt.)")
+        print("  2. To keep full speed instead, use a software I2C bus")
+        print("       (dtoverlay=i2c-gpio), which handles clock stretching correctly.")
+        print("  3. Power/wiring — solid 3.3V, short leads, common ground; a brown-out")
+        print("       skews accel & temperature. --raw jitter => bus/wiring; stable-but-")
+        print("       wrong => power or a counterfeit BNO055 (common on GY-BNO055 clones).")
+
+    if mag_check in fails and not bus_failed:
+        print("\nMagnetometer is the only failure and the reads are stable, so it's a")
+        print("REAL field the sensor sees — magnetic interference, not a bus fault:")
+        print("  1. Mount the BNO055 AWAY from the drive motors/ESCs, magnets, speakers,")
+        print("       battery/current wiring and ferrous metal — motor magnets dwarf")
+        print("       earth's ~50 uT and can saturate the magnetometer (~1300 uT range).")
+        print("  2. Confirm it: hold the bare board away from the rover and re-run — |B|")
+        print("       should drop to ~25-65 uT. If it does, it's a mounting-location fix.")
+        print("  3. Then calibrate: run tools/imu_monitor.py and do figure-8s (mag -> 3).")
 
 
 if __name__ == "__main__":

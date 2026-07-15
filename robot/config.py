@@ -84,9 +84,11 @@ class IMUConfig:
     # heading that's valid at a standstill — the compass the NEO-6M lacks — so it
     # becomes the heading source for pose estimation and the waypoint angle loop.
     #
-    # Wiring note: the BNO055 clock-stretches on the Pi's hardware I2C; slow the
-    # bus to 100 kHz (dtparam=i2c_arm_baudrate=100000 in /boot/firmware/config.txt,
-    # then reboot) or reads will be flaky. See packaging/robot.env.
+    # Wiring note: the BNO055 clock-stretches on the Pi's hardware I2C, which
+    # corrupts reads. 100 kHz (the Pi default) is NOT slow enough — set
+    # dtparam=i2c_arm_baudrate=10000 in /boot/firmware/config.txt and reboot, or
+    # use a software I2C bus (dtoverlay=i2c-gpio) to keep full speed. Verify with
+    # tools/imu_selftest.py. See packaging/robot.env.
     enabled: bool = True
     i2c_address: int = 0x28  # BNO055 default; 0x29 if the ADR pin is pulled high
     # Rotation applied to the sensor's raw yaw to align it with the robot's
