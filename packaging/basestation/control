@@ -8,11 +8,14 @@ Depends: python3 (>= 3.9), python3-serial, python3-fastapi, python3-uvicorn, pyt
 Recommends: chromium-browser | chromium, fonts-roboto
 Description: RoverSoftware base-station dashboard (kiosk)
  Web dashboard to monitor and drive the roversoftware robot fleet over XBee.
- Installs to /opt/roversoftware-basestation and runs a local server as the
- roversoftware-basestation systemd service (started on boot).
+ Installs to /opt/roversoftware-basestation and runs two systemd services on
+ boot: roversoftware-basestation (the Python bridge — radio, gamepad, tiles)
+ and roversoftware-ui (a Deno front door serving the touch UI and proxying to
+ the bridge). The Deno UI requires the `deno` runtime on PATH (see README /
+ `just bootstrap-deno`); without it the bridge still runs on its internal port.
  .
  On a Raspberry Pi booted to the desktop, a /etc/xdg/autostart entry launches
- a full-screen, touch-friendly Chromium kiosk pointed at the dashboard.
+ a full-screen, touch-friendly Chromium kiosk pointed at the touch UI.
  .
  Per-instance settings live in /etc/roversoftware/basestation.env. Requires
  Raspberry Pi OS / Debian Bookworm or newer for the packaged FastAPI/uvicorn.

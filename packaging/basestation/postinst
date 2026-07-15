@@ -9,6 +9,10 @@ case "$1" in
         systemctl daemon-reload || true
         systemctl enable roversoftware-basestation.service || true
         systemctl restart roversoftware-basestation.service || true
+        # Deno touch-UI front door (best-effort: needs deno on PATH; if it's
+        # not installed yet the unit just fails and can be started later).
+        systemctl enable roversoftware-ui.service || true
+        systemctl restart roversoftware-ui.service || true
         ;;
 esac
 

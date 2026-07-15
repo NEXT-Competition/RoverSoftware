@@ -4,6 +4,8 @@ set -e
 
 case "$1" in
     remove|deconfigure)
+        systemctl stop roversoftware-ui.service || true
+        systemctl disable roversoftware-ui.service || true
         systemctl stop roversoftware-basestation.service || true
         systemctl disable roversoftware-basestation.service || true
         ;;
