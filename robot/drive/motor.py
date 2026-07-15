@@ -27,7 +27,7 @@ class _MockServo:
     """Stand-in for a real Servo: remembers the last angle, drives nothing.
 
     Used when there's no Fusion HAT, or when motors are mocked on purpose (set
-    UC_MOCK_MOTORS=1) so you can exercise comms/telemetry without the hardware.
+    RS_MOCK_MOTORS=1) so you can exercise comms/telemetry without the hardware.
     """
 
     def __init__(self, channel):
@@ -42,7 +42,7 @@ class _MockServo:
 
 def mock_motors() -> bool:
     """True if we should use the mock servo (no HAT, or forced via env)."""
-    forced = os.environ.get("UC_MOCK_MOTORS", "").strip().lower() in ("1", "true", "yes", "on")
+    forced = os.environ.get("RS_MOCK_MOTORS", "").strip().lower() in ("1", "true", "yes", "on")
     return forced or not HAVE_HW
 
 

@@ -206,7 +206,7 @@ Notes:
 - Building the `.deb` needs `dpkg-deb` (already on the Pi; on macOS: `brew install dpkg`). You can also just run `just deploy` from the Pi itself.
 - `just sync` uses `sudo rsync`/`sudo systemctl` over SSH, which is passwordless by default on Raspberry Pi OS for the primary user.
 - The package `Depends` on `python3-serial`. SunFounder's `fusion_hat` library isn't on apt/PyPI — install it once per Pi with `just bootstrap` (which runs `curl -sSL https://raw.githubusercontent.com/sunfounder/fusion-hat/v1/install.sh | sudo bash`). The motor layer mocks it if absent, so the service still starts without it.
-- Give each robot a unique `UC_ROBOT_ID` in its `robot.env`.
+- Give each robot a unique `RS_ROBOT_ID` in its `robot.env`.
 
 ### Base station as a touchscreen kiosk
 
@@ -233,8 +233,8 @@ just bs_host=base.local deploy-basestation   # builds + installs the .deb
 server comes up and the kiosk browser opens the dashboard full-screen.
 
 - Config lives in `/etc/roversoftware/basestation.env` (`just bs_host=... bs-config`).
-  Set `UC_XBEE_PORT`/`UC_XBEE_BAUD` to match your robots; set `UC_SIM=1` to test
-  the kiosk with no radio; `UC_NO_CONTROLLER=1` for a pure touch base station.
+  Set `RS_XBEE_PORT`/`RS_XBEE_BAUD` to match your robots; set `RS_SIM=1` to test
+  the kiosk with no radio; `RS_NO_CONTROLLER=1` for a pure touch base station.
 - Fast iteration: `just bs_host=... sync-basestation` (pushes code + restarts the
   server), then `just bs_host=... bs-reload` to refresh the kiosk browser.
 - Requires Raspberry Pi OS / Debian **Bookworm+** (for the packaged FastAPI/uvicorn).

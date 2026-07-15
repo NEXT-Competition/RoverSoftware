@@ -11,10 +11,10 @@
 Defaults come from the environment first (so the systemd service can be
 configured via /etc/roversoftware/basestation.env), then CLI flags override:
 
-    UC_XBEE_PORT, UC_XBEE_BAUD, UC_WEB_HOST, UC_WEB_PORT, UC_SIM,
-    UC_SIM_ROBOTS, UC_SIM_ORIGIN, UC_NO_CONTROLLER, UC_TILES,
-    UC_TILES_MBTILES, UC_TILES_UPSTREAM, UC_TILES_OFFLINE,
-    UC_DRIVE_HZ, UC_UI_HZ
+    RS_XBEE_PORT, RS_XBEE_BAUD, RS_WEB_HOST, RS_WEB_PORT, RS_SIM,
+    RS_SIM_ROBOTS, RS_SIM_ORIGIN, RS_NO_CONTROLLER, RS_TILES,
+    RS_TILES_MBTILES, RS_TILES_UPSTREAM, RS_TILES_OFFLINE,
+    RS_DRIVE_HZ, RS_UI_HZ
 """
 
 import argparse
@@ -37,31 +37,31 @@ def _envbool(name):
 
 def main():
     p = argparse.ArgumentParser(description="RoverSoftware base station")
-    p.add_argument("--port", default=_env("UC_XBEE_PORT", None),
+    p.add_argument("--port", default=_env("RS_XBEE_PORT", None),
                    help="XBee serial port for real robots (e.g. /dev/ttyUSB0)")
-    p.add_argument("--baud", type=int, default=int(_env("UC_XBEE_BAUD", 9600)))
-    p.add_argument("--sim", action="store_true", default=_envbool("UC_SIM"),
+    p.add_argument("--baud", type=int, default=int(_env("RS_XBEE_BAUD", 9600)))
+    p.add_argument("--sim", action="store_true", default=_envbool("RS_SIM"),
                    help="run the built-in simulator with fake robots instead of a radio")
-    p.add_argument("--robots", type=int, default=int(_env("UC_SIM_ROBOTS", 3)),
+    p.add_argument("--robots", type=int, default=int(_env("RS_SIM_ROBOTS", 3)),
                    help="number of simulated robots (with --sim)")
-    p.add_argument("--origin", default=_env("UC_SIM_ORIGIN", "37.7749,-122.4194"),
+    p.add_argument("--origin", default=_env("RS_SIM_ORIGIN", "37.7749,-122.4194"),
                    help="simulator origin 'lat,lon' (with --sim)")
-    p.add_argument("--host", default=_env("UC_WEB_HOST", "127.0.0.1"))
-    p.add_argument("--web-port", type=int, default=int(_env("UC_WEB_PORT", 8000)))
-    p.add_argument("--no-controller", action="store_true", default=_envbool("UC_NO_CONTROLLER"),
+    p.add_argument("--host", default=_env("RS_WEB_HOST", "127.0.0.1"))
+    p.add_argument("--web-port", type=int, default=int(_env("RS_WEB_PORT", 8000)))
+    p.add_argument("--no-controller", action="store_true", default=_envbool("RS_NO_CONTROLLER"),
                    help="skip gamepad input (touch-only base station)")
-    p.add_argument("--tiles", default=_env("UC_TILES", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+    p.add_argument("--tiles", default=_env("RS_TILES", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
                    help="map tile URL the browser loads; set to /tiles/{z}/{x}/{y}.png to serve offline")
-    p.add_argument("--tiles-mbtiles", default=_env("UC_TILES_MBTILES", None),
+    p.add_argument("--tiles-mbtiles", default=_env("RS_TILES_MBTILES", None),
                    help="offline .mbtiles cache served at /tiles/... (build with tools/fetch_tiles.py)")
     p.add_argument("--tiles-upstream",
-                   default=_env("UC_TILES_UPSTREAM", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+                   default=_env("RS_TILES_UPSTREAM", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
                    help="online source used to fill /tiles cache misses (unless --tiles-offline)")
-    p.add_argument("--tiles-offline", action="store_true", default=_envbool("UC_TILES_OFFLINE"),
+    p.add_argument("--tiles-offline", action="store_true", default=_envbool("RS_TILES_OFFLINE"),
                    help="never fetch missing tiles online; serve only what's cached")
-    p.add_argument("--drive-hz", type=float, default=float(_env("UC_DRIVE_HZ", 30)),
+    p.add_argument("--drive-hz", type=float, default=float(_env("RS_DRIVE_HZ", 30)),
                    help="max drive-command send rate over the radio (lower for slow/9600 links)")
-    p.add_argument("--ui-hz", type=float, default=float(_env("UC_UI_HZ", 30)),
+    p.add_argument("--ui-hz", type=float, default=float(_env("RS_UI_HZ", 30)),
                    help="dashboard refresh rate pushed to the browser")
     args = p.parse_args()
 

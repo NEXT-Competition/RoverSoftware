@@ -4,7 +4,7 @@
 
 ENV_FILE=/etc/roversoftware/basestation.env
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
-PORT="${UC_WEB_PORT:-8000}"
+PORT="${RS_WEB_PORT:-8000}"
 URL="http://localhost:${PORT}/"
 
 # When relaunched outside the desktop session (e.g. over SSH via `just bs-reload`)
@@ -19,7 +19,7 @@ if [ -z "${WAYLAND_DISPLAY:-}" ]; then
     done
 fi
 # X11/Xwayland fallback if no Wayland socket was found.
-export DISPLAY="${DISPLAY:-${UC_KIOSK_DISPLAY:-:0}}"
+export DISPLAY="${DISPLAY:-${RS_KIOSK_DISPLAY:-:0}}"
 [ -z "${XAUTHORITY:-}" ] && [ -f "$HOME/.Xauthority" ] && export XAUTHORITY="$HOME/.Xauthority"
 
 # Wait up to ~60s for the dashboard server to start responding.

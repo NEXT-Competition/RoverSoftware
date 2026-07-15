@@ -4,7 +4,7 @@ set -e
 
 case "$1" in
     configure)
-        # Writable home for the offline map tile cache (UC_TILES_MBTILES).
+        # Writable home for the offline map tile cache (RS_TILES_MBTILES).
         mkdir -p /var/lib/roversoftware || true
         systemctl daemon-reload || true
         systemctl enable roversoftware-basestation.service || true

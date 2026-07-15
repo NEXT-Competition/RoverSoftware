@@ -236,7 +236,7 @@ signal and arm before commands flow. `stop()` zeros both.
    inverted motor: both start at the same throttle and match speed. (`max_angle`/
    `min_angle` are the endpoints; the side closer to neutral sets the throw.)
 
-**Mock fallback.** If `fusion_hat` can't be imported *or* `UC_MOCK_MOTORS=1`,
+**Mock fallback.** If `fusion_hat` can't be imported *or* `RS_MOCK_MOTORS=1`,
 `ESCMotor` uses a `_MockServo` that just records the last angle. This is what
 lets the whole stack run on a laptop — the control/comms/telemetry logic is
 exercised with no HAT attached.
@@ -266,7 +266,7 @@ swap the transport internals; the `start/stop/send + on_message` interface stays
 
 Newline-delimited JSON over one shared serial channel. `to` addresses a robot (or
 `"all"`); robots stamp telemetry with `from`. The base station's baud
-(`basestation.env`, default **57600**) **must match each robot's** `UC_XBEE_BAUD`
+(`basestation.env`, default **57600**) **must match each robot's** `RS_XBEE_BAUD`
 — a mismatch delivers only garbage frames.
 
 ```jsonc
@@ -392,7 +392,7 @@ serve from a local cache first, fall back online when reachable.
   (SQLite; standard format, opens in QGIS too). On a cache miss it fetches from an
   upstream tile server and **writes the tile back**, so coverage grows as you pan
   online. MBTiles stores rows TMS-flipped (origin bottom-left) vs Leaflet/XYZ
-  (top-left), so Y is flipped on every read/write. Set `UC_TILES_OFFLINE=1` for a
+  (top-left), so Y is flipped on every read/write. Set `RS_TILES_OFFLINE=1` for a
   pure air-gap (uncached tiles render blank).
 - **Serving** — `/tiles/{z}/{x}/{y}.png`; a miss + offline returns HTTP 204
   (Leaflet shows a blank tile). The browser is told the cache's max zoom so it
@@ -437,24 +437,24 @@ Each maps to a CLI flag on the respective entry point.
 
 | Env | Default | Meaning |
 |---|---|---|
-| `UC_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
-| `UC_XBEE_PORT` / `UC_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
-| `UC_START_MODE` | `teleop` | `teleop` \| `color_align` \| `waypoint`. |
-| `UC_LOOP_HZ` / `UC_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
-| `UC_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
-| `UC_GPS_ENABLED` / `UC_GPS_PORT` / `UC_GPS_BAUD` | `1` / `/dev/ttyAMA0` / `9600` | NEO-6M reader. |
+| `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
+| `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
+| `RS_START_MODE` | `teleop` | `teleop` \| `color_align` \| `waypoint`. |
+| `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
+| `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
+| `RS_GPS_ENABLED` / `RS_GPS_PORT` / `RS_GPS_BAUD` | `1` / `/dev/ttyAMA0` / `9600` | NEO-6M reader. |
 
 **Base station (`run_basestation.py`):**
 
 | Env | Default | Meaning |
 |---|---|---|
-| `UC_XBEE_PORT` / `UC_XBEE_BAUD` | `/dev/ttyUSB0` / `57600` | Radio (or use `UC_SIM=1`). |
-| `UC_WEB_HOST` / `UC_WEB_PORT` | `127.0.0.1` / `8000` | Dashboard bind. |
-| `UC_SIM` / `UC_SIM_ROBOTS` / `UC_SIM_ORIGIN` | `0` / `3` / SF | Simulator. |
-| `UC_NO_CONTROLLER` | `0` | Touch-only (no gamepad). |
-| `UC_DRIVE_HZ` / `UC_UI_HZ` | `30` / `30` | Command send / UI refresh rates. |
-| `UC_TILES` | OSM URL | Tile URL the browser loads (`/tiles/{z}/{x}/{y}.png` for offline). |
-| `UC_TILES_MBTILES` / `UC_TILES_UPSTREAM` / `UC_TILES_OFFLINE` | — / OSM / `0` | Offline cache path / fallback source / air-gap. |
+| `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `57600` | Radio (or use `RS_SIM=1`). |
+| `RS_WEB_HOST` / `RS_WEB_PORT` | `127.0.0.1` / `8000` | Dashboard bind. |
+| `RS_SIM` / `RS_SIM_ROBOTS` / `RS_SIM_ORIGIN` | `0` / `3` / SF | Simulator. |
+| `RS_NO_CONTROLLER` | `0` | Touch-only (no gamepad). |
+| `RS_DRIVE_HZ` / `RS_UI_HZ` | `30` / `30` | Command send / UI refresh rates. |
+| `RS_TILES` | OSM URL | Tile URL the browser loads (`/tiles/{z}/{x}/{y}.png` for offline). |
+| `RS_TILES_MBTILES` / `RS_TILES_UPSTREAM` / `RS_TILES_OFFLINE` | — / OSM / `0` | Offline cache path / fallback source / air-gap. |
 
 ---
 
@@ -499,7 +499,7 @@ Everything runs on a laptop:
 
 ```bash
 # Robot stack with mock motors (exercises comms/telemetry/control):
-UC_MOCK_MOTORS=1 python run_robot.py --port <serial> --no-gps
+RS_MOCK_MOTORS=1 python run_robot.py --port <serial> --no-gps
 
 # Full base-station dashboard with fake robots that drive routes:
 python run_basestation.py --sim          # → http://127.0.0.1:8000
