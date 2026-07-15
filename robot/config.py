@@ -78,10 +78,32 @@ class GPSConfig:
 
 
 @dataclass
+class IMUConfig:
+    # Bosch BNO055 9-DOF IMU on the Pi I2C bus (shared with the Fusion HAT; the
+    # bootstrap already enables I2C). Its on-chip NDOF fusion gives an ABSOLUTE
+    # heading that's valid at a standstill — the compass the NEO-6M lacks — so it
+    # becomes the heading source for pose estimation and the waypoint angle loop.
+    #
+    # Wiring note: the BNO055 clock-stretches on the Pi's hardware I2C; slow the
+    # bus to 100 kHz (dtparam=i2c_arm_baudrate=100000 in /boot/firmware/config.txt,
+    # then reboot) or reads will be flaky. See packaging/robot.env.
+    enabled: bool = True
+    i2c_address: int = 0x28  # BNO055 default; 0x29 if the ADR pin is pulled high
+    # Rotation applied to the sensor's raw yaw to align it with the robot's
+    # forward axis and true North (0 = North, CW positive). Tune during bring-up.
+    heading_offset_deg: float = 0.0
+    invert: bool = False  # flip yaw sign to CW-positive if the board is mounted mirrored
+    # Minimum system/magnetometer calibration level (0-3) before we trust the
+    # heading. Below this, heading() returns None and the fusion falls back to GPS.
+    min_calib: int = 1
+
+
+@dataclass
 class RobotConfig:
     drive: DriveConfig = field(default_factory=DriveConfig)
     comms: CommsConfig = field(default_factory=CommsConfig)
     gps: GPSConfig = field(default_factory=GPSConfig)
+    imu: IMUConfig = field(default_factory=IMUConfig)
     loop_hz: float = 5.0  # Control loop rate
     start_mode: str = "teleop"  # teleop | color_align | waypoint
     robot_id: str = "rover1"  # unique id on the shared XBee channel

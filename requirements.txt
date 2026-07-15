@@ -3,6 +3,11 @@ pyserial>=3.5
 pynmea2>=1.19        # parse NEO-6M (GY-GPS6MV2) NMEA sentences for waypoint autonomy
 # fusion_hat is installed from SunFounder's package/setup on the Pi, not PyPI:
 #   https://docs.sunfounder.com/projects/fusion-hat/en/latest/
+# The BNO055 IMU stack is likewise Pi-only (pulls in Blinka/board/busio), so it's
+# kept out of pyproject.toml and installed on the Pi:
+#   pip install adafruit-circuitpython-bno055   # -> also installs adafruit-blinka
+# NOTE: slow the Pi I2C bus for the BNO055 (it clock-stretches): add
+#   dtparam=i2c_arm_baudrate=100000  to /boot/firmware/config.txt, then reboot.
 
 # --- Base station (Pi or Mac) ---
 fastapi>=0.110       # dashboard web server + WebSocket

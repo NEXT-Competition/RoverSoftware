@@ -15,7 +15,9 @@ from .control.manager import ControlManager
 from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
 from .drive.tank_drive import TankDrive
+from .sensors.bno055 import IMU
 from .sensors.gps import GPS
+from .sensors.pose import PoseEstimator
 
 # Log a warning if a control tick's work (excluding the sleep) exceeds this. A
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
@@ -46,24 +48,37 @@ class Robot:
 
         # GPS (NEO-6M) feeds waypoint navigation and position telemetry. Reads on
         # its own thread; pose() is a cheap cached lookup for the control loop.
-        # Disabled -> pose_provider stays None and waypoint mode holds position.
+        # Disabled -> no position, and waypoint mode holds position.
         self.gps: Optional[GPS] = (
             GPS(config.gps.port, config.gps.baud,
                 config.gps.fix_timeout, config.gps.min_move_mps)
             if config.gps.enabled else None
         )
 
-        # () -> (lat, lon, heading_deg); wired to the GPS so telemetry carries
-        # position and the base-station map can track this robot.
-        self.pose_provider: Optional[Callable[[], Optional[Tuple[float, float, float]]]] = (
-            self.gps.pose if self.gps is not None else None
+        # BNO055 IMU supplies an absolute, standstill-valid heading (the compass
+        # the GPS lacks). Reads on its own thread; heading() is a cheap cached
+        # lookup. Disabled/uncalibrated -> heading falls back to GPS course.
+        self.imu: Optional[IMU] = (
+            IMU(config.imu.i2c_address, config.imu.heading_offset_deg,
+                config.imu.invert, config.imu.min_calib)
+            if config.imu.enabled else None
+        )
+
+        # Fuse GPS position + IMU heading behind one pose_provider (unchanged shape:
+        # () -> (lat, lon, heading_deg)), so telemetry and the waypoint controller
+        # get the best heading without knowing which sensor produced it.
+        self.pose_estimator = PoseEstimator(self.gps, self.imu)
+        self.pose_provider: Optional[Callable[[], Optional[Tuple[float, float, Optional[float]]]]] = (
+            self.pose_estimator.pose if (self.gps is not None) else None
         )
         self._last_telem = 0.0
 
-        # Give the waypoint controller the same live pose source.
+        # Give the waypoint controller the fused pose source and the IMU yaw-rate
+        # (for the heading PID's measured derivative).
         wp = controllers.get("waypoint")
         if isinstance(wp, WaypointController) and self.pose_provider is not None:
             wp.set_pose_provider(self.pose_provider)
+            wp.set_rate_provider(self.pose_estimator.heading_rate)
 
     def _drain_inbox(self) -> None:
         while True:
@@ -89,6 +104,10 @@ class Robot:
             pose = self.pose_provider()
             if pose is not None:
                 t["lat"], t["lon"], t["heading"] = pose
+        # Surface IMU calibration (sys, gyro, accel, mag) so the base station can
+        # tell whether the heading is trustworthy or still falling back to GPS.
+        if self.imu is not None:
+            t["imu_calib"] = self.imu.calibration()
         return t
 
     def start(self) -> None:
@@ -98,6 +117,8 @@ class Robot:
         self.link.start()
         if self.gps is not None:
             self.gps.start()
+        if self.imu is not None:
+            self.imu.start()
         self._running = True
 
     def run(self) -> None:
@@ -150,3 +171,5 @@ class Robot:
         self.link.stop()
         if self.gps is not None:
             self.gps.stop()
+        if self.imu is not None:
+            self.imu.stop()
