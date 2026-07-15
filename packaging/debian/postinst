@@ -4,6 +4,13 @@ set -e
 
 case "$1" in
     configure)
+        # State dir for persisted data (e.g. the BNO055 calibration file). Owned
+        # by 'pi' when that user exists so the manually-run calibration tool can
+        # write it without sudo; the root service reads/writes it either way.
+        install -d -m 0775 /var/lib/roversoftware
+        if id pi >/dev/null 2>&1; then
+            chown pi:pi /var/lib/roversoftware || true
+        fi
         systemctl daemon-reload || true
         systemctl enable roversoftware-robot.service || true
         # (Re)start so a fresh install boots and an upgrade picks up new code.
