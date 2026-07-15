@@ -50,12 +50,30 @@ def _avg(vs):
     return tuple(sum(v[i] for v in vs) / n for i in range(len(vs[0])))
 
 
+def _span_mag(vs):
+    """Range (max-min) of the per-sample vector magnitudes — how jumpy the reads
+    are. Large spread => corrupted/jittery reads (bus); small => a stable offset."""
+    ms = [_mag3(v) for v in vs]
+    return max(ms) - min(ms) if ms else 0.0
+
+
+def _fmt(v):
+    if v is None:
+        return "None"
+    if isinstance(v, (int, float)):
+        return f"{v:.2f}"
+    return "(" + ", ".join(f"{c:.2f}" if isinstance(c, (int, float)) else str(c)
+                           for c in v) + ")"
+
+
 def main():
     p = argparse.ArgumentParser(description="BNO055 isolation self-test")
     p.add_argument("--address", type=lambda x: int(x, 0), default=0x28,
                    help="I2C address (default 0x28; 0x29 if ADR high)")
     p.add_argument("--samples", type=int, default=10,
                    help="raw-reading samples to average for the sanity checks")
+    p.add_argument("--raw", action="store_true",
+                   help="print every raw sample (spot corrupted/jittery I2C reads)")
     args = p.parse_args()
 
     if adafruit_bno055 is None:
@@ -101,9 +119,12 @@ def main():
         return _summary(results)  # nothing else is meaningful without a sensor
 
     # 4. Live readings + sanity. Average a few samples, skipping None tuples the
-    # sensor emits briefly right after a mode switch.
+    # sensor emits briefly right after a mode switch. We also track the spread
+    # (range of the per-sample magnitudes) so you can tell a systematic offset
+    # (stable but wrong -> power / clone chip) from corrupted reads (jumpy ->
+    # I2C clock stretching or wiring). Run with --raw to see every sample.
     acc, mag, eul, temp = [], [], [], []
-    for _ in range(max(1, args.samples)):
+    for i in range(max(1, args.samples)):
         a, m, e, t = sensor.acceleration, sensor.magnetic, sensor.euler, sensor.temperature
         if a and None not in a:
             acc.append(a)
@@ -113,6 +134,9 @@ def main():
             eul.append(e)
         if isinstance(t, (int, float)):
             temp.append(t)
+        if args.raw:
+            print(f"  sample {i:2d}: accel={_fmt(a)} mag={_fmt(m)} "
+                  f"euler={_fmt(e)} temp={_fmt(t)}")
         sleep(0.05)
 
     check("Readings are live", bool(acc and mag and eul),
@@ -121,13 +145,17 @@ def main():
     if acc:
         am = _mag3(_avg(acc))
         check("Accelerometer sane (|a| ~ 9.8 m/s^2 at rest)", 6.0 <= am <= 13.0,
-              f"|a|={am:.2f} m/s^2")
+              f"|a|={am:.2f} m/s^2 (spread {_span_mag(acc):.2f})")
     if mag:
         bm = _mag3(_avg(mag))
-        check("Magnetometer producing a field", bm > 1.0, f"|B|={bm:.1f} uT")
+        # Earth's field is ~25-65 uT; board/hard-iron offsets raise that, but a
+        # reading this far out means interference or a corrupted read, not physics.
+        check("Magnetometer plausible (earth field ~25-65 uT)", 5.0 <= bm <= 150.0,
+              f"|B|={bm:.1f} uT (spread {_span_mag(mag):.1f})")
     if temp:
         t = sum(temp) / len(temp)
-        check("Temperature plausible", -20.0 <= t <= 85.0, f"{t:.0f} C")
+        check("Temperature plausible", -20.0 <= t <= 85.0,
+              f"{t:.0f} C (range {min(temp):.0f}..{max(temp):.0f})")
 
     # 5. Calibration snapshot (informational — a fresh board reads 0s until you
     # calibrate, so this is not a pass/fail check).
@@ -147,9 +175,30 @@ def _summary(results):
     if fails:
         print(f"SELF-TEST FAILED: {len(fails)}/{len(results)} checks failed -> "
               f"{', '.join(fails)}")
+        _troubleshoot(fails)
         return 1
     print(f"SELF-TEST PASSED: all {len(results)} checks OK")
     return 0
+
+
+def _troubleshoot(fails):
+    """Implausible accel/mag/temp *together* almost always means bad I2C reads,
+    not a dead sensor — point at the usual culprits in order."""
+    physical = {
+        "Accelerometer sane (|a| ~ 9.8 m/s^2 at rest)",
+        "Magnetometer plausible (earth field ~25-65 uT)",
+        "Temperature plausible",
+    }
+    if not any(f in physical for f in fails):
+        return
+    print("\nImplausible raw values usually mean corrupted reads, not a dead chip:")
+    print("  1. I2C clock stretching — the BNO055 needs the Pi bus slowed to 100 kHz.")
+    print("       grep i2c_arm_baudrate /boot/firmware/config.txt   # older OS: /boot/config.txt")
+    print("       # if missing, add 'dtparam=i2c_arm_baudrate=100000', then: sudo reboot")
+    print("  2. Power / wiring — solid 3.3V, short leads, common ground; a brown-out")
+    print("       skews accel & temperature. Avoid long/loose jumpers.")
+    print("  3. Re-run with --raw: jumpy samples => bus/wiring; stable-but-wrong => power")
+    print("       or a counterfeit BNO055 (common on cheap GY-BNO055 clones).")
 
 
 if __name__ == "__main__":
