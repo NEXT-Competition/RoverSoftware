@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=uc-chassis Dashboard Kiosk
+Name=RoverSoftware Dashboard Kiosk
 Comment=Full-screen touch dashboard for the robot fleet
-Exec=/opt/uc-chassis-basestation/kiosk.sh
+Exec=/opt/roversoftware-basestation/kiosk.sh
 Terminal=false
 X-GNOME-Autostart-enabled=true

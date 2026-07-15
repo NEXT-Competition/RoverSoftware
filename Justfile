@@ -1,4 +1,4 @@
-# uc-chassis robot build & deployment.
+# RoverSoftware robot build & deployment.
 #
 # Override the target Pi per-invocation or via env:
 #     just host=rover2.local sync
@@ -12,17 +12,17 @@ user    := env_var_or_default("ROBOT_USER", "pi")
 version := "0.1.0"
 
 target  := user + "@" + host
-app_dir := "/opt/uc-chassis"
-deb     := "dist/uc-chassis-robot_" + version + "_all.deb"
-service := "uc-chassis-robot"
+app_dir := "/opt/roversoftware"
+deb     := "dist/roversoftware-robot_" + version + "_all.deb"
+service := "roversoftware-robot"
 
 # Base-station host (override: just bs_host=base.local deploy-basestation)
 bs_host    := env_var_or_default("BASE_HOST", "base-station.local")
 bs_user    := env_var_or_default("BASE_USER", "pi")
 bs_target  := bs_user + "@" + bs_host
-bs_app     := "/opt/uc-chassis-basestation"
-bs_deb     := "dist/uc-chassis-basestation_" + version + "_all.deb"
-bs_service := "uc-chassis-basestation"
+bs_app     := "/opt/roversoftware-basestation"
+bs_deb     := "dist/roversoftware-basestation_" + version + "_all.deb"
+bs_service := "roversoftware-basestation"
 
 # Show available recipes.
 default:
@@ -58,8 +58,8 @@ install: build
 deploy: install
 
 # FAST PATH: push updated code straight into place and restart — no deb rebuild.
-# Syncs robot/, run_robot.py and tools/ into /opt/uc-chassis and restarts.
-# Does NOT touch /etc/uc-chassis/robot.env or the systemd unit.
+# Syncs robot/, run_robot.py and tools/ into /opt/roversoftware and restarts.
+# Does NOT touch /etc/roversoftware/robot.env or the systemd unit.
 sync:
     rsync -az --delete \
         --rsync-path="sudo rsync" \
@@ -85,7 +85,7 @@ logs:
 
 # Edit per-robot config on the Pi, then restart.
 config:
-    ssh -t {{target}} "sudo nano /etc/uc-chassis/robot.env && sudo systemctl restart {{service}}"
+    ssh -t {{target}} "sudo nano /etc/roversoftware/robot.env && sudo systemctl restart {{service}}"
 
 # Open a shell on the Pi.
 shell:
@@ -132,11 +132,11 @@ bs-logs:
 
 # Reload the kiosk browser (after a UI change) by restarting the desktop session.
 bs-reload:
-    ssh {{bs_target}} "pkill -f uc-chassis-kiosk || pkill chromium || true; sleep 1; /opt/uc-chassis-basestation/kiosk.sh >/dev/null 2>&1 &" || true
+    ssh {{bs_target}} "pkill -f roversoftware-kiosk || pkill chromium || true; sleep 1; /opt/roversoftware-basestation/kiosk.sh >/dev/null 2>&1 &" || true
 
 # Edit base-station config on the Pi, then restart.
 bs-config:
-    ssh -t {{bs_target}} "sudo nano /etc/uc-chassis/basestation.env && sudo systemctl restart {{bs_service}}"
+    ssh -t {{bs_target}} "sudo nano /etc/roversoftware/basestation.env && sudo systemctl restart {{bs_service}}"
 
 # ── offline maps ──
 # Build a tile cache for your operating area (run WITH internet), then push it to
@@ -150,5 +150,5 @@ bs-fetch-tiles *ARGS:
 # Copy the built dist/tiles.mbtiles to the Pi and restart the dashboard.
 bs-push-tiles:
     scp dist/tiles.mbtiles {{bs_target}}:/tmp/tiles.mbtiles
-    ssh {{bs_target}} "sudo mkdir -p /var/lib/uc-chassis && sudo mv /tmp/tiles.mbtiles /var/lib/uc-chassis/tiles.mbtiles && sudo systemctl restart {{bs_service}}"
+    ssh {{bs_target}} "sudo mkdir -p /var/lib/roversoftware && sudo mv /tmp/tiles.mbtiles /var/lib/roversoftware/tiles.mbtiles && sudo systemctl restart {{bs_service}}"
     @echo "==> pushed offline tiles to {{bs_host}}; reload the kiosk: just bs-reload"

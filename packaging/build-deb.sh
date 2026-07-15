@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build uc-chassis .deb packages from a staging tree.
+# Build roversoftware .deb packages from a staging tree.
 #
 # Works on the Pi or on a Mac/Linux dev box (needs `dpkg-deb`; on macOS:
 # `brew install dpkg`). Output: dist/<pkg>_<version>_all.deb
@@ -33,20 +33,20 @@ pack() {  # pack <build-dir> <pkg-name>
 }
 
 build_robot() {
-    local pkg="uc-chassis-robot"
+    local pkg="roversoftware-robot"
     local build="$ROOT/build/${pkg}_${VERSION}"
     echo "==> staging $pkg $VERSION"
     rm -rf "$build"
-    mkdir -p "$build/DEBIAN" "$build/opt/uc-chassis" "$build/etc/uc-chassis" \
+    mkdir -p "$build/DEBIAN" "$build/opt/roversoftware" "$build/etc/roversoftware" \
              "$build/lib/systemd/system"
 
-    cp -R "$ROOT/robot" "$build/opt/uc-chassis/"
-    cp "$ROOT/run_robot.py" "$build/opt/uc-chassis/"
-    [ -d "$ROOT/tools" ] && cp -R "$ROOT/tools" "$build/opt/uc-chassis/"
-    strip_caches "$build/opt/uc-chassis"
+    cp -R "$ROOT/robot" "$build/opt/roversoftware/"
+    cp "$ROOT/run_robot.py" "$build/opt/roversoftware/"
+    [ -d "$ROOT/tools" ] && cp -R "$ROOT/tools" "$build/opt/roversoftware/"
+    strip_caches "$build/opt/roversoftware"
 
-    cp "$ROOT/packaging/robot.env" "$build/etc/uc-chassis/robot.env"
-    cp "$ROOT/packaging/systemd/uc-chassis-robot.service" "$build/lib/systemd/system/"
+    cp "$ROOT/packaging/robot.env" "$build/etc/roversoftware/robot.env"
+    cp "$ROOT/packaging/systemd/roversoftware-robot.service" "$build/lib/systemd/system/"
 
     sed "s/@VERSION@/${VERSION}/" "$ROOT/packaging/debian/control" > "$build/DEBIAN/control"
     cp "$ROOT/packaging/debian/conffiles" "$build/DEBIAN/conffiles"
@@ -57,12 +57,12 @@ build_robot() {
 }
 
 build_basestation() {
-    local pkg="uc-chassis-basestation"
+    local pkg="roversoftware-basestation"
     local build="$ROOT/build/${pkg}_${VERSION}"
-    local app="$build/opt/uc-chassis-basestation"
+    local app="$build/opt/roversoftware-basestation"
     echo "==> staging $pkg $VERSION"
     rm -rf "$build"
-    mkdir -p "$build/DEBIAN" "$app" "$build/etc/uc-chassis" \
+    mkdir -p "$build/DEBIAN" "$app" "$build/etc/roversoftware" \
              "$build/lib/systemd/system" "$build/etc/xdg/autostart"
 
     # App code + the robot package it imports (config/comms/control) + entry point.
@@ -72,9 +72,9 @@ build_basestation() {
     cp "$ROOT/packaging/basestation/kiosk.sh" "$app/"; chmod 0755 "$app/kiosk.sh"
     strip_caches "$app"
 
-    cp "$ROOT/packaging/basestation/basestation.env" "$build/etc/uc-chassis/basestation.env"
-    cp "$ROOT/packaging/basestation/uc-chassis-basestation.service" "$build/lib/systemd/system/"
-    cp "$ROOT/packaging/basestation/uc-chassis-kiosk.desktop" "$build/etc/xdg/autostart/"
+    cp "$ROOT/packaging/basestation/basestation.env" "$build/etc/roversoftware/basestation.env"
+    cp "$ROOT/packaging/basestation/roversoftware-basestation.service" "$build/lib/systemd/system/"
+    cp "$ROOT/packaging/basestation/roversoftware-kiosk.desktop" "$build/etc/xdg/autostart/"
 
     sed "s/@VERSION@/${VERSION}/" "$ROOT/packaging/basestation/control" > "$build/DEBIAN/control"
     cp "$ROOT/packaging/basestation/conffiles" "$build/DEBIAN/conffiles"

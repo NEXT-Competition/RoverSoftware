@@ -1,4 +1,4 @@
-# uc-chassis
+# RoverSoftware
 
 Modular Python stack for a **tank-drive ground robot** built on a Raspberry Pi
 + SunFounder **Fusion HAT**, with two ESC-driven motors and an **XBee** radio
@@ -158,16 +158,16 @@ offline field use), `--host/--web-port`.
 
 ## Deploying to a robot (Debian package + systemd)
 
-The robot software ships as a `.deb` that installs to `/opt/uc-chassis`, drops a
-`uc-chassis-robot` systemd service, and starts it on boot. Per-robot settings
-(id, serial port, mode) live in `/etc/uc-chassis/robot.env` — a conffile, so
+The robot software ships as a `.deb` that installs to `/opt/roversoftware`, drops a
+`roversoftware-robot` systemd service, and starts it on boot. Per-robot settings
+(id, serial port, mode) live in `/etc/roversoftware/robot.env` — a conffile, so
 your edits survive upgrades.
 
 ```
 packaging/
   build-deb.sh                     assembles the staging tree -> dist/*.deb
-  robot.env                        default per-robot env (installed to /etc/uc-chassis/)
-  systemd/uc-chassis-robot.service the unit
+  robot.env                        default per-robot env (installed to /etc/roversoftware/)
+  systemd/roversoftware-robot.service the unit
   debian/                          control, conffiles, postinst/prerm/postrm
 Justfile                           build / install / sync / service controls
 ```
@@ -185,20 +185,20 @@ just reboot                        # if bootstrap asks for it
 just deploy                        # -> rover1.local
 just host=rover2.local deploy      # a different robot
 
-# FAST iteration — push changed code into /opt/uc-chassis and restart,
+# FAST iteration — push changed code into /opt/roversoftware and restart,
 # WITHOUT rebuilding or reinstalling the .deb:
 just sync
 just host=rover2.local sync
 
 # Service + logs:
 just status
-just logs                          # journalctl -u uc-chassis-robot -f
+just logs                          # journalctl -u roversoftware-robot -f
 just restart
-just config                        # edit /etc/uc-chassis/robot.env, then restart
+just config                        # edit /etc/roversoftware/robot.env, then restart
 ```
 
 `just sync` rsyncs `robot/`, `run_robot.py`, and `tools/` straight into
-`/opt/uc-chassis` and restarts the service — no packaging round-trip. Use
+`/opt/roversoftware` and restarts the service — no packaging round-trip. Use
 `deploy`/`install` only when the systemd unit, dependencies, or the env file
 change.
 
@@ -210,7 +210,7 @@ Notes:
 
 ### Base station as a touchscreen kiosk
 
-The dashboard ships as its own package, `uc-chassis-basestation`, for a
+The dashboard ships as its own package, `roversoftware-basestation`, for a
 Raspberry Pi with a screen. It installs a headless server service **and** a
 desktop autostart entry that launches a full-screen, touch-friendly Chromium
 kiosk pointed at it on boot.
@@ -218,9 +218,9 @@ kiosk pointed at it on boot.
 ```
 packaging/basestation/
   basestation.env                    per-instance config (radio, web port, sim)
-  uc-chassis-basestation.service     the dashboard server (systemd)
+  roversoftware-basestation.service     the dashboard server (systemd)
   kiosk.sh                           waits for the server, launches Chromium --kiosk
-  uc-chassis-kiosk.desktop           /etc/xdg/autostart entry -> runs kiosk.sh on login
+  roversoftware-kiosk.desktop           /etc/xdg/autostart entry -> runs kiosk.sh on login
   debian control/conffiles/scripts
 ```
 
@@ -232,7 +232,7 @@ just bs_host=base.local deploy-basestation   # builds + installs the .deb
 `apt-get` pulls the deps (FastAPI, uvicorn, pygame, chromium). On boot the
 server comes up and the kiosk browser opens the dashboard full-screen.
 
-- Config lives in `/etc/uc-chassis/basestation.env` (`just bs_host=... bs-config`).
+- Config lives in `/etc/roversoftware/basestation.env` (`just bs_host=... bs-config`).
   Set `UC_XBEE_PORT`/`UC_XBEE_BAUD` to match your robots; set `UC_SIM=1` to test
   the kiosk with no radio; `UC_NO_CONTROLLER=1` for a pure touch base station.
 - Fast iteration: `just bs_host=... sync-basestation` (pushes code + restarts the

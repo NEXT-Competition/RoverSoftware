@@ -4,8 +4,8 @@ set -e
 
 case "$1" in
     remove|deconfigure)
-        systemctl stop uc-chassis-robot.service || true
-        systemctl disable uc-chassis-robot.service || true
+        systemctl stop roversoftware-robot.service || true
+        systemctl disable roversoftware-robot.service || true
         ;;
 esac
 

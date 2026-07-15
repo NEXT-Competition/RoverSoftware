@@ -5,10 +5,10 @@ set -e
 case "$1" in
     configure)
         # Writable home for the offline map tile cache (UC_TILES_MBTILES).
-        mkdir -p /var/lib/uc-chassis || true
+        mkdir -p /var/lib/roversoftware || true
         systemctl daemon-reload || true
-        systemctl enable uc-chassis-basestation.service || true
-        systemctl restart uc-chassis-basestation.service || true
+        systemctl enable roversoftware-basestation.service || true
+        systemctl restart roversoftware-basestation.service || true
         ;;
 esac
 

@@ -1,8 +1,8 @@
 #!/bin/bash
-# Launch the uc-chassis dashboard full-screen in Chromium once the server is up.
-# Invoked from the desktop session via /etc/xdg/autostart/uc-chassis-kiosk.desktop.
+# Launch the roversoftware dashboard full-screen in Chromium once the server is up.
+# Invoked from the desktop session via /etc/xdg/autostart/roversoftware-kiosk.desktop.
 
-ENV_FILE=/etc/uc-chassis/basestation.env
+ENV_FILE=/etc/roversoftware/basestation.env
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 PORT="${UC_WEB_PORT:-8000}"
 URL="http://localhost:${PORT}/"
@@ -35,12 +35,12 @@ xset s noblank 2>/dev/null || true
 
 BIN="$(command -v chromium-browser || command -v chromium)"
 if [ -z "$BIN" ]; then
-    echo "uc-chassis kiosk: chromium not installed" >&2
+    echo "roversoftware kiosk: chromium not installed" >&2
     exit 1
 fi
 
 # Clear any 'restore pages?' state from a previous unclean shutdown.
-PROFILE="${HOME}/.config/uc-chassis-kiosk"
+PROFILE="${HOME}/.config/roversoftware-kiosk"
 
 exec "$BIN" \
     --kiosk --app="$URL" \

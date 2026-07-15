@@ -1,4 +1,4 @@
-Package: uc-chassis-basestation
+Package: roversoftware-basestation
 Version: @VERSION@
 Section: misc
 Priority: optional
@@ -6,13 +6,13 @@ Architecture: all
 Maintainer: Yojan Gautam <gautamyojan0@gmail.com>
 Depends: python3 (>= 3.9), python3-serial, python3-fastapi, python3-uvicorn, python3-websockets, python3-pygame, curl, fonts-dejavu-core, fonts-noto-color-emoji
 Recommends: chromium-browser | chromium, fonts-roboto
-Description: uc-chassis base-station dashboard (kiosk)
- Web dashboard to monitor and drive the uc-chassis robot fleet over XBee.
- Installs to /opt/uc-chassis-basestation and runs a local server as the
- uc-chassis-basestation systemd service (started on boot).
+Description: RoverSoftware base-station dashboard (kiosk)
+ Web dashboard to monitor and drive the roversoftware robot fleet over XBee.
+ Installs to /opt/roversoftware-basestation and runs a local server as the
+ roversoftware-basestation systemd service (started on boot).
  .
  On a Raspberry Pi booted to the desktop, a /etc/xdg/autostart entry launches
  a full-screen, touch-friendly Chromium kiosk pointed at the dashboard.
  .
- Per-instance settings live in /etc/uc-chassis/basestation.env. Requires
+ Per-instance settings live in /etc/roversoftware/basestation.env. Requires
  Raspberry Pi OS / Debian Bookworm or newer for the packaged FastAPI/uvicorn.

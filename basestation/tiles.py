@@ -37,7 +37,7 @@ class TileStore:
         mbtiles_path: Optional[str] = None,
         upstream_url: Optional[str] = None,
         allow_upstream: bool = True,
-        user_agent: str = "uc-chassis-basestation offline tile cache",
+        user_agent: str = "roversoftware-basestation offline tile cache",
     ):
         self.mbtiles_path = mbtiles_path
         self.upstream_url = upstream_url

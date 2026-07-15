@@ -4,7 +4,7 @@
     python run_robot.py --port /dev/serial0 --baud 9600 --id rover1
 
 Defaults are read from the environment first (so the systemd service can be
-configured via /etc/uc-chassis/robot.env), then overridden by CLI flags:
+configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
 
     UC_ROBOT_ID, UC_XBEE_PORT, UC_XBEE_BAUD, UC_START_MODE, UC_LOOP_HZ,
     UC_TELEMETRY_HZ, UC_GPS_ENABLED/PORT/BAUD, UC_IMU_ENABLED/ADDRESS/OFFSET
@@ -22,7 +22,7 @@ from robot.robot import Robot
 
 def main():
     cfg = RobotConfig()
-    parser = argparse.ArgumentParser(description="uc-chassis tank drive robot")
+    parser = argparse.ArgumentParser(description="RoverSoftware tank drive robot")
     parser.add_argument("--id", dest="robot_id",
                         default=os.environ.get("UC_ROBOT_ID", cfg.robot_id),
                         help="unique robot id on the shared XBee channel")

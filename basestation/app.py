@@ -28,7 +28,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
-    app = FastAPI(title="uc-chassis base station")
+    app = FastAPI(title="RoverSoftware base station")
     clients: Set[WebSocket] = set()
 
     # Offline map tiles: serves /tiles/{z}/{x}/{y}.png from a local .mbtiles cache,

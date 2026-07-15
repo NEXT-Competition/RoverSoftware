@@ -1,17 +1,17 @@
-Package: uc-chassis-robot
+Package: roversoftware-robot
 Version: @VERSION@
 Section: misc
 Priority: optional
 Architecture: all
 Maintainer: Yojan Gautam <gautamyojan0@gmail.com>
 Depends: python3 (>= 3.7), python3-serial
-Description: uc-chassis tank-drive robot controller
+Description: RoverSoftware tank-drive robot controller
  Modular Python stack that drives a tank-drive ground robot on a Raspberry Pi
  with a SunFounder Fusion HAT, commanded over an XBee radio from a base station.
  .
- Installs the application to /opt/uc-chassis and runs it as the
- uc-chassis-robot systemd service (started on boot). Per-robot settings live in
- /etc/uc-chassis/robot.env.
+ Installs the application to /opt/roversoftware and runs it as the
+ roversoftware-robot systemd service (started on boot). Per-robot settings live in
+ /etc/roversoftware/robot.env.
  .
  Note: the SunFounder "fusion_hat" Python library is not packaged here and must
  be installed separately per SunFounder's docs; without it the motor layer

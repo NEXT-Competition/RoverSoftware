@@ -78,7 +78,7 @@ def main():
     p.add_argument("--url", default="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
                    help="tile URL template")
     p.add_argument("--rate", type=float, default=2.0, help="max tiles/sec (be polite)")
-    p.add_argument("--user-agent", default="uc-chassis-basestation tile fetch (offline map)")
+    p.add_argument("--user-agent", default="roversoftware-basestation tile fetch (offline map)")
     p.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
     args = p.parse_args()
 
@@ -143,7 +143,7 @@ def main():
 
     # MBTiles metadata (so QGIS et al. and our TileStore know the extent).
     meta = {
-        "name": "uc-chassis offline tiles",
+        "name": "roversoftware offline tiles",
         "format": "png",
         "type": "baselayer",
         "version": "1.0",

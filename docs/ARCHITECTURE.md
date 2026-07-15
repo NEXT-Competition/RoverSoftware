@@ -1,4 +1,4 @@
-# uc-chassis — Technical Documentation
+# RoverSoftware — Technical Documentation
 
 How the whole system works, end to end: the tank-drive robot, the base-station
 dashboard, the radio protocol, GPS waypoint autonomy, and offline maps. For
@@ -401,7 +401,7 @@ serve from a local cache first, fall back online when reachable.
 - **Building a cache** — `tools/fetch_tiles.py` downloads a bounding box (or
   `--center … --radius-km …`) across a zoom range into an `.mbtiles`, rate-
   limited and resumable. Then `just bs-fetch-tiles …` / `just bs-push-tiles`
-  build it and copy it to `/var/lib/uc-chassis/tiles.mbtiles` on the Pi.
+  build it and copy it to `/var/lib/roversoftware/tiles.mbtiles` on the Pi.
 
 > Bulk-downloading from the public OSM server is discouraged by their tile policy
 > — keep areas modest and, for anything large, point `--url` at your own or a
@@ -429,8 +429,8 @@ web loop reads.
 
 ## 10. Configuration reference (env vars)
 
-Robot settings live in `/etc/uc-chassis/robot.env`, base-station settings in
-`/etc/uc-chassis/basestation.env` (both dpkg conffiles — edits survive upgrades).
+Robot settings live in `/etc/roversoftware/robot.env`, base-station settings in
+`/etc/roversoftware/basestation.env` (both dpkg conffiles — edits survive upgrades).
 Each maps to a CLI flag on the respective entry point.
 
 **Robot (`run_robot.py`):**
@@ -462,16 +462,16 @@ Each maps to a CLI flag on the respective entry point.
 
 Both halves ship as Debian packages built by `packaging/build-deb.sh` and driven
 by the `Justfile`. Each installs to `/opt/…`, drops a systemd unit, and starts on
-boot; per-instance settings live in `/etc/uc-chassis/*.env` conffiles.
+boot; per-instance settings live in `/etc/roversoftware/*.env` conffiles.
 
-**Robot** — `uc-chassis-robot`, service runs as **root** (serial + I2C/GPIO
+**Robot** — `roversoftware-robot`, service runs as **root** (serial + I2C/GPIO
 access). Recipes: `just bootstrap` (once — Fusion HAT drivers), `just deploy`
 (build + install `.deb`), `just sync` (fast: rsync `robot/`, `run_robot.py`,
-`tools/` into `/opt/uc-chassis` + restart — no packaging round-trip), plus
+`tools/` into `/opt/roversoftware` + restart — no packaging round-trip), plus
 `status`/`logs`/`restart`/`config`. Target a specific robot with
 `just host=rover2.local <recipe>`.
 
-**Base station** — `uc-chassis-basestation`, a headless server service **plus** a
+**Base station** — `roversoftware-basestation`, a headless server service **plus** a
 desktop autostart entry that launches a full-screen Chromium **kiosk**
 (`kiosk.sh`, wired for Wayland/X). Recipes: `just deploy-basestation`,
 `just sync-basestation`, `just bs-reload` (refresh the kiosk),

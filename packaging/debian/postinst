@@ -5,9 +5,9 @@ set -e
 case "$1" in
     configure)
         systemctl daemon-reload || true
-        systemctl enable uc-chassis-robot.service || true
+        systemctl enable roversoftware-robot.service || true
         # (Re)start so a fresh install boots and an upgrade picks up new code.
-        systemctl restart uc-chassis-robot.service || true
+        systemctl restart roversoftware-robot.service || true
         ;;
 esac
 

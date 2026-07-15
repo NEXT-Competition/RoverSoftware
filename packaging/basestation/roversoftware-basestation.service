@@ -1,13 +1,13 @@
 [Unit]
-Description=uc-chassis base-station dashboard server
+Description=RoverSoftware base-station dashboard server
 After=network.target
 
 [Service]
 Type=simple
 # Per-instance settings (radio port/baud, web port, sim mode). '-' = optional.
-EnvironmentFile=-/etc/uc-chassis/basestation.env
-WorkingDirectory=/opt/uc-chassis-basestation
-ExecStart=/usr/bin/python3 /opt/uc-chassis-basestation/run_basestation.py
+EnvironmentFile=-/etc/roversoftware/basestation.env
+WorkingDirectory=/opt/roversoftware-basestation
+ExecStart=/usr/bin/python3 /opt/roversoftware-basestation/run_basestation.py
 Restart=on-failure
 RestartSec=3
 

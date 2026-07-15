@@ -1,4 +1,4 @@
-"""uc-chassis robot package.
+"""RoverSoftware robot package.
 
 A modular tank-drive robot stack:
 

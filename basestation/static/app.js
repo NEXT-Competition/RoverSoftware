@@ -1,4 +1,4 @@
-// uc-chassis base station dashboard.
+// RoverSoftware base station dashboard.
 // Streams fleet state over a WebSocket, renders robots on a Leaflet map, and
 // sends control actions (select / mode / e-stop / route) back to the backend.
 

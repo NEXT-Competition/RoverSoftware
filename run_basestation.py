@@ -9,7 +9,7 @@
     python run_basestation.py --port /dev/tty.usbserial-XXXX --baud 57600
 
 Defaults come from the environment first (so the systemd service can be
-configured via /etc/uc-chassis/basestation.env), then CLI flags override:
+configured via /etc/roversoftware/basestation.env), then CLI flags override:
 
     UC_XBEE_PORT, UC_XBEE_BAUD, UC_WEB_HOST, UC_WEB_PORT, UC_SIM,
     UC_SIM_ROBOTS, UC_SIM_ORIGIN, UC_NO_CONTROLLER, UC_TILES,
@@ -36,7 +36,7 @@ def _envbool(name):
 
 
 def main():
-    p = argparse.ArgumentParser(description="uc-chassis base station")
+    p = argparse.ArgumentParser(description="RoverSoftware base station")
     p.add_argument("--port", default=_env("UC_XBEE_PORT", None),
                    help="XBee serial port for real robots (e.g. /dev/ttyUSB0)")
     p.add_argument("--baud", type=int, default=int(_env("UC_XBEE_BAUD", 9600)))
