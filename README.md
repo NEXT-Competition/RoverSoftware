@@ -66,14 +66,17 @@ tools/
   esc_calibrate.py      interactive single-channel ESC bring-up
   servo_sweep.py        raw servo sweep (the Fusion HAT hello-world)
   xbee_monitor.py       watch/inject XBee frames to verify the radio link
-basestation/            cross-platform dashboard (Mac / Pi) — see "Base station"
-  app.py                FastAPI: serves the UI, WebSocket bridge browser<->radio
+basestation/            bridge: radio <-> WebSocket + gamepad + tiles — see "Base station"
+  app.py                FastAPI: internal WebSocket/tiles API, bridge browser<->radio
   fleet.py              FleetManager: tracks every robot from its telemetry
   simulator.py          fake fleet (drop-in for the radio) so it all runs w/o hardware
   controller_input.py   PS4/gamepad reader (pygame, headless) -> selected robot
-  static/               Leaflet map dashboard (index.html, app.js, style.css)
+  static/               legacy Leaflet dashboard (kept as internal fallback)
   teleop_sender.py      minimal PS4 -> JSON sender (kept for quick point-to-point tests)
-run_basestation.py      entry point for the dashboard
+basestation-ui/         touch-first Deno UI (Vite + Preact) — desktop / iPad / kiosk
+  server/               Deno.serve front door: serves the SPA, proxies /ws + /tiles
+  src/                  Preact app: MapView, DrivePad joystick, fleet, controls
+run_basestation.py      entry point for the bridge
 ```
 
 ## Wiring / hardware notes
@@ -156,6 +159,41 @@ Useful flags: `--robots N` (sim count), `--origin lat,lon` (sim start),
 `--no-controller`, `--tiles <url-template>` (point at a local tile server for
 offline field use), `--host/--web-port`.
 
+### Touch UI (Deno Desktop / iPad) — `basestation-ui/`
+
+The dashboard is a **touch-first Deno app** (Vite + Preact). The Python command
+above is now the *bridge*: it owns the radio, gamepad and tile cache and speaks
+an internal `/ws` + `/tiles` API. The Deno app serves the UI and reverse-proxies
+those two endpoints to the bridge, so **one build runs three ways** — a native
+desktop window (`deno desktop`, Deno ≥ 2.9), a LAN server for an iPad or any
+touch screen (`deno serve`), and the Raspberry Pi Chromium kiosk.
+
+What the touch UI adds over the old static page: an **on-screen joystick** so you
+can drive from a tablet with no gamepad (up = throttle, sideways = steer; it
+release-to-zeros and rate-limits to ~30 Hz to match the radio), a floating
+always-visible **E-STOP**, responsive **landscape / portrait (bottom-sheet)**
+layouts with iPad safe-area insets, and locally-bundled map + fonts (no CDN, so
+it works fully offline). Physical gamepads still work via the browser Gamepad
+API, and the server-side gamepad path is unchanged.
+
+```bash
+# 1) Run the Python bridge (radio or --sim) on its internal port:
+python run_basestation.py --sim --web-port 8001
+
+# 2) Dev with hot reload (Vite proxies /ws + /tiles to the bridge):
+cd basestation-ui && npm install && npm run dev
+#   -> open http://localhost:5173   (also reachable from an iPad on the LAN)
+
+# Production front door (serves the built app + proxies to the bridge):
+npm run build
+RS_UPSTREAM=127.0.0.1:8001 deno task serve      # binds 0.0.0.0:8000
+#   -> iPad Safari: http://<this-host>:8000  (Add to Home Screen = fullscreen)
+
+# Native cross-platform desktop binary (requires Deno >= 2.9):
+deno task desktop      # dev window with HMR
+deno task bundle       # -> self-contained native binary (macOS/Windows/Linux)
+```
+
 ## Deploying to a robot (Debian package + systemd)
 
 The robot software ships as a `.deb` that installs to `/opt/roversoftware`, drops a
@@ -217,26 +255,35 @@ kiosk pointed at it on boot.
 
 ```
 packaging/basestation/
-  basestation.env                    per-instance config (radio, web port, sim)
-  roversoftware-basestation.service     the dashboard server (systemd)
-  kiosk.sh                           waits for the server, launches Chromium --kiosk
+  basestation.env                    per-instance config (radio, ports, sim)
+  roversoftware-basestation.service     the Python bridge (systemd)
+  roversoftware-ui.service              the Deno touch-UI front door (systemd)
+  kiosk.sh                           waits for the UI, launches Chromium --kiosk
   roversoftware-kiosk.desktop           /etc/xdg/autostart entry -> runs kiosk.sh on login
   debian control/conffiles/scripts
 ```
 
+The package installs **two services**: the Python bridge on an internal port
+(`RS_WEB_PORT`, default 8001) and the Deno touch UI on the public port
+(`RS_UI_PORT`, default 8000) that the kiosk and any tablet connect to.
+
 Deploy to the base-station Pi (booted to the desktop, with a display attached):
 
 ```bash
-just bs_host=base.local deploy-basestation   # builds + installs the .deb
+just bs_host=base.local bootstrap-deno       # ONCE: install the deno runtime
+just bs_host=base.local deploy-basestation   # builds (incl. the UI) + installs the .deb
 ```
-`apt-get` pulls the deps (FastAPI, uvicorn, pygame, chromium). On boot the
-server comes up and the kiosk browser opens the dashboard full-screen.
+`apt-get` pulls the deps (FastAPI, uvicorn, pygame, chromium); the UI build is
+bundled into the `.deb`. On boot the bridge + UI come up and the kiosk browser
+opens the touch UI full-screen. **The Deno runtime isn't on apt** — install it
+once with `just bootstrap-deno` (or the bridge still runs, just without the UI).
 
 - Config lives in `/etc/roversoftware/basestation.env` (`just bs_host=... bs-config`).
   Set `RS_XBEE_PORT`/`RS_XBEE_BAUD` to match your robots; set `RS_SIM=1` to test
   the kiosk with no radio; `RS_NO_CONTROLLER=1` for a pure touch base station.
-- Fast iteration: `just bs_host=... sync-basestation` (pushes code + restarts the
-  server), then `just bs_host=... bs-reload` to refresh the kiosk browser.
+- Fast iteration: `just bs_host=... sync-ui` (rebuilds + pushes the touch UI and
+  restarts it) or `sync-basestation` (bridge code), then `bs-reload` to refresh
+  the kiosk browser. UI logs: `just bs_host=... bs-ui-logs`.
 - Requires Raspberry Pi OS / Debian **Bookworm+** (for the packaged FastAPI/uvicorn).
 - The UI is touch-first: large tap targets, a big E-STOP, pinch/drag map, and a
   layout that adapts to small panels (e.g. the official 7" 800×480 display).

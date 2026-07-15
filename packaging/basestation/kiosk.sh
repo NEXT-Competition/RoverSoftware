@@ -4,7 +4,9 @@
 
 ENV_FILE=/etc/roversoftware/basestation.env
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
-PORT="${RS_WEB_PORT:-8000}"
+# Point at the Deno touch-UI front door (roversoftware-ui.service), not the
+# internal Python bridge. RS_UI_PORT is the public port.
+PORT="${RS_UI_PORT:-8000}"
 URL="http://localhost:${PORT}/"
 
 # When relaunched outside the desktop session (e.g. over SSH via `just bs-reload`)

@@ -72,8 +72,24 @@ build_basestation() {
     cp "$ROOT/packaging/basestation/kiosk.sh" "$app/"; chmod 0755 "$app/kiosk.sh"
     strip_caches "$app"
 
+    # Deno touch UI: build the client, then stage the served artifacts under ui/.
+    # (Served by roversoftware-ui.service via Deno; needs deno on the target PATH.)
+    if [ ! -d "$ROOT/basestation-ui/dist" ] || [ "${BUILD_UI:-1}" = "1" ]; then
+        echo "==> building basestation-ui (npm run build)"
+        ( cd "$ROOT/basestation-ui" && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1; npm run build )
+    fi
+    if [ -d "$ROOT/basestation-ui/dist" ]; then
+        mkdir -p "$app/ui"
+        cp -R "$ROOT/basestation-ui/dist" "$app/ui/"
+        cp -R "$ROOT/basestation-ui/server" "$app/ui/"
+        cp "$ROOT/basestation-ui/deno.json" "$app/ui/"
+    else
+        echo "warning: basestation-ui/dist missing; UI service will have nothing to serve" >&2
+    fi
+
     cp "$ROOT/packaging/basestation/basestation.env" "$build/etc/roversoftware/basestation.env"
     cp "$ROOT/packaging/basestation/roversoftware-basestation.service" "$build/lib/systemd/system/"
+    cp "$ROOT/packaging/basestation/roversoftware-ui.service" "$build/lib/systemd/system/"
     cp "$ROOT/packaging/basestation/roversoftware-kiosk.desktop" "$build/etc/xdg/autostart/"
 
     sed "s/@VERSION@/${VERSION}/" "$ROOT/packaging/basestation/control" > "$build/DEBIAN/control"

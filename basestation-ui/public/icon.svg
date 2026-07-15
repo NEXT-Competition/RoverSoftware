@@ -1,0 +1,22 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111726"/>
+      <stop offset="1" stop-color="#080b12"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#7cc0ff"/>
+      <stop offset="1" stop-color="#2f7fe0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.32" r="0.6">
+      <stop offset="0" stop-color="#4c9eff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#4c9eff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+  <rect x="6" y="6" width="500" height="500" rx="106" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+  <!-- Heading arrow — the same triangle used for robot markers on the map. -->
+  <path d="M256 118 L360 372 L256 322 L152 372 Z" fill="url(#arrow)"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#4c9eff" stroke-opacity="0.18" stroke-width="3"/>
+</svg>

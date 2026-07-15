@@ -1,0 +1,26 @@
+{
+  "name": "roversoftware-basestation-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Touch-first base-station dashboard for the RoverSoftware rover fleet. Vite + Preact client; served/packaged by Deno (deno serve / deno desktop).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.1.1",
+    "@fontsource-variable/space-grotesk": "^5.1.1",
+    "@preact/signals": "^2.0.1",
+    "leaflet": "^1.9.4",
+    "preact": "^10.25.4"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.1",
+    "@types/leaflet": "^1.9.16",
+    "@types/node": "^22.10.7",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11"
+  }
+}

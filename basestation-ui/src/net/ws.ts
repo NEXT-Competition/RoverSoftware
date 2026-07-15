@@ -1,0 +1,90 @@
+// Typed WebSocket client + reactive store.
+//
+// Connects to the same-origin /ws (proxied to the Python bridge), decodes the
+// fleet snapshots into @preact/signals, and exposes send() for outbound
+// actions. Auto-reconnects on drop, mirroring the old app.js (1s backoff).
+
+import { batch, computed, signal } from "@preact/signals";
+import type {
+  Action,
+  ConnState,
+  ControllerStatus,
+  FleetMessage,
+  Robot,
+} from "./types.ts";
+
+export const conn = signal<ConnState>("connecting");
+export const robots = signal<Robot[]>([]);
+export const controller = signal<ControllerStatus>({ connected: false, name: null });
+export const tilesUrl = signal<string | null>(null);
+export const tilesMaxZoom = signal<number | null>(null);
+
+// Locally-owned selection so a tap feels instant; seeded from the server the
+// first time it tells us who's selected (matches the old app.js behaviour).
+export const selected = signal<string | null>(null);
+
+/** The currently-selected robot object, or null. */
+export const selectedRobot = computed<Robot | null>(() => {
+  const id = selected.value;
+  if (!id) return null;
+  return robots.value.find((r) => r.robot_id === id) ?? null;
+});
+
+let ws: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+function wsUrl(): string {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${location.host}/ws`;
+}
+
+export function connect(): void {
+  clearTimeout(reconnectTimer);
+  ws = new WebSocket(wsUrl());
+
+  ws.onopen = () => {
+    conn.value = "live";
+  };
+
+  ws.onclose = () => {
+    conn.value = "reconnecting";
+    reconnectTimer = setTimeout(connect, 1000);
+  };
+
+  ws.onerror = () => {
+    // onclose fires next and handles the retry.
+    try {
+      ws?.close();
+    } catch { /* ignore */ }
+  };
+
+  ws.onmessage = (ev) => {
+    let msg: FleetMessage;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    if (msg.type !== "fleet") return;
+    batch(() => {
+      robots.value = msg.robots ?? [];
+      controller.value = msg.controller ?? { connected: false, name: null };
+      tilesUrl.value = msg.tiles ?? null;
+      tilesMaxZoom.value = msg.tiles_maxzoom ?? null;
+      if (selected.value == null) selected.value = msg.selected;
+    });
+  };
+}
+
+/** Send an action to the bridge (no-op if the socket isn't open). */
+export function send(action: Action): void {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(action));
+  }
+}
+
+/** Select a robot: instant locally, and tell the bridge. */
+export function selectRobot(id: string): void {
+  selected.value = id;
+  send({ action: "select", robot_id: id });
+}

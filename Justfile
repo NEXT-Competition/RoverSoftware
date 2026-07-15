@@ -23,6 +23,7 @@ bs_target  := bs_user + "@" + bs_host
 bs_app     := "/opt/roversoftware-basestation"
 bs_deb     := "dist/roversoftware-basestation_" + version + "_all.deb"
 bs_service := "roversoftware-basestation"
+bs_ui_service := "roversoftware-ui"
 
 # Show available recipes.
 default:
@@ -114,8 +115,8 @@ install-basestation: build-basestation
 
 deploy-basestation: install-basestation
 
-# FAST PATH: push updated dashboard code + restart the server (no deb rebuild).
-# NOTE: reload the kiosk browser afterwards to pick up UI/static changes (just bs-reload).
+# FAST PATH: push updated bridge code + restart the Python server (no deb rebuild).
+# This is the bridge only; for the touch UI use `just sync-ui`.
 sync-basestation:
     rsync -az --delete \
         --rsync-path="sudo rsync" \
@@ -123,7 +124,34 @@ sync-basestation:
         basestation robot run_basestation.py \
         {{bs_target}}:{{bs_app}}/
     ssh {{bs_target}} "sudo systemctl restart {{bs_service}}"
-    @echo "==> synced dashboard to {{bs_host}} and restarted {{bs_service}}"
+    @echo "==> synced bridge to {{bs_host}} and restarted {{bs_service}}"
+
+# ── Deno touch UI ──
+# One-time: install Deno on the base-station Pi (needed by roversoftware-ui).
+bootstrap-deno:
+    ssh -t {{bs_target}} "curl -fsSL https://deno.land/install.sh | sh -s -- -y && sudo ln -sf \$HOME/.deno/bin/deno /usr/local/bin/deno && deno --version"
+
+# Build the touch UI client bundle (Vite). Needs Node/npm locally.
+build-ui:
+    cd basestation-ui && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund) && npm run build
+
+# FAST PATH: build + push the touch UI (dist/ + server/) and restart it.
+# Reload the kiosk afterwards to pick up changes: just bs-reload.
+sync-ui: build-ui
+    rsync -az --delete \
+        --rsync-path="sudo rsync" \
+        basestation-ui/dist basestation-ui/server basestation-ui/deno.json \
+        {{bs_target}}:{{bs_app}}/ui/
+    ssh {{bs_target}} "sudo systemctl restart {{bs_ui_service}}"
+    @echo "==> synced touch UI to {{bs_host}} and restarted {{bs_ui_service}}"
+
+# Touch-UI service controls.
+bs-ui-restart:
+    ssh {{bs_target}} "sudo systemctl restart {{bs_ui_service}}"
+bs-ui-status:
+    ssh {{bs_target}} "systemctl status {{bs_ui_service}} --no-pager"
+bs-ui-logs:
+    ssh {{bs_target}} "journalctl -u {{bs_ui_service}} -f -n 100"
 
 # Base-station service controls.
 bs-restart:

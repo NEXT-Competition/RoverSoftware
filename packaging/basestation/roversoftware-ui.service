@@ -1,0 +1,21 @@
+[Unit]
+Description=RoverSoftware base-station touch UI (Deno front door)
+# Start after the Python bridge it proxies to; keep them lifecycle-linked.
+After=network.target roversoftware-basestation.service
+Wants=roversoftware-basestation.service
+
+[Service]
+Type=simple
+# Shares the base-station config file (RS_UI_HOST/RS_UI_PORT/RS_UPSTREAM).
+EnvironmentFile=-/etc/roversoftware/basestation.env
+WorkingDirectory=/opt/roversoftware-basestation/ui
+# Serves the built dist/ and reverse-proxies /ws + /tiles to the bridge.
+# Requires Deno on PATH (install once: `curl -fsSL https://deno.land/install.sh | sh`,
+# then symlink to /usr/local/bin/deno). --allow-* are scoped to what it needs.
+ExecStart=/usr/local/bin/deno run --allow-net --allow-read --allow-env server/main.ts
+Restart=on-failure
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
