@@ -1,0 +1,11 @@
+#!/bin/sh
+# Post-remove: reload systemd so the removed unit is forgotten.
+set -e
+
+case "$1" in
+    remove|purge)
+        systemctl daemon-reload || true
+        ;;
+esac
+
+exit 0

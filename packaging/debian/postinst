@@ -1,0 +1,14 @@
+#!/bin/sh
+# Post-install: register and (re)start the robot service.
+set -e
+
+case "$1" in
+    configure)
+        systemctl daemon-reload || true
+        systemctl enable uc-chassis-robot.service || true
+        # (Re)start so a fresh install boots and an upgrade picks up new code.
+        systemctl restart uc-chassis-robot.service || true
+        ;;
+esac
+
+exit 0

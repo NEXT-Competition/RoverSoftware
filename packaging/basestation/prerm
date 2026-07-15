@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-remove: stop and disable the service before files are removed.
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        systemctl stop uc-chassis-basestation.service || true
+        systemctl disable uc-chassis-basestation.service || true
+        ;;
+esac
+
+exit 0

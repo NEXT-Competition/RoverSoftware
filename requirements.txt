@@ -1,0 +1,14 @@
+# --- Robot (Raspberry Pi) ---
+pyserial>=3.5
+pynmea2>=1.19        # parse NEO-6M (GY-GPS6MV2) NMEA sentences for waypoint autonomy
+# fusion_hat is installed from SunFounder's package/setup on the Pi, not PyPI:
+#   https://docs.sunfounder.com/projects/fusion-hat/en/latest/
+
+# --- Base station (Pi or Mac) ---
+fastapi>=0.110       # dashboard web server + WebSocket
+uvicorn[standard]>=0.27
+pygame>=2.5          # PS4 controller input, cross-platform
+
+# --- Optional / future ---
+# digi-xbee>=1.4     # if you switch the XBee to API mode
+# opencv-python>=4.9 # color detection for color_align autonomy

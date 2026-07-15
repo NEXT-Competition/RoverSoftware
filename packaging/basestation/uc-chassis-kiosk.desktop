@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=uc-chassis Dashboard Kiosk
+Comment=Full-screen touch dashboard for the robot fleet
+Exec=/opt/uc-chassis-basestation/kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true

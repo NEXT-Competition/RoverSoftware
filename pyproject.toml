@@ -1,0 +1,13 @@
+[project]
+name = "uc-chassis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "pygame>=2.5",
+    "pynmea2>=1.19",
+    "pyserial>=3.5",
+    "uvicorn[standard]>=0.27",
+]

@@ -1,0 +1,25 @@
+[Unit]
+Description=uc-chassis tank-drive robot controller
+After=network.target
+# The XBee usually enumerates as a serial device; give it a moment on boot.
+Wants=network.target
+
+[Service]
+Type=simple
+# Per-robot settings (id, serial port, mode). The leading '-' makes it optional.
+EnvironmentFile=-/etc/uc-chassis/robot.env
+WorkingDirectory=/opt/uc-chassis
+ExecStart=/usr/bin/python3 /opt/uc-chassis/run_robot.py
+Restart=on-failure
+RestartSec=3
+
+# Run as root for simple access to the serial port + Fusion HAT (I2C/GPIO).
+# To harden, switch to a dedicated user added to the dialout, i2c and gpio groups.
+User=root
+
+# On stop, send SIGTERM: the robot handles it and brings the motors to neutral.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

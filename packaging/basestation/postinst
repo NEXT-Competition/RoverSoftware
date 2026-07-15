@@ -1,0 +1,15 @@
+#!/bin/sh
+# Post-install: register and (re)start the dashboard server service.
+set -e
+
+case "$1" in
+    configure)
+        # Writable home for the offline map tile cache (UC_TILES_MBTILES).
+        mkdir -p /var/lib/uc-chassis || true
+        systemctl daemon-reload || true
+        systemctl enable uc-chassis-basestation.service || true
+        systemctl restart uc-chassis-basestation.service || true
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,104 @@
+"""Fleet state: tracks every robot the base station has heard from.
+
+Telemetry frames (from robots or the simulator) flow in via
+`update_from_telemetry`; the web layer reads `snapshot()` to push the whole
+fleet to the browser. Thread-safe: telemetry arrives on the link's reader
+thread while the web loop reads snapshots.
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+ONLINE_TIMEOUT = 3.0  # seconds without telemetry before a robot is "offline"
+
+
+@dataclass
+class RobotState:
+    robot_id: str
+    mode: str = "unknown"
+    estop: bool = False
+    left: float = 0.0
+    right: float = 0.0
+    battery: Optional[float] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    heading: Optional[float] = None
+    last_seen: float = 0.0
+    trail: List[Tuple[float, float]] = field(default_factory=list)
+
+    def online(self, now: float) -> bool:
+        return self.last_seen > 0 and (now - self.last_seen) < ONLINE_TIMEOUT
+
+
+class FleetManager:
+    def __init__(self, trail_max: int = 400):
+        self._robots: Dict[str, RobotState] = {}
+        self._selected: Optional[str] = None
+        self._lock = threading.Lock()
+        self.trail_max = trail_max
+
+    def _ensure(self, robot_id: str) -> RobotState:
+        st = self._robots.get(robot_id)
+        if st is None:
+            st = RobotState(robot_id=robot_id)
+            self._robots[robot_id] = st
+            if self._selected is None:
+                self._selected = robot_id  # auto-select the first robot we meet
+        return st
+
+    def update_from_telemetry(self, msg: dict, now: float) -> None:
+        if msg.get("type") != "telemetry":
+            return
+        robot_id = msg.get("from") or msg.get("robot_id")
+        if not robot_id:
+            return
+        with self._lock:
+            st = self._ensure(robot_id)
+            st.mode = msg.get("mode", st.mode)
+            st.estop = bool(msg.get("estop", st.estop))
+            st.left = float(msg.get("left", st.left))
+            st.right = float(msg.get("right", st.right))
+            if "battery" in msg and msg["battery"] is not None:
+                st.battery = float(msg["battery"])
+            if "heading" in msg and msg["heading"] is not None:
+                st.heading = float(msg["heading"])
+            if msg.get("lat") is not None and msg.get("lon") is not None:
+                st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
+                st.trail.append((st.lat, st.lon))
+                if len(st.trail) > self.trail_max:
+                    del st.trail[: len(st.trail) - self.trail_max]
+            st.last_seen = now
+
+    @property
+    def selected(self) -> Optional[str]:
+        with self._lock:
+            return self._selected
+
+    def select(self, robot_id: Optional[str]) -> None:
+        with self._lock:
+            if robot_id in self._robots:
+                self._selected = robot_id
+
+    def snapshot(self, now: float) -> dict:
+        with self._lock:
+            robots = [
+                {
+                    "robot_id": st.robot_id,
+                    "mode": st.mode,
+                    "estop": st.estop,
+                    "left": round(st.left, 3),
+                    "right": round(st.right, 3),
+                    "battery": st.battery,
+                    "lat": st.lat,
+                    "lon": st.lon,
+                    "heading": st.heading,
+                    "online": st.online(now),
+                    "age": round(now - st.last_seen, 2) if st.last_seen else None,
+                    "trail": st.trail,
+                }
+                for st in self._robots.values()
+            ]
+            return {"type": "fleet", "selected": self._selected, "robots": robots}
