@@ -1,4 +1,8 @@
-"""FastAPI base-station app: serves the dashboard, bridges browser <-> radio.
+"""FastAPI base-station bridge: browser <-> radio over a WebSocket, plus tiles.
+
+The dashboard UI is served separately by the Deno front door (roversoftware-ui),
+which reverse-proxies /ws and /tiles to this process. This app serves no HTML.
+
 
 Wiring:
     link (XBee or simulator)  --telemetry-->  FleetManager
@@ -14,17 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from pathlib import Path
 from typing import Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 
 from .fleet import FleetManager
 from .tiles import TileStore
-
-STATIC_DIR = Path(__file__).parent / "static"
 
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
@@ -159,8 +159,14 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
                         headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/")
-    async def index():
-        return FileResponse(STATIC_DIR / "index.html")
+    async def root():
+        # The dashboard is served by the Deno touch UI (roversoftware-ui), which
+        # reverse-proxies /ws and /tiles here. This process is purely the bridge
+        # — no HTML/static assets. Handy hint if someone hits the bridge port.
+        return Response(
+            "roversoftware bridge — WebSocket at /ws, map tiles at /tiles/{z}/{x}/{y}.png.\n"
+            "The dashboard is served by the roversoftware-ui service.\n",
+            media_type="text/plain",
+        )
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app
