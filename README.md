@@ -176,6 +176,18 @@ layouts with iPad safe-area insets, and locally-bundled map + fonts (no CDN, so
 it works fully offline). Physical gamepads still work via the browser Gamepad
 API, and the server-side gamepad path is unchanged.
 
+**Easiest — one command** (starts the bridge + UI together, opens the browser,
+one Ctrl+C stops both):
+
+```bash
+./start-basestation.sh                                 # simulator (fake robots)
+./start-basestation.sh --port /dev/tty.usbserial-XXXX  # real robots over XBee
+./start-basestation.sh --dev                           # UI hot-reload (Vite)
+# or, if you use just:  just run   /   just run --port /dev/tty.usbserial-XXXX
+```
+
+Or run the two halves yourself:
+
 ```bash
 # 1) Run the Python bridge (radio or --sim) on its internal port:
 python run_basestation.py --sim --web-port 8001

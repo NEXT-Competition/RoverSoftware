@@ -29,6 +29,13 @@ bs_ui_service := "roversoftware-ui"
 default:
     @just --list
 
+# Run the WHOLE base station locally on your Mac (bridge + touch UI, one Ctrl+C):
+#   just run                                   # simulator (fake robots)
+#   just run --port /dev/tty.usbserial-XXXX    # real robots over XBee
+#   just run --dev                             # UI hot-reload (Vite)
+run *ARGS:
+    ./start-basestation.sh {{ARGS}}
+
 # One-time Pi setup: install SunFounder Fusion HAT drivers + the fusion_hat
 # Python library, and the BNO055 IMU driver. This may enable I2C and require a
 # reboot afterwards. Run this ONCE per robot before the first `just deploy`.
