@@ -12,7 +12,7 @@ While it runs, type a line and press Enter to send:
     <blank>        send a test telemetry frame (from = --id)
     d 0.5 -0.2     drive: throttle=0.5 steer=-0.2  (arcade)
     dt 0.4 0.6     drive: left=0.4 right=0.6        (tank)
-    m waypoint     mode switch (teleop | color_align | waypoint)
+    m waypoint     mode switch (teleop | object_align | waypoint)
     e   /   c      estop  /  clear_estop
     to rover2      address later sends to rover2 (default: no address = broadcast)
     to -           clear the address

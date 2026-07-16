@@ -2,7 +2,7 @@
 // on-screen joystick. The browser "standard" mapping lines up with the DS4
 // indices the server reader uses (basestation/controller_input.py):
 //   axes[1] = left stick Y (negate -> throttle)   axes[2] = right stick X (steer)
-//   btn0 = cross (clear)   btn1 = circle (e-stop)   btn4 = L1 (teleop)   btn5 = R1 (color_align)
+//   btn0 = cross (clear)   btn1 = circle (e-stop)   btn4 = L1 (teleop)   btn5 = R1 (object_align)
 //
 // Note WebView Gamepad support is uneven (WebView2 good, macOS WKWebView weak),
 // which is exactly why the reliable physical-controller path stays server-side
@@ -15,7 +15,7 @@ export const AXIS_STEER = 2;
 export const BTN_ESTOP = 1;
 export const BTN_CLEAR = 0;
 export const BTN_TELEOP = 4;
-export const BTN_COLOR = 5;
+export const BTN_ALIGN = 5;
 
 export interface GamepadSample {
   name: string;

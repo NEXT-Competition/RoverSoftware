@@ -8,7 +8,7 @@ A modular tank-drive robot stack:
                                                         |  controllers
 
 Everything the robot does flows through the ControlManager, which picks one
-active Controller (teleop today; color-align and waypoint autonomy later) and
+active Controller (teleop today; object-align and waypoint autonomy later) and
 sends its DriveCommand to the tank drive.
 """
 

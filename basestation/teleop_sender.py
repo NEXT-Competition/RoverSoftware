@@ -39,7 +39,7 @@ AXIS_STEER = 2      # right stick X
 BTN_ESTOP = 1       # circle
 BTN_CLEAR = 0       # cross
 BTN_TELEOP = 4      # L1
-BTN_COLOR = 5       # R1
+BTN_ALIGN = 5       # R1
 
 
 def send(ser, msg):
@@ -100,8 +100,8 @@ def main():
                 send(ser, {"type": "clear_estop"})
             if edge(BTN_TELEOP):
                 send(ser, {"type": "mode", "mode": "teleop"})
-            if edge(BTN_COLOR):
-                send(ser, {"type": "mode", "mode": "color_align"})
+            if edge(BTN_ALIGN):
+                send(ser, {"type": "mode", "mode": "object_align"})
 
             throttle = -deadzone(js.get_axis(AXIS_THROTTLE))  # push up = forward
             steer = deadzone(js.get_axis(AXIS_STEER))

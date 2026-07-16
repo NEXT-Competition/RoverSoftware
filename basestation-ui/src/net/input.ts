@@ -12,7 +12,7 @@ import { selected, send } from "./ws.ts";
 import { makeDriveSender } from "./drive.ts";
 import {
   BTN_CLEAR,
-  BTN_COLOR,
+  BTN_ALIGN,
   BTN_ESTOP,
   BTN_TELEOP,
   pollGamepad,
@@ -42,7 +42,7 @@ function tick(): void {
     if (edge(b, BTN_ESTOP)) send({ action: "estop", robot_id: rid });
     if (edge(b, BTN_CLEAR)) send({ action: "clear_estop", robot_id: rid });
     if (edge(b, BTN_TELEOP)) send({ action: "mode", robot_id: rid, mode: "teleop" });
-    if (edge(b, BTN_COLOR)) send({ action: "mode", robot_id: rid, mode: "color_align" });
+    if (edge(b, BTN_ALIGN)) send({ action: "mode", robot_id: rid, mode: "object_align" });
     prevButtons = b;
   } else if (gp) {
     prevButtons = gp.buttons;

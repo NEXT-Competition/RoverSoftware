@@ -26,6 +26,12 @@ class RobotState:
     lat: Optional[float] = None
     lon: Optional[float] = None
     heading: Optional[float] = None
+    # Vision summary from the robot's object detector: {ok, fps, label, conf, ex,
+    # size, age}. Opaque here on purpose — the robot owns the shape; this layer
+    # just forwards it. Note fields must be listed here AND in snapshot() or they
+    # never reach the browser.
+    vision: Optional[dict] = None
+    imu_calib: Optional[list] = None
     last_seen: float = 0.0
     trail: List[Tuple[float, float]] = field(default_factory=list)
 
@@ -65,6 +71,10 @@ class FleetManager:
                 st.battery = float(msg["battery"])
             if "heading" in msg and msg["heading"] is not None:
                 st.heading = float(msg["heading"])
+            if msg.get("vision") is not None:
+                st.vision = msg["vision"]
+            if msg.get("imu_calib") is not None:
+                st.imu_calib = list(msg["imu_calib"])
             if msg.get("lat") is not None and msg.get("lon") is not None:
                 st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
                 st.trail.append((st.lat, st.lon))
@@ -95,6 +105,8 @@ class FleetManager:
                     "lat": st.lat,
                     "lon": st.lon,
                     "heading": st.heading,
+                    "vision": st.vision,
+                    "imu_calib": st.imu_calib,
                     "online": st.online(now),
                     "age": round(now - st.last_seen, 2) if st.last_seen else None,
                     "trail": st.trail,

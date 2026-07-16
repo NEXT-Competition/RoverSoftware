@@ -3,7 +3,7 @@ import type { Mode } from "../net/types.ts";
 
 const MODES: { key: Mode; label: string }[] = [
   { key: "teleop", label: "Teleop" },
-  { key: "color_align", label: "Color align" },
+  { key: "object_align", label: "Object align" },
   { key: "waypoint", label: "Waypoint" },
 ];
 

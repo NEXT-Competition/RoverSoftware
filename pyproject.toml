@@ -11,3 +11,20 @@ dependencies = [
     "pyserial>=3.5",
     "uvicorn[standard]>=0.27",
 ]
+
+# Pi-only hardware/vision deps (fusion_hat, adafruit-circuitpython-bno055,
+# edge_impulse_linux, opencv/picamera2) are deliberately NOT listed above — they
+# don't install on a dev laptop and would break `uv sync`. See requirements.txt.
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The robot package is imported from the repo root (there's no src/ layout and
+# nothing is installed), so put the root on sys.path. Without this, `uv run
+# pytest` fails on `import robot` even though `python -m pytest` works — the
+# latter adds cwd implicitly and the former doesn't.
+pythonpath = ["."]

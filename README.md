@@ -28,7 +28,7 @@ without reworking the core.
                                                     ┌──────────────┐
                                                     │ControlManager│  mode arbitration + e-stop
                                                     └──────┬───────┘
-                                          teleop / color_align / waypoint
+                                          teleop / object_align / waypoint
                                                            │  DriveCommand(left,right)
                                                            ▼
                                                     ┌──────────────┐
@@ -58,7 +58,8 @@ robot/
     manager.py          ControlManager: modes + e-stop
     teleop.py           drive from base-station commands (with link failsafe)
     pid.py              reusable PID
-    color_align.py      autonomy scaffold — inject a camera target provider
+    object_align.py     Edge Impulse object alignment — inject a detection provider
+    detection.py        the Detection contract the controller consumes
     waypoint.py         autonomy scaffold — inject a GPS pose provider
   robot.py              wires it all together; the control loop
 run_robot.py            entry point (run on the Pi)
@@ -309,7 +310,7 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 // base station -> robot
 {"type": "drive", "throttle": 0.5, "steer": -0.2, "to": "rover1"}   // arcade
 {"type": "drive", "left": 0.4, "right": 0.6, "to": "rover1"}         // direct tank
-{"type": "mode", "mode": "teleop", "to": "rover1"}                   // or color_align / waypoint
+{"type": "mode", "mode": "teleop", "to": "rover1"}                   // or object_align / waypoint
 {"type": "route", "waypoints": [[lat, lon], ...], "to": "rover1"}    // waypoint mode
 {"type": "estop", "to": "rover1"}                                    // latch motors off
 {"type": "clear_estop", "to": "rover1"}
@@ -325,9 +326,12 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
 
 ## Roadmap (the seams are already here)
 
-- **Color-align autonomy** — implement an OpenCV color-threshold + blob detector
-  that returns a normalized horizontal error, and pass it as
-  `ColorAlignController`'s `target_provider`. PID + mixing already done.
+- **Object-align autonomy** — ✅ done: an Edge Impulse `.eim` model detects the
+  target and `ObjectAlignController` faces it, approaches, and stops at a
+  standoff. Drop a model at `RS_VISION_MODEL` and run `--mode object_align`;
+  `tools/detector_selftest.py` covers bring-up and standoff calibration. Export a
+  YOLO-style (`object_detection`) model — FOMO reports centroids, not sized
+  boxes, so it can align but never approach.
 - **GPS waypoint autonomy** — parse GY-GPS6MV2 (NEO-6M) NMEA with `pynmea2` into
   `(lat, lon, heading)` and pass it as `WaypointController`'s `pose_provider`.
   Bearing/distance math already done.
