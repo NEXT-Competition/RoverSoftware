@@ -14,17 +14,24 @@ from __future__ import annotations
 import threading
 import time
 
-from .camera import encode_jpeg
+from .camera import draw_boxes, encode_jpeg
 
 
 class FPVStreamer:
-    def __init__(self, cfg, camera, robot_id: str):
+    def __init__(self, cfg, camera, robot_id: str, overlay_provider=None):
         self.cfg = cfg
         self.camera = camera
         self.robot_id = robot_id
+        # overlay_provider() -> list of (x,y,w,h,label,conf,is_target) in
+        # full-frame pixels, or None/[] for none. Wired to the detector so the
+        # live feed shows what was detected; absent -> a plain feed.
+        self.overlay_provider = overlay_provider
         self._sender = None
         self._thread = None
         self._running = False
+
+    def set_overlay_provider(self, provider) -> None:
+        self.overlay_provider = provider
 
     def start(self) -> None:
         if not self.cfg.enabled:
@@ -52,6 +59,11 @@ class FPVStreamer:
             # would burn a core on JPEG encoding and airtime for no visible gain.
             if frame is not None and stamp != last_stamp:
                 last_stamp = stamp
+                if self.overlay_provider is not None:
+                    boxes = self.overlay_provider()
+                    if boxes:
+                        # Draws on a copy — never mutate the shared camera frame.
+                        frame = draw_boxes(frame, boxes)
                 jpeg = encode_jpeg(frame, self.cfg.jpeg_quality)
                 if jpeg:
                     self._sender.send_frame(jpeg)

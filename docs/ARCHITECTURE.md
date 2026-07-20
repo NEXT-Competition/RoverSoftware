@@ -403,6 +403,15 @@ independent of the model — it needs only a camera and OpenCV, so live view wor
 with no `.eim` at all. Off by default (`RS_FPV_ENABLED`), since it needs the base
 station's IP.
 
+When a model *is* running, the streamer draws the detection boxes onto each
+frame before encoding (green for the tracked target, amber for the rest). The
+boxes come from the detector via an injected `overlay_provider`, in full-frame
+pixels — the detector inverts Edge Impulse's resize + center-crop
+(`_to_full_frame`) so a box the model reported in its cropped input space lands
+in the right place on the 640×480 feed. Drawing happens on a copy of the frame,
+never the shared one, and only the freshest boxes are used, so they lag the
+video by at most a frame.
+
 ---
 
 ## 7. The base station

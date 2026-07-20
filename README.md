@@ -337,9 +337,10 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   Bearing/distance math already done.
 - **FPV live video** — ✅ done: the robot streams its camera as JPEG-over-UDP to
   the base station, which serves it as browser-native MJPEG in the dashboard's
-  Camera panel. Enable on the robot with `--fpv --fpv-host <base-ip>` (needs
-  WiFi/LAN — the XBee radio can't carry video). Shares the one camera with object
-  detection.
+  Camera panel. When a model is loaded, detection boxes are drawn onto the feed
+  (green = the object `object_align` is tracking, amber = others). Enable on the
+  robot with `--fpv --fpv-host <base-ip>` (needs WiFi/LAN — the XBee radio can't
+  carry video). Shares the one camera with object detection.
 - **Base station app** — ✅ done: map view + live multi-robot tracking, PS4
   teleop of the selected robot, mode switching, click-to-route waypoints, and the
   FPV camera feed. Next: offline tile caching and a telemetry/log panel.
