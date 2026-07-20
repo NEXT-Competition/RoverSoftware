@@ -109,8 +109,9 @@ robot/                        # runs on the rover Pi (also imported by the base 
     gps.py                    NEO-6M NMEA reader → (lat, lon, heading)
     bno055.py                 BNO055 IMU → absolute heading + yaw rate
     pose.py                   fuses GPS position + IMU heading → one pose()
-    camera.py                 frame capture (picamera2 → OpenCV → none)
+    camera.py                 shared frame capture (picamera2 → OpenCV → none)
     detector.py               Edge Impulse .eim runner → Detection
+    fpv.py                    JPEG-over-UDP live video → base station
 run_robot.py                  robot entry point (env + CLI → RobotConfig)
 
 basestation/                  # cross-platform dashboard (Pi or Mac)
@@ -387,6 +388,20 @@ Details worth knowing:
 > it checks deps/chmod/labels/`model_type`/fps, and `--save` dumps the model's
 > cropped input so you can confirm the colour order and framing by eye. Park at
 > your stop distance and read the printed `size` — that's `RS_VISION_STANDOFF`.
+
+**FPV live video (`sensors/fpv.py`, `comms/video_udp.py`).** The camera is a
+single shared reader (`sensors/camera.py`) because a V4L2/CSI device can't be
+opened twice — the detector and the FPV streamer both sample its cached frame.
+The streamer JPEG-encodes and fires frames at the base station over UDP; the
+XBee radio (57600 baud) can't carry video, so this rides the WiFi/LAN and works
+only within WiFi range. UDP, not TCP, on purpose: a live feed wants the freshest
+frame, so a lost packet is dropped and the next frame shown rather than stalling
+to retransmit. The base station's `VideoReceiver` reassembles frames (newest per
+robot wins) and `app.py` relays them as browser-native MJPEG at
+`/video/{robot_id}.mjpg`, which the dashboard shows in an `<img>`. FPV is
+independent of the model — it needs only a camera and OpenCV, so live view works
+with no `.eim` at all. Off by default (`RS_FPV_ENABLED`), since it needs the base
+station's IP.
 
 ---
 

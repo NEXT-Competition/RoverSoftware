@@ -58,8 +58,6 @@ except Exception as _e:
     ImageImpulseRunner = None
     _IMPORT_ERROR = _e
 
-from .camera import describe, open_source
-
 # FOMO. EI reports this model_type for constrained object detection, which
 # yields centroids rather than sized boxes.
 _FOMO_TYPE = "constrained_object_detection"
@@ -70,13 +68,14 @@ def _clamp(v, lo, hi):
 
 
 class ObjectDetector:
-    def __init__(self, cfg, camera_cfg):
+    def __init__(self, cfg, camera):
         self.cfg = cfg
-        self.camera_cfg = camera_cfg
+        # The camera is shared (see sensors/camera.py) — the FPV streamer reads
+        # the same device. This class never opens it; it only samples frame().
+        self.camera = camera
         self._period = 1.0 / cfg.max_fps if cfg.max_fps > 0 else 0.1
 
         self._runner = None
-        self._source = None
         self._thread = None
         self._running = False
         self._lock = threading.Lock()
@@ -130,6 +129,10 @@ class ObjectDetector:
             print(f"[detector] model {path} is not executable — object detection "
                   f"disabled. Fix: chmod +x {path}")
             return
+        if self.camera is None:
+            print("[detector] camera disabled — object detection disabled "
+                  "(object_align will hold still)")
+            return
 
         self._running = True
         self._thread = threading.Thread(target=self._read_loop, name="detector-rx", daemon=True)
@@ -141,8 +144,7 @@ class ObjectDetector:
             # Must outlast one in-flight inference (up to ~200ms) plus a frame
             # read; the 1.0s the GPS/IMU readers use is too tight here.
             self._thread.join(timeout=2.0)
-        if self._source is not None:
-            self._source.close()
+        # The camera is shared and owned elsewhere — don't close it here.
         if self._runner is not None:
             try:
                 self._runner.stop()  # reap the .eim subprocess
@@ -186,13 +188,7 @@ class ObjectDetector:
                   "turn to face the target but will NOT approach or stop at standoff. "
                   "Export a YOLO-style (object_detection) model for approach.")
 
-        self._source = open_source(self.camera_cfg)
-        if self._source is None:
-            print("[detector] no camera/deps available — object detection disabled "
-                  "(install python3-picamera2 or opencv-python)")
-            return False
-        print(f"[detector] capturing {self.camera_cfg.width}x{self.camera_cfg.height} "
-              f"via {describe(self._source)}, inference capped at {self.cfg.max_fps:g} fps")
+        print(f"[detector] inference capped at {self.cfg.max_fps:g} fps")
         return True
 
     def _read_loop(self) -> None:
@@ -203,13 +199,17 @@ class ObjectDetector:
             self._ok = True
 
         errors = 0
+        last_stamp = -1.0
         while self._running:
             t0 = time.monotonic()
             try:
-                frame = self._source.read()  # BGR — see camera.py
-                if frame is None:
+                # Frames come from the shared Camera (which the FPV streamer also
+                # reads); sample the latest and skip one we've already classified.
+                frame, stamp = self.camera.frame_and_stamp()
+                if frame is None or stamp == last_stamp:
                     time.sleep(0.01)
                     continue
+                last_stamp = stamp
                 features, _cropped = self._runner.get_features_from_image(frame)
                 res = self._runner.classify(features)
                 errors = 0

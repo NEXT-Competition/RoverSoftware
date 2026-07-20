@@ -56,6 +56,33 @@ export function proxyWs(req: Request, upstream: string): Response {
 }
 
 /**
+ * Proxy the robot's live MJPEG feed from the Python bridge's
+ * /video/{robot_id}.mjpg. This is an endless multipart/x-mixed-replace stream,
+ * so we hand the upstream body straight through (no buffering) — the browser's
+ * <img> consumes it frame by frame. The response body is a stream, so back-
+ * pressure and client disconnects propagate to the upstream fetch naturally.
+ */
+export async function proxyVideo(
+  pathname: string,
+  upstream: string,
+): Promise<Response> {
+  try {
+    const r = await fetch(`http://${upstream}${pathname}`);
+    if (!r.body) return new Response(null, { status: r.status });
+    return new Response(r.body, {
+      status: r.status,
+      headers: {
+        "content-type": r.headers.get("content-type") ??
+          "multipart/x-mixed-replace; boundary=frame",
+        "cache-control": "no-store",
+      },
+    });
+  } catch {
+    return new Response(null, { status: 502 }); // bridge unreachable
+  }
+}
+
+/**
  * Proxy a raster map tile from the Python bridge's /tiles/{z}/{x}/{y}.png.
  * Status is preserved so the bridge's 204 (uncached + offline -> blank tile)
  * passes through and Leaflet renders it as a transparent tile rather than a

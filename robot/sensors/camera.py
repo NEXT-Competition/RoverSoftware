@@ -20,11 +20,19 @@ channel order in this file and nowhere else, and verify it by eye with
 `tools/detector_selftest.py --save` on first bring-up rather than trusting
 anyone's assumption about what a backend hands back — including this docstring's.
 
-Like the GPS and IMU readers, this never blocks the control loop: the caller
-(sensors/detector.py) owns the thread; this just opens a device and reads it.
+--- One camera, many consumers ---
+A V4L2 or CSI device generally can't be opened twice, but both the object
+detector and the FPV streamer want frames. So the `Camera` class below owns the
+device on a single background thread (the GPS/IMU pattern: threaded reader,
+lock-guarded cache, cheap accessor) and hands the latest frame to whoever asks
+via `frame()`. The `_Source` classes are the raw device backends it drives.
 """
 
 from __future__ import annotations
+
+import threading
+import time
+from typing import Optional, Tuple
 
 
 class _Picamera2Source:
@@ -112,3 +120,106 @@ def describe(source) -> str:
         _Picamera2Source: "picamera2 (CSI)",
         _OpenCVSource: "opencv (V4L2/USB)",
     }.get(type(source), type(source).__name__)
+
+
+def encode_jpeg(frame, quality: int) -> Optional[bytes]:
+    """Encode a BGR ndarray to JPEG bytes via OpenCV, falling back to Pillow."""
+    try:
+        import cv2
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+        return buf.tobytes() if ok else None
+    except Exception:
+        pass
+    try:
+        import io
+        from PIL import Image
+        rgb = frame[:, :, ::-1]  # BGR -> RGB for Pillow
+        b = io.BytesIO()
+        Image.fromarray(rgb).save(b, format="JPEG", quality=int(quality))
+        return b.getvalue()
+    except Exception:
+        return None
+
+
+class Camera:
+    """Owns the capture device on a background thread; caches the latest frame.
+
+    Shared by every frame consumer — the object detector and the FPV streamer —
+    because a V4L2/CSI device generally can't be opened twice. Same contract as
+    the GPS/IMU readers: start()/stop(), a cheap locked accessor, and graceful
+    degradation when no backend/deps exist (frame() just returns None and the
+    consumers idle).
+    """
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self._source = None
+        self._thread = None
+        self._running = False
+        self._lock = threading.Lock()
+        self._frame = None
+        self._stamp = 0.0  # time.monotonic() of the latest frame
+        self._ok = False
+
+    def start(self) -> None:
+        if not self.cfg.enabled:
+            return
+        self._running = True
+        # Open the device on the thread, not here: a wedged camera would
+        # otherwise hang Robot.start() before the ESCs arm or the radio opens.
+        self._thread = threading.Thread(target=self._loop, name="camera-rx", daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        self._source = open_source(self.cfg)
+        if self._source is None:
+            print("[camera] no camera/deps available — capture disabled "
+                  "(install python3-picamera2 or python3-opencv)")
+            self._running = False
+            return
+        print(f"[camera] capturing {self.cfg.width}x{self.cfg.height} "
+              f"via {describe(self._source)}")
+        with self._lock:
+            self._ok = True
+
+        errors = 0
+        while self._running:
+            try:
+                frame = self._source.read()  # BGR; blocks at ~device fps
+                errors = 0
+            except Exception as e:
+                errors += 1
+                if errors == 1 or errors % 50 == 0:
+                    print(f"[camera] read error (x{errors}): {e}")
+                time.sleep(0.2)
+                continue
+            if frame is not None:
+                with self._lock:
+                    self._frame = frame
+                    self._stamp = time.monotonic()
+
+        with self._lock:
+            self._ok = False
+
+    def frame(self):
+        """Latest BGR frame, or None. Cheap — safe to call every tick."""
+        with self._lock:
+            return self._frame
+
+    def frame_and_stamp(self) -> Tuple[Optional["object"], float]:
+        """Latest frame plus its monotonic capture time, so a consumer can skip
+        re-processing a frame it has already seen."""
+        with self._lock:
+            return self._frame, self._stamp
+
+    def ok(self) -> bool:
+        """True once the device is open and the reader loop is running."""
+        with self._lock:
+            return self._ok
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        if self._source is not None:
+            self._source.close()

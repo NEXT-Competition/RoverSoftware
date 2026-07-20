@@ -18,6 +18,8 @@ export const robots = signal<Robot[]>([]);
 export const controller = signal<ControllerStatus>({ connected: false, name: null });
 export const tilesUrl = signal<string | null>(null);
 export const tilesMaxZoom = signal<number | null>(null);
+/** robot_ids currently streaming a live FPV feed. */
+export const videoRobots = signal<string[]>([]);
 
 // Locally-owned selection so a tap feels instant; seeded from the server the
 // first time it tells us who's selected (matches the old app.js behaviour).
@@ -71,6 +73,7 @@ export function connect(): void {
       controller.value = msg.controller ?? { connected: false, name: null };
       tilesUrl.value = msg.tiles ?? null;
       tilesMaxZoom.value = msg.tiles_maxzoom ?? null;
+      videoRobots.value = msg.video ?? [];
       if (selected.value == null) selected.value = msg.selected;
     });
   };

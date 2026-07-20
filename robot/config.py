@@ -159,6 +159,19 @@ class VisionConfig:
 
 
 @dataclass
+class FPVConfig:
+    # First-person live video streamed to the base station over UDP (see
+    # robot/comms/video_udp.py). Off by default: it needs the base station's IP
+    # and a shared WiFi/LAN (the XBee radio can't carry video), so it's opt-in
+    # rather than something every robot fires into the void on boot.
+    enabled: bool = False
+    base_host: str = "base-station.local"  # where the base station receives UDP
+    base_port: int = 5005
+    fps: int = 15           # cap on frames sent per second
+    jpeg_quality: int = 60  # 1-100; lower = smaller packets, less bandwidth
+
+
+@dataclass
 class RobotConfig:
     drive: DriveConfig = field(default_factory=DriveConfig)
     comms: CommsConfig = field(default_factory=CommsConfig)
@@ -166,6 +179,7 @@ class RobotConfig:
     imu: IMUConfig = field(default_factory=IMUConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
+    fpv: FPVConfig = field(default_factory=FPVConfig)
     loop_hz: float = 5.0  # Control loop rate
     start_mode: str = "teleop"  # teleop | object_align | waypoint
     robot_id: str = "rover1"  # unique id on the shared XBee channel

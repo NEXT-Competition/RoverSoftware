@@ -14,7 +14,7 @@ configured via /etc/roversoftware/basestation.env), then CLI flags override:
     RS_XBEE_PORT, RS_XBEE_BAUD, RS_WEB_HOST, RS_WEB_PORT, RS_SIM,
     RS_SIM_ROBOTS, RS_SIM_ORIGIN, RS_NO_CONTROLLER, RS_TILES,
     RS_TILES_MBTILES, RS_TILES_UPSTREAM, RS_TILES_OFFLINE,
-    RS_DRIVE_HZ, RS_UI_HZ
+    RS_DRIVE_HZ, RS_UI_HZ, RS_VIDEO_ENABLED, RS_VIDEO_PORT, RS_VIDEO_HZ
 """
 
 import argparse
@@ -63,6 +63,14 @@ def main():
                    help="max drive-command send rate over the radio (lower for slow/9600 links)")
     p.add_argument("--ui-hz", type=float, default=float(_env("RS_UI_HZ", 30)),
                    help="dashboard refresh rate pushed to the browser")
+    p.add_argument("--no-video", dest="video", action="store_false",
+                   default=os.environ.get("RS_VIDEO_ENABLED", "1").strip().lower()
+                   in ("1", "true", "yes", "on"),
+                   help="disable the FPV video receiver (frees the UDP port)")
+    p.add_argument("--video-port", type=int, default=int(_env("RS_VIDEO_PORT", 5005)),
+                   help="UDP port the robots stream FPV video to")
+    p.add_argument("--video-hz", type=float, default=float(_env("RS_VIDEO_HZ", 20)),
+                   help="max MJPEG frame rate served to browsers")
     args = p.parse_args()
 
     fleet = FleetManager()
@@ -91,10 +99,17 @@ def main():
         except Exception as e:
             print(f"[base] gamepad disabled: {e}")
 
+    video_rx = None
+    if args.video:
+        from robot.comms.video_udp import VideoReceiver
+        video_rx = VideoReceiver(port=args.video_port)
+        print(f"[base] FPV video receiver on udp/{args.video_port}")
+
     app = build_app(fleet, link, controller,
                     {"tiles": args.tiles, "drive_hz": args.drive_hz, "ui_hz": args.ui_hz,
                      "tiles_mbtiles": args.tiles_mbtiles, "tiles_upstream": args.tiles_upstream,
-                     "tiles_offline": args.tiles_offline})
+                     "tiles_offline": args.tiles_offline, "video_hz": args.video_hz},
+                    video_rx=video_rx)
     print(f"[base] dashboard -> http://{args.host}:{args.web_port}")
     uvicorn.run(app, host=args.host, port=args.web_port, log_level="warning")
 
