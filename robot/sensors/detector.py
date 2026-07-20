@@ -49,8 +49,14 @@ from ..control.detection import Detection
 
 try:  # pragma: no cover - Linux/Pi-only dependency, absent on a dev laptop
     from edge_impulse_linux.image import ImageImpulseRunner
-except Exception:
+    _IMPORT_ERROR = None
+except Exception as _e:
+    # Keep WHY it failed. edge_impulse_linux itself is pure Python, but its image
+    # module imports cv2 (OpenCV) and numpy at load time, so a missing transitive
+    # dependency lands here too and would otherwise read as "not installed" even
+    # after the user has installed edge_impulse_linux.
     ImageImpulseRunner = None
+    _IMPORT_ERROR = _e
 
 from .camera import describe, open_source
 
@@ -99,9 +105,19 @@ class ObjectDetector:
         if not self.cfg.enabled:
             return
         if ImageImpulseRunner is None:
-            print("[detector] edge_impulse_linux not installed — object detection "
-                  "disabled (object_align will hold still). Install on the Pi: "
-                  "pip install edge_impulse_linux")
+            missing = getattr(_IMPORT_ERROR, "name", None)
+            if isinstance(_IMPORT_ERROR, ModuleNotFoundError) and missing and missing != "edge_impulse_linux":
+                # edge_impulse_linux is present, but one of its deps isn't — the
+                # usual culprit is OpenCV, which the Pi doesn't have by default.
+                hint = ("sudo apt install python3-opencv" if missing == "cv2"
+                        else f"pip install {missing}")
+                print(f"[detector] edge_impulse_linux is installed, but its dependency "
+                      f"'{missing}' is missing — object detection disabled "
+                      f"(object_align will hold still). Install it on the Pi: {hint}")
+            else:
+                print(f"[detector] edge_impulse_linux unavailable ({_IMPORT_ERROR}) — "
+                      "object detection disabled (object_align will hold still). "
+                      "Install on the Pi: pip install edge_impulse_linux")
             return
         path = os.path.expanduser(self.cfg.model_path)
         if not os.path.exists(path):
