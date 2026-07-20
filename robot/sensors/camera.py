@@ -122,6 +122,31 @@ def describe(source) -> str:
     }.get(type(source), type(source).__name__)
 
 
+def draw_boxes(frame, boxes):
+    """Return an annotated COPY of a BGR frame with detection boxes drawn.
+
+    `boxes` is an iterable of (x, y, w, h, label, conf, is_target). The copy is
+    deliberate: the same frame object is the shared camera's cached frame and the
+    detector's input, so drawing in place would corrupt both. If OpenCV isn't
+    importable there's nothing to draw with, so the original frame is returned
+    unchanged (the feed still works, just without boxes).
+    """
+    try:
+        import cv2
+    except Exception:
+        return frame
+    out = frame.copy()
+    for x, y, w, h, label, conf, is_target in boxes:
+        # BGR: bright green for the box the controller is tracking, amber for the
+        # rest, so at a glance you can tell what object_align is chasing.
+        color = (0, 255, 0) if is_target else (0, 190, 255)
+        cv2.rectangle(out, (x, y), (x + w, y + h), color, 2 if is_target else 1)
+        tag = f"{label} {conf:.2f}" if label else f"{conf:.2f}"
+        cv2.putText(out, tag, (x, max(12, y - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+    return out
+
+
 def encode_jpeg(frame, quality: int) -> Optional[bytes]:
     """Encode a BGR ndarray to JPEG bytes via OpenCV, falling back to Pillow."""
     try:

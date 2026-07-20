@@ -82,6 +82,11 @@ class ObjectDetector:
 
         # Latest cached state (guarded by _lock).
         self._detection: Optional[Detection] = None
+        # Every above-confidence box for the FPV overlay, in FULL-FRAME pixels:
+        # (x, y, w, h, label, conf, is_target). Separate from _detection, which is
+        # the single normalized target the controller steers on.
+        self._overlays: list = []
+        self._overlays_stamp = 0.0
         self._ok = False  # model initialized and the loop is alive
         self._fps = 0.0
         self._labels: list = []
@@ -222,7 +227,7 @@ class ObjectDetector:
                 time.sleep(0.5)
                 continue
 
-            self._consume(res, time.monotonic())
+            self._consume(res, frame, time.monotonic())
 
             elapsed = time.monotonic() - t0
             with self._lock:
@@ -234,14 +239,13 @@ class ObjectDetector:
         with self._lock:
             self._ok = False
 
-    def _consume(self, res: dict, stamp: float) -> None:
-        """Fold one classification into the cached detection."""
+    def _consume(self, res: dict, frame, stamp: float) -> None:
+        """Fold one classification into the cached detection + FPV overlays."""
         boxes = (res.get("result", {}) or {}).get("bounding_boxes", []) or []
-        best = self._select(
-            [b for b in boxes
-             if b.get("value", 0.0) >= self.cfg.min_confidence
-             and (not self.cfg.target_label or b.get("label") == self.cfg.target_label)]
-        )
+        kept = [b for b in boxes
+                if b.get("value", 0.0) >= self.cfg.min_confidence
+                and (not self.cfg.target_label or b.get("label") == self.cfg.target_label)]
+        best = self._select(kept)
         if best is None:
             # Deliberately do NOT clear — let the sample age out. See docstring.
             return
@@ -264,8 +268,45 @@ class ObjectDetector:
             size=None if self._fomo else _clamp(best["height"] / mh, 0.0, 1.0),
             stamp=stamp,
         )
+
+        # Overlays for the FPV feed: map every kept box from model space back to
+        # full-frame pixels (see _to_full_frame). Uses the frame's real shape so
+        # it's correct even if the camera ignored the requested resolution.
+        h, w = frame.shape[0], frame.shape[1]
+        overlays = []
+        for b in kept:
+            rect = self._to_full_frame(b, w, h)
+            overlays.append((*rect, b.get("label", ""), float(b.get("value", 0.0)), b is best))
+
         with self._lock:
             self._detection = detection
+            self._overlays = overlays
+            self._overlays_stamp = stamp
+
+    def _to_full_frame(self, box: dict, w: int, h: int):
+        """Invert Edge Impulse's resize + center-crop: model-space box -> full-frame
+        pixel rect (x, y, bw, bh), clamped to the frame.
+
+        get_features_from_image() scales the frame by the LARGEST factor so it
+        covers the model input, then center-crops. So the reverse is: undo the
+        crop offset, then undo the scale.
+        """
+        mw, mh = self._model_wh
+        if mw <= 0 or mh <= 0:
+            return 0, 0, 0, 0
+        scale = max(mw / w, mh / h)          # frame -> model resize factor
+        crop_x = (w * scale - mw) / 2.0      # pixels trimmed each side, in model space
+        crop_y = (h * scale - mh) / 2.0
+        x = int((box.get("x", 0) + crop_x) / scale)
+        y = int((box.get("y", 0) + crop_y) / scale)
+        bw = int(box.get("width", 0) / scale)
+        bh = int(box.get("height", 0) / scale)
+        # Clamp to the frame; boxes can spill past the crop edge.
+        x = _clamp(x, 0, w - 1)
+        y = _clamp(y, 0, h - 1)
+        bw = _clamp(bw, 0, w - x)
+        bh = _clamp(bh, 0, h - y)
+        return x, y, bw, bh
 
     def _select(self, boxes: list) -> Optional[dict]:
         """Pick one box out of the candidates.
@@ -303,6 +344,17 @@ class ObjectDetector:
             if (time.monotonic() - d.stamp) > self.cfg.target_timeout:
                 return None
             return d
+
+    def overlays(self) -> list:
+        """Latest detection boxes in full-frame pixels for the FPV overlay, as
+        (x, y, w, h, label, conf, is_target) tuples. Empty once stale, so a lost
+        target stops drawing boxes rather than freezing the last ones."""
+        with self._lock:
+            if not self._overlays:
+                return []
+            if (time.monotonic() - self._overlays_stamp) > self.cfg.target_timeout:
+                return []
+            return self._overlays
 
     def telemetry(self) -> dict:
         """Compact status for the base station. Kept small — the radio is 57600

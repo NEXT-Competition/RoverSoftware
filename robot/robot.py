@@ -101,10 +101,14 @@ class Robot:
             self.detector = MockDetector() if mock_det else ObjectDetector(config.vision, self.camera)
 
         # First-person live video to the base station. Independent of the model:
-        # the feed works with just a camera, no Edge Impulse needed.
+        # the feed works with just a camera, no Edge Impulse needed. If a real
+        # detector is running, its boxes are drawn onto the feed so you can see
+        # what was detected (the mock has no real frames to annotate).
         self.fpv: Optional[FPVStreamer] = (
             FPVStreamer(config.fpv, self.camera, config.robot_id) if config.fpv.enabled else None
         )
+        if self.fpv is not None and isinstance(self.detector, ObjectDetector):
+            self.fpv.set_overlay_provider(self.detector.overlays)
 
         # Give the waypoint controller the fused pose source and the IMU yaw-rate
         # (for the heading PID's measured derivative).
