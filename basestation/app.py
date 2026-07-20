@@ -21,13 +21,13 @@ import time
 from typing import Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from .fleet import FleetManager
 from .tiles import TileStore
 
 
-def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
+def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None) -> FastAPI:
     app = FastAPI(title="RoverSoftware base station")
     clients: Set[WebSocket] = set()
 
@@ -111,6 +111,9 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
                 }
                 snap["tiles"] = web_cfg.get("tiles")
                 snap["tiles_maxzoom"] = tile_store.maxzoom
+                # Which robots currently have a live feed, so the UI shows the
+                # FPV panel only when there's actually something to show.
+                snap["video"] = video_rx.robots() if video_rx is not None else []
                 for ws in list(clients):
                     try:
                         await ws.send_json(snap)
@@ -125,6 +128,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
         link.start()
         if controller is not None:
             controller.start()
+        if video_rx is not None:
+            video_rx.start()
         app.state.broadcaster = asyncio.create_task(broadcast_loop())
 
     @app.on_event("shutdown")
@@ -134,6 +139,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
             task.cancel()
         if controller is not None:
             controller.stop()
+        if video_rx is not None:
+            video_rx.stop()
         link.stop()
 
     @app.websocket("/ws")
@@ -157,6 +164,29 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict) -> FastAPI:
             return Response(status_code=204)  # uncached + offline -> blank tile
         return Response(content=data, media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+    @app.get("/video/{robot_id}.mjpg")
+    async def video(robot_id: str):
+        # MJPEG (multipart/x-mixed-replace) is browser-native in an <img> and low
+        # latency. We just relay the freshest JPEG the UDP receiver has for this
+        # robot; missed/partial frames were already dropped upstream.
+        if video_rx is None:
+            return Response(status_code=404)
+        period = 1.0 / max(float(web_cfg.get("video_hz", 20)), 1.0)
+
+        async def frames():
+            try:
+                while True:
+                    jpeg = video_rx.latest(robot_id)
+                    if jpeg is not None:
+                        yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                               + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
+                    await asyncio.sleep(period)
+            except asyncio.CancelledError:  # client closed the stream
+                pass
+
+        return StreamingResponse(
+            frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
     @app.get("/")
     async def root():

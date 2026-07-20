@@ -4,6 +4,7 @@ import { MapView } from "./components/MapView.tsx";
 import { ConnectionPill } from "./components/ConnectionPill.tsx";
 import { ControllerStatus } from "./components/ControllerStatus.tsx";
 import { FleetPanel } from "./components/FleetPanel.tsx";
+import { FPV } from "./components/FPV.tsx";
 import { ModeControls } from "./components/ModeControls.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
 import { Telemetry } from "./components/Telemetry.tsx";
@@ -56,6 +57,7 @@ export function App() {
           <div class="drawer-handle" onClick={() => setCollapsed((c) => !c)} />
           <div class="rail-body">
             <FleetPanel />
+            <FPV />
             <ControlSection />
             <div class="rail-section" style="border:none">
               <ControllerStatus />

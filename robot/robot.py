@@ -17,7 +17,9 @@ from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
 from .drive.tank_drive import TankDrive
 from .sensors.bno055 import IMU
+from .sensors.camera import Camera
 from .sensors.detector import MockDetector, ObjectDetector
+from .sensors.fpv import FPVStreamer
 from .sensors.gps import GPS
 from .sensors.pose import PoseEstimator
 
@@ -80,14 +82,29 @@ class Robot:
         )
         self._last_telem = 0.0
 
-        # Edge Impulse object detection feeds object_align. Runs the camera and
-        # the model on its own thread; detection() is a cheap cached lookup, so
-        # inference (50-200ms) never lands inside a control tick. No model / no
-        # camera / no deps -> stays inert and object_align holds still.
+        # One camera, shared by every frame consumer (the detector and the FPV
+        # streamer) — a V4L2/CSI device can't be opened twice. Only spun up if
+        # something actually wants frames; it reads on its own thread so the
+        # 50 Hz loop never touches the device.
+        mock_det = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on")
+        need_camera = config.camera.enabled and (
+            (config.vision.enabled and not mock_det) or config.fpv.enabled
+        )
+        self.camera: Optional[Camera] = Camera(config.camera) if need_camera else None
+
+        # Edge Impulse object detection feeds object_align. Reads frames from the
+        # shared camera and runs the model on its own thread; detection() is a
+        # cheap cached lookup, so inference (50-200ms) never lands inside a
+        # control tick. No model / no camera / no deps -> inert, object_align holds.
         self.detector = None
         if config.vision.enabled:
-            mock = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on")
-            self.detector = MockDetector() if mock else ObjectDetector(config.vision, config.camera)
+            self.detector = MockDetector() if mock_det else ObjectDetector(config.vision, self.camera)
+
+        # First-person live video to the base station. Independent of the model:
+        # the feed works with just a camera, no Edge Impulse needed.
+        self.fpv: Optional[FPVStreamer] = (
+            FPVStreamer(config.fpv, self.camera, config.robot_id) if config.fpv.enabled else None
+        )
 
         # Give the waypoint controller the fused pose source and the IMU yaw-rate
         # (for the heading PID's measured derivative).
@@ -151,10 +168,14 @@ class Robot:
             self.gps.start()
         if self.imu is not None:
             self.imu.start()
-        # Last: it's the heaviest to bring up (spawns the .eim subprocess) and
-        # nothing else depends on it.
+        # Camera before its consumers (detector, FPV) so frames are flowing when
+        # they start; the detector is heaviest (spawns the .eim subprocess).
+        if self.camera is not None:
+            self.camera.start()
         if self.detector is not None:
             self.detector.start()
+        if self.fpv is not None:
+            self.fpv.start()
         self._running = True
 
     def run(self) -> None:
@@ -204,10 +225,14 @@ class Robot:
     def shutdown(self) -> None:
         print("\n[Robot] shutting down; stopping motors")
         self.drive.stop()
-        # First: it owns a subprocess, and stopping it early means no more
-        # detections can arrive while the rest of the stack winds down.
+        # Stop the frame consumers, then the camera they read from. The detector
+        # owns a subprocess, so stopping it early also halts inference promptly.
+        if self.fpv is not None:
+            self.fpv.stop()
         if self.detector is not None:
             self.detector.stop()
+        if self.camera is not None:
+            self.camera.stop()
         self.link.stop()
         if self.gps is not None:
             self.gps.stop()
