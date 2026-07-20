@@ -1,6 +1,6 @@
 """A small, reusable PID controller with output and integral clamping.
 
-Used by the autonomy controllers (color alignment; heading hold for waypoint
+Used by the autonomy controllers (object alignment; heading hold for waypoint
 navigation). `update` optionally accepts a measured derivative (derivative-on-
 measurement) so the heading loop can use the IMU gyro's yaw-rate instead of
 finite-differencing a noisy heading.

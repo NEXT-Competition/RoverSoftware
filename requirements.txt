@@ -16,6 +16,24 @@ fastapi>=0.110       # dashboard web server + WebSocket
 uvicorn[standard]>=0.27
 pygame>=2.5          # PS4 controller input, cross-platform
 
+# --- Vision / object_align autonomy (Raspberry Pi only) ---
+# Edge Impulse object detection. Linux-only (it shells out to a compiled .eim
+# binary), so it stays out of pyproject.toml the same way fusion_hat and the
+# BNO055 stack do — adding it there would break `uv sync` on a Mac.
+#   pip install edge_impulse_linux     # also pulls numpy; needs opencv below
+# Plus ONE capture stack:
+#   sudo apt install python3-picamera2 # Pi Camera (CSI ribbon)
+#   pip install opencv-python          # USB webcam / any V4L2 device
+#
+# The model itself is not in git (large binary). Grab one and make it executable
+# — Edge Impulse EXECUTES the .eim, and forgetting this is the #1 first-run
+# failure:
+#   edge-impulse-linux-runner --download model.eim
+#   chmod +x model.eim && mv model.eim /var/lib/roversoftware/model.eim
+# NOTE: export a YOLO-style (object_detection) model, NOT FOMO. FOMO reports
+# centroids with fixed cell-sized boxes, so object size is unavailable and
+# object_align can only turn to face the target, never approach it.
+# Verify the whole chain with tools/detector_selftest.py.
+
 # --- Optional / future ---
 # digi-xbee>=1.4     # if you switch the XBee to API mode
-# opencv-python>=4.9 # color detection for color_align autonomy

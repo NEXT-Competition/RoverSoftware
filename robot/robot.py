@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import signal
 import time
@@ -9,13 +10,14 @@ from typing import Callable, Dict, Optional, Tuple
 
 from .config import RobotConfig
 from .comms.xbee_link import XBeeLink
-from .control.color_align import ColorAlignController
 from .control.controller import Controller
 from .control.manager import ControlManager
+from .control.object_align import ObjectAlignController
 from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
 from .drive.tank_drive import TankDrive
 from .sensors.bno055 import IMU
+from .sensors.detector import MockDetector, ObjectDetector
 from .sensors.gps import GPS
 from .sensors.pose import PoseEstimator
 
@@ -35,7 +37,11 @@ class Robot:
         if controllers is None:
             controllers = {
                 "teleop": TeleopController(config.comms.command_timeout),
-                "color_align": ColorAlignController(),
+                "object_align": ObjectAlignController(
+                    standoff_size=config.vision.standoff_size,
+                    search_speed=config.vision.search_speed,
+                    hfov_deg=config.vision.hfov_deg,
+                ),
                 "waypoint": WaypointController(),
             }
         self.manager = ControlManager(controllers, config.start_mode)
@@ -74,12 +80,32 @@ class Robot:
         )
         self._last_telem = 0.0
 
+        # Edge Impulse object detection feeds object_align. Runs the camera and
+        # the model on its own thread; detection() is a cheap cached lookup, so
+        # inference (50-200ms) never lands inside a control tick. No model / no
+        # camera / no deps -> stays inert and object_align holds still.
+        self.detector = None
+        if config.vision.enabled:
+            mock = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on")
+            self.detector = MockDetector() if mock else ObjectDetector(config.vision, config.camera)
+
         # Give the waypoint controller the fused pose source and the IMU yaw-rate
         # (for the heading PID's measured derivative).
         wp = controllers.get("waypoint")
         if isinstance(wp, WaypointController) and self.pose_provider is not None:
             wp.set_pose_provider(self.pose_provider)
             wp.set_rate_provider(self.pose_estimator.heading_rate)
+
+        # Same idea for object_align: the detector is its "where is it", the IMU
+        # yaw-rate its measured derivative. Note this is NOT gated on
+        # pose_provider like the waypoint wiring above — that's None whenever the
+        # GPS is off, but object_align needs no position at all. heading_rate()
+        # already returns None without an IMU, so wiring it unconditionally is
+        # safe; gating it would silently drop the D term on any --no-gps run.
+        oa = controllers.get("object_align")
+        if isinstance(oa, ObjectAlignController) and self.detector is not None:
+            oa.set_detection_provider(self.detector.detection)
+            oa.set_rate_provider(self.pose_estimator.heading_rate)
 
     def _drain_inbox(self) -> None:
         while True:
@@ -109,6 +135,11 @@ class Robot:
         # tell whether the heading is trustworthy or still falling back to GPS.
         if self.imu is not None:
             t["imu_calib"] = self.imu.calibration()
+        # Vision summary (target, error, size, fps) so the base station can see
+        # what the model sees — this is what makes standoff tunable in the field.
+        # A summary, never boxes or frames: the radio is 57600 baud and shared.
+        if self.detector is not None:
+            t["vision"] = self.detector.telemetry()
         return t
 
     def start(self) -> None:
@@ -120,6 +151,10 @@ class Robot:
             self.gps.start()
         if self.imu is not None:
             self.imu.start()
+        # Last: it's the heaviest to bring up (spawns the .eim subprocess) and
+        # nothing else depends on it.
+        if self.detector is not None:
+            self.detector.start()
         self._running = True
 
     def run(self) -> None:
@@ -169,6 +204,10 @@ class Robot:
     def shutdown(self) -> None:
         print("\n[Robot] shutting down; stopping motors")
         self.drive.stop()
+        # First: it owns a subprocess, and stopping it early means no more
+        # detections can arrive while the rest of the stack winds down.
+        if self.detector is not None:
+            self.detector.stop()
         self.link.stop()
         if self.gps is not None:
             self.gps.stop()

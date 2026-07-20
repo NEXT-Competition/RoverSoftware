@@ -1,6 +1,6 @@
 """Base class for anything that can drive the robot.
 
-Teleop, color-alignment, and waypoint navigation all subclass Controller, so
+Teleop, object alignment, and waypoint navigation all subclass Controller, so
 the ControlManager can switch between them without knowing their internals.
 """
 

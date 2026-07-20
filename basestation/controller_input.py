@@ -29,7 +29,7 @@ AXIS_STEER = 2      # right stick X
 BTN_ESTOP = 1       # circle
 BTN_CLEAR = 0       # cross
 BTN_TELEOP = 4      # L1
-BTN_COLOR = 5       # R1
+BTN_ALIGN = 5       # R1
 
 
 def _dz(v, dz=0.08):
@@ -92,7 +92,7 @@ class ControllerReader:
                 if self.on_drive:
                     self.on_drive(throttle, steer)
                 for idx, name in ((BTN_ESTOP, "estop"), (BTN_CLEAR, "clear"),
-                                  (BTN_TELEOP, "mode:teleop"), (BTN_COLOR, "mode:color_align")):
+                                  (BTN_TELEOP, "mode:teleop"), (BTN_ALIGN, "mode:object_align")):
                     if self._edge(idx) and self.on_action:
                         self.on_action(name)
             except Exception as e:

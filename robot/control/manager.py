@@ -12,6 +12,16 @@ from typing import Dict
 from .commands import DriveCommand
 from .controller import Controller
 
+# Accept retired mode names so a base station that hasn't been updated yet still
+# works. The robot and the base station ship as separate .debs and `just sync`
+# pushes code without configs, so a new robot talking to an old UI is a normal
+# state during a rollout — without this, its "Color align" button would hit the
+# unknown-mode path below and silently do nothing.
+# Aliasing here (rather than registering a second dict key) means telemetry still
+# reports the canonical name, so the UI highlights the right button.
+# Remove once both sides have shipped.
+_MODE_ALIASES = {"color_align": "object_align"}
+
 
 class ControlManager:
     def __init__(self, controllers: Dict[str, Controller], start_mode: str):
@@ -27,6 +37,7 @@ class ControlManager:
         return self.controllers[self.mode]
 
     def set_mode(self, mode: str) -> None:
+        mode = _MODE_ALIASES.get(mode, mode)
         if mode not in self.controllers:
             print(f"[ControlManager] ignoring unknown mode: {mode!r}")
             return

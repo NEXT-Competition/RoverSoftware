@@ -8,7 +8,7 @@ depends on encode()/decode().
 Message shapes (base station -> robot):
     {"type": "drive", "throttle": 0.5, "steer": -0.2}   # arcade mixing
     {"type": "drive", "left": 0.4, "right": 0.6}         # direct tank
-    {"type": "mode", "mode": "teleop" | "color_align" | "waypoint"}
+    {"type": "mode", "mode": "teleop" | "object_align" | "waypoint"}
     {"type": "estop"}            # latch motors off
     {"type": "clear_estop"}      # release the latch
 

@@ -36,6 +36,10 @@ default:
 run *ARGS:
     ./start-basestation.sh {{ARGS}}
 
+# Run the unit tests (pure control logic — no hardware needed).
+test *ARGS:
+    uv run pytest {{ARGS}}
+
 # One-time Pi setup: install SunFounder Fusion HAT drivers + the fusion_hat
 # Python library, and the BNO055 IMU driver. This may enable I2C and require a
 # reboot afterwards. Run this ONCE per robot before the first `just deploy`.

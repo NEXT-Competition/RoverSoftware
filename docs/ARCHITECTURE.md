@@ -35,7 +35,7 @@ walkthrough of the navigation algorithm open
 Four ideas recur throughout the codebase; understanding them explains most of
 the structure.
 
-**One command type.** Every controller — teleop, color-align, waypoint — returns
+**One command type.** Every controller — teleop, object-align, waypoint — returns
 the same `DriveCommand(left, right)`. The drive layer never knows who produced a
 command, so new autonomy modes drop in without touching motors or comms.
 
@@ -96,7 +96,8 @@ robot/                        # runs on the rover Pi (also imported by the base 
     commands.py               DriveCommand (tank / arcade / stopped)
     pid.py                    reusable PID with output + integral clamping
     teleop.py                 drive from base-station commands (+ link failsafe)
-    color_align.py            autonomy scaffold — inject a camera target provider
+    object_align.py           Edge Impulse object alignment — inject a detection provider
+    detection.py              the Detection contract the controller consumes
     waypoint.py               GPS waypoint navigation — inject a pose provider
   drive/
     motor.py                  ESCMotor: throttle [-1,1] → servo angle (mock if no HAT)
@@ -106,6 +107,10 @@ robot/                        # runs on the rover Pi (also imported by the base 
     xbee_link.py              threaded transparent-mode XBee serial reader
   sensors/
     gps.py                    NEO-6M NMEA reader → (lat, lon, heading)
+    bno055.py                 BNO055 IMU → absolute heading + yaw rate
+    pose.py                   fuses GPS position + IMU heading → one pose()
+    camera.py                 frame capture (picamera2 → OpenCV → none)
+    detector.py               Edge Impulse .eim runner → Detection
 run_robot.py                  robot entry point (env + CLI → RobotConfig)
 
 basestation/                  # cross-platform dashboard (Pi or Mac)
@@ -158,7 +163,7 @@ from environment variables / CLI flags, and hands it to `Robot`.
 `Robot` wires hardware, comms, and control together, then runs a fixed-rate loop.
 
 **Construction** builds the drive layer, the default controller set
-(`teleop`/`color_align`/`waypoint`), the `ControlManager`, the `XBeeLink` (whose
+(`teleop`/`object_align`/`waypoint`), the `ControlManager`, the `XBeeLink` (whose
 reader thread pushes decoded messages into a `queue.Queue`), and the optional
 `GPS`. If GPS is enabled, its `pose()` is injected both into the
 `WaypointController` (for navigation) and stored as `self.pose_provider` (for
@@ -213,9 +218,11 @@ kd·de/dt`; `reset()` clears the integrator and last-error.
   tick, **but** returns `stopped()` if no command has arrived within
   `command_timeout` (0.5 s). This is the link failsafe: lose the radio, stop the
   robot.
-- **`ColorAlignController`** — autonomy scaffold. Calls an injected
-  `target_provider() → horizontal error [−1,1] | None`, runs a PID on it, and
-  creeps forward once roughly aligned. Holds still with no provider/target.
+- **`ObjectAlignController`** — vision autonomy. Calls an injected
+  `detection_provider() → Detection | None`, runs a PID on the target's
+  horizontal error, and pivots → approaches → stops at a standoff. Sweeps to
+  reacquire a lost target, then gives up. Holds still with no provider/target.
+  See [§6](#6-gps-waypoint-autonomy) for the detector it's fed by.
 - **`WaypointController`** — GPS navigation; see [§6](#6-gps-waypoint-autonomy).
 
 ### 4.4 Drive layer
@@ -273,7 +280,7 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 // base station -> robot
 {"type":"drive","throttle":0.5,"steer":-0.2,"to":"rover1"}  // arcade mixing
 {"type":"drive","left":0.4,"right":0.6,"to":"rover1"}        // direct tank
-{"type":"mode","mode":"teleop","to":"rover1"}                // teleop|color_align|waypoint
+{"type":"mode","mode":"teleop","to":"rover1"}                // teleop|object_align|waypoint
 {"type":"route","waypoints":[[lat,lon],...],"to":"rover1"}   // waypoint route
 {"type":"estop","to":"rover1"}                               // latch motors off
 {"type":"clear_estop","to":"rover1"}                         // release latch
@@ -334,6 +341,52 @@ locked lookup) and never blocks on serial. Details:
 > enabling the UART (`raspi-config` → Interface Options → Serial Port). Install
 > `pynmea2` **system-wide** (the service runs as root): `sudo apt install
 > python3-pynmea2`.
+
+**Object detection (`sensors/detector.py`) and `object_align`.** Same shape as the
+GPS and IMU readers: a background thread owns the camera and the Edge Impulse
+model, and the control loop only ever calls `detection()` — a cheap locked read.
+This is not a stylistic choice. Inference is 50–200 ms and the tick budget is a
+few ms, so running the model inline would trip the slow-tick watchdog every frame
+and make the robot unsteerable.
+
+`ObjectAlignController` consumes an injected `detection_provider() ->
+Optional[Detection]`, so it neither knows nor cares that Edge Impulse is behind
+it, and it unit-tests with a stub provider on a laptop with no camera
+(`tests/test_object_align.py`). It faces the target, approaches, and stops at a
+standoff; on loss it sweeps back toward the last sighting and then gives up.
+Details worth knowing:
+
+- **Staleness is the safety mechanism.** A frame with no target doesn't clear the
+  cache — it just stops advancing the timestamp, and `detection()` ages the sample
+  out after `target_timeout`. One rule covers a dropped frame (coast), a lost
+  target (search), and *a dead detector thread* (no new stamps → the target ages
+  out → the robot stops). There's no liveness check on the control path because
+  it fails safe by construction.
+- **The PID advances per detection, not per tick.** The loop sees the same cached
+  sample several ticks running, so a fixed-`dt` PID would read a frozen error and
+  then a spike. It advances only when the stamp changes, using the true
+  inter-detection `dt`, and zero-order-holds the steer between samples.
+- **Yaw-rate units differ from waypoint's.** Waypoint's error is in degrees, so it
+  feeds `-yaw_rate` (deg/s) straight in. Here the error is normalized to
+  `[-1, 1]` across `hfov_deg`, so the same rate must be scaled by `2/hfov_deg` —
+  ~25–60× smaller. This is the easiest thing in the file to get wrong.
+- **FOMO can't do standoff.** FOMO reports centroids with fixed cell-sized boxes,
+  so object size is unavailable; `Detection.size` is `None` and the controller
+  degrades to align-only rather than driving at the target blind. Export a
+  YOLO-style (`object_detection`) model if you want approach.
+- **Coordinates are the model's, not the camera's.** `get_features_from_image()`
+  resizes and *center-crops* to the model input, so boxes are normalized against
+  `image_input_width/height`. The crop is centered (alignment stays correct) but
+  discards ~25% of the width at 640×480 — which is why `hfov_deg` must be the
+  **post-crop** FOV.
+- **Graceful degradation** — no `edge_impulse_linux`, no model, a model that isn't
+  `chmod +x`, or no camera each log one line and leave the detector inert;
+  `object_align` simply holds still.
+
+> Bring-up and standoff calibration both go through `tools/detector_selftest.py`:
+> it checks deps/chmod/labels/`model_type`/fps, and `--save` dumps the model's
+> cropped input so you can confirm the colour order and framing by eye. Park at
+> your stop distance and read the printed `size` — that's `RS_VISION_STANDOFF`.
 
 ---
 
@@ -439,7 +492,7 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
-| `RS_START_MODE` | `teleop` | `teleop` \| `color_align` \| `waypoint`. |
+| `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `waypoint`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
 | `RS_GPS_ENABLED` / `RS_GPS_PORT` / `RS_GPS_BAUD` | `1` / `/dev/ttyAMA0` / `9600` | NEO-6M reader. |

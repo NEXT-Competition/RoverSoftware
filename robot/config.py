@@ -105,13 +105,69 @@ class IMUConfig:
 
 
 @dataclass
+class CameraConfig:
+    # Frame source for the vision stack. Backend is auto-detected: the Pi Camera
+    # (CSI ribbon) via picamera2, else a USB/V4L2 device via OpenCV, else nothing
+    # (vision disables itself and the rest of the robot runs unchanged).
+    #   Pi Camera:  sudo apt install python3-picamera2
+    #   USB webcam: pip install opencv-python
+    # Kept separate from VisionConfig because the camera is a *device* — a future
+    # live-video feed would want the same frames without any model involved.
+    enabled: bool = True
+    device: str = "auto"  # auto | picamera2 | /dev/videoN | a numeric index
+    width: int = 640
+    height: int = 480
+    fps: int = 15
+
+
+@dataclass
+class VisionConfig:
+    # Edge Impulse object detection -> the object_align autonomy mode.
+    #
+    # The model is a compiled `.eim` binary the Edge Impulse runtime EXECUTES, so
+    # it must be chmod +x. Download one with:
+    #   edge-impulse-linux-runner --download model.eim
+    #
+    # IMPORTANT — model architecture decides what object_align can do. FOMO models
+    # emit centroids with fixed cell-sized boxes, NOT true bounding boxes, so
+    # object size is unavailable and standoff/approach is impossible; the mode
+    # degrades to align-only (turn to face, never advance). Export a YOLO-style
+    # model (model_type == 'object_detection') if you want approach + standoff.
+    enabled: bool = True
+    # Lives alongside the BNO055 calibration in the pi-owned dir postinst creates.
+    # Keep .eim binaries out of git; ship them with the .deb or scp them over.
+    model_path: str = "/var/lib/roversoftware/model.eim"
+    target_label: str = ""  # "" = track any label the model reports
+    min_confidence: float = 0.6  # ignore boxes below this score
+    max_fps: float = 10.0  # cap inference rate; it costs a core
+    # Drop the target (provider returns None) after this long without a fresh
+    # detection — the GPS fix_timeout idea. Also what makes a dead detector
+    # thread fail safe: no new stamps -> target ages out -> the robot stops.
+    target_timeout: float = 0.5
+    select: str = "largest"  # largest | confidence | centermost
+    # EFFECTIVE horizontal FOV *after* Edge Impulse's center-crop, not the
+    # camera's spec. get_features_from_image() resizes then center-crops to the
+    # model input, discarding ~25% of the width at 640x480 -> square. This scales
+    # the IMU yaw-rate into normalized error units; too high and the D term is
+    # too small, too low and the steering oscillates.
+    hfov_deg: float = 50.0
+    # Stop once the box height reaches this fraction of the model input height.
+    # Calibrate it, don't guess: park at the distance you want, run
+    # tools/detector_selftest.py, and read off the printed size.
+    standoff_size: float = 0.45
+    search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
+
+
+@dataclass
 class RobotConfig:
     drive: DriveConfig = field(default_factory=DriveConfig)
     comms: CommsConfig = field(default_factory=CommsConfig)
     gps: GPSConfig = field(default_factory=GPSConfig)
     imu: IMUConfig = field(default_factory=IMUConfig)
+    camera: CameraConfig = field(default_factory=CameraConfig)
+    vision: VisionConfig = field(default_factory=VisionConfig)
     loop_hz: float = 5.0  # Control loop rate
-    start_mode: str = "teleop"  # teleop | color_align | waypoint
+    start_mode: str = "teleop"  # teleop | object_align | waypoint
     robot_id: str = "rover1"  # unique id on the shared XBee channel
     telemetry_hz: float = (
         5.0  # rate of status frames back to the base station (0 disables)
