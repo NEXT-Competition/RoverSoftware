@@ -32,6 +32,10 @@ class RobotState:
     # never reach the browser.
     vision: Optional[dict] = None
     imu_calib: Optional[list] = None
+    # Shooter summary {armed, shots, ready, cool}, present only while the robot
+    # is in shooter_align. Unlike the fields above this one is NOT sticky — see
+    # update_from_telemetry for why a stale arm indicator would be dangerous.
+    shooter: Optional[dict] = None
     last_seen: float = 0.0
     trail: List[Tuple[float, float]] = field(default_factory=list)
 
@@ -75,6 +79,12 @@ class FleetManager:
                 st.vision = msg["vision"]
             if msg.get("imu_calib") is not None:
                 st.imu_calib = list(msg["imu_calib"])
+            # Assigned unconditionally, breaking the "only overwrite when present"
+            # pattern above on purpose. The robot omits this field entirely once
+            # shooter_align is no longer active, and a sticky copy would leave the
+            # UI showing ARMED for a mode the robot has already left — the one
+            # piece of stale telemetry here that could get someone hurt.
+            st.shooter = msg.get("shooter")
             if msg.get("lat") is not None and msg.get("lon") is not None:
                 st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
                 st.trail.append((st.lat, st.lon))
@@ -107,6 +117,7 @@ class FleetManager:
                     "heading": st.heading,
                     "vision": st.vision,
                     "imu_calib": st.imu_calib,
+                    "shooter": st.shooter,
                     "online": st.online(now),
                     "age": round(now - st.last_seen, 2) if st.last_seen else None,
                     "trail": st.trail,

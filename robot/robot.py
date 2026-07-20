@@ -13,8 +13,10 @@ from .comms.xbee_link import XBeeLink
 from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
+from .control.shooter_align import ShooterAlignController
 from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
+from .drive.shooter import Shooter
 from .drive.tank_drive import TankDrive
 from .sensors.bno055 import IMU
 from .sensors.detector import MockDetector, ObjectDetector
@@ -31,6 +33,14 @@ class Robot:
         self.cfg = config
         self.drive = TankDrive(config.drive)
 
+        # Servo-actuated launcher for shooter_align. Off unless the build has
+        # one: constructing it drives its PWM channel to the rest angle, which
+        # on a chassis without a launcher is an unused channel twitching at boot.
+        # None -> shooter_align degrades to plain alignment and never fires.
+        self.shooter: Optional[Shooter] = (
+            Shooter(config.shooter) if config.shooter.enabled else None
+        )
+
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
         # sensor providers (camera target / GPS pose) are attached.
@@ -38,6 +48,13 @@ class Robot:
             controllers = {
                 "teleop": TeleopController(config.comms.command_timeout),
                 "object_align": ObjectAlignController(
+                    standoff_size=config.vision.standoff_size,
+                    search_speed=config.vision.search_speed,
+                    hfov_deg=config.vision.hfov_deg,
+                ),
+                "shooter_align": ShooterAlignController(
+                    shooter=self.shooter,
+                    config=config.shooter,
                     standoff_size=config.vision.standoff_size,
                     search_speed=config.vision.search_speed,
                     hfov_deg=config.vision.hfov_deg,
@@ -102,10 +119,14 @@ class Robot:
         # GPS is off, but object_align needs no position at all. heading_rate()
         # already returns None without an IMU, so wiring it unconditionally is
         # safe; gating it would silently drop the D term on any --no-gps run.
-        oa = controllers.get("object_align")
-        if isinstance(oa, ObjectAlignController) and self.detector is not None:
-            oa.set_detection_provider(self.detector.detection)
-            oa.set_rate_provider(self.pose_estimator.heading_rate)
+        # Wired by TYPE, not by mode name: shooter_align is an ObjectAlignController
+        # subclass and needs exactly the same perception, so keying off the name
+        # would silently leave it blind (it would align to nothing and never fire).
+        if self.detector is not None:
+            for c in controllers.values():
+                if isinstance(c, ObjectAlignController):
+                    c.set_detection_provider(self.detector.detection)
+                    c.set_rate_provider(self.pose_estimator.heading_rate)
 
     def _drain_inbox(self) -> None:
         while True:
@@ -140,6 +161,12 @@ class Robot:
         # A summary, never boxes or frames: the radio is 57600 baud and shared.
         if self.detector is not None:
             t["vision"] = self.detector.telemetry()
+        # Shooter state (armed, shots, dwelling, cooldown). Only while the mode
+        # is active — an operator needs to see the arm latch before it matters,
+        # and it's dropped on exit anyway, so there's nothing to report elsewhere.
+        active = self.manager.active
+        if isinstance(active, ShooterAlignController) and self.shooter is not None:
+            t["shooter"] = active.status()
         return t
 
     def start(self) -> None:
@@ -174,6 +201,12 @@ class Robot:
                 self._drain_inbox()
                 t1 = time.monotonic()
                 cmd = self.manager.update(dt)
+                # Unconditional, and deliberately outside the controller: a mode
+                # switch or an e-stop mid-shot stops update() from being called,
+                # and the servo must still retract instead of stalling against
+                # its stop. See robot/drive/shooter.py.
+                if self.shooter is not None:
+                    self.shooter.update()
                 t2 = time.monotonic()
                 self.drive.drive(cmd.left, cmd.right)
                 t3 = time.monotonic()
@@ -204,6 +237,10 @@ class Robot:
     def shutdown(self) -> None:
         print("\n[Robot] shutting down; stopping motors")
         self.drive.stop()
+        # Park the launcher at rest before anything else winds down: leaving it
+        # at the fire angle stalls the servo and leaves the mechanism cocked.
+        if self.shooter is not None:
+            self.shooter.stop()
         # First: it owns a subprocess, and stopping it early means no more
         # detections can arrive while the rest of the stack winds down.
         if self.detector is not None:

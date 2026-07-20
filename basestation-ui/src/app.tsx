@@ -6,6 +6,7 @@ import { ControllerStatus } from "./components/ControllerStatus.tsx";
 import { FleetPanel } from "./components/FleetPanel.tsx";
 import { ModeControls } from "./components/ModeControls.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
+import { ShooterControls } from "./components/ShooterControls.tsx";
 import { Telemetry } from "./components/Telemetry.tsx";
 import { DrivePad } from "./components/DrivePad.tsx";
 import { EstopBar } from "./components/EstopBar.tsx";
@@ -35,6 +36,8 @@ function ControlSection() {
       </div>
       <ModeControls />
       <div style="height:14px" />
+      {/* Renders nothing unless the robot is in shooter_align (see the component). */}
+      <ShooterControls />
       <RouteControls />
       <div style="height:12px" />
       <Telemetry />

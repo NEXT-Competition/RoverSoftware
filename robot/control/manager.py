@@ -52,6 +52,8 @@ class ControlManager:
         mtype = message.get("type")
         if mtype == "estop":
             self.estop = True
+            for c in self.controllers.values():
+                c.on_estop()
             print("[ControlManager] E-STOP engaged")
         elif mtype == "clear_estop":
             self.estop = False
