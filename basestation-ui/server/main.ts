@@ -16,7 +16,7 @@
 //                        (default 127.0.0.1:<RS_WEB_PORT || 8001>)
 
 import { serveDir } from "@std/http/file-server";
-import { proxyTiles, proxyWs } from "./proxy.ts";
+import { proxyTiles, proxyVideo, proxyWs } from "./proxy.ts";
 
 const env = (k: string) => Deno.env.get(k);
 const UPSTREAM = env("RS_UPSTREAM") ??
@@ -33,6 +33,9 @@ async function handler(req: Request): Promise<Response> {
   if (url.pathname === "/ws") return proxyWs(req, UPSTREAM);
   if (url.pathname.startsWith("/tiles/")) {
     return proxyTiles(url.pathname, UPSTREAM);
+  }
+  if (url.pathname.startsWith("/video/")) {
+    return proxyVideo(url.pathname, UPSTREAM);
   }
 
   // Static assets from the built client.

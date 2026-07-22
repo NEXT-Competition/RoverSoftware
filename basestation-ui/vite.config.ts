@@ -24,6 +24,7 @@ export default defineConfig({
     proxy: {
       "/ws": { target: `ws://${UPSTREAM}`, ws: true, changeOrigin: true },
       "/tiles": { target: `http://${UPSTREAM}`, changeOrigin: true },
+      "/video": { target: `http://${UPSTREAM}`, changeOrigin: true },
     },
   },
 });

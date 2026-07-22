@@ -49,10 +49,14 @@ from ..control.detection import Detection
 
 try:  # pragma: no cover - Linux/Pi-only dependency, absent on a dev laptop
     from edge_impulse_linux.image import ImageImpulseRunner
-except Exception:
+    _IMPORT_ERROR = None
+except Exception as _e:
+    # Keep WHY it failed. edge_impulse_linux itself is pure Python, but its image
+    # module imports cv2 (OpenCV) and numpy at load time, so a missing transitive
+    # dependency lands here too and would otherwise read as "not installed" even
+    # after the user has installed edge_impulse_linux.
     ImageImpulseRunner = None
-
-from .camera import describe, open_source
+    _IMPORT_ERROR = _e
 
 # FOMO. EI reports this model_type for constrained object detection, which
 # yields centroids rather than sized boxes.
@@ -64,19 +68,25 @@ def _clamp(v, lo, hi):
 
 
 class ObjectDetector:
-    def __init__(self, cfg, camera_cfg):
+    def __init__(self, cfg, camera):
         self.cfg = cfg
-        self.camera_cfg = camera_cfg
+        # The camera is shared (see sensors/camera.py) — the FPV streamer reads
+        # the same device. This class never opens it; it only samples frame().
+        self.camera = camera
         self._period = 1.0 / cfg.max_fps if cfg.max_fps > 0 else 0.1
 
         self._runner = None
-        self._source = None
         self._thread = None
         self._running = False
         self._lock = threading.Lock()
 
         # Latest cached state (guarded by _lock).
         self._detection: Optional[Detection] = None
+        # Every above-confidence box for the FPV overlay, in FULL-FRAME pixels:
+        # (x, y, w, h, label, conf, is_target). Separate from _detection, which is
+        # the single normalized target the controller steers on.
+        self._overlays: list = []
+        self._overlays_stamp = 0.0
         self._ok = False  # model initialized and the loop is alive
         self._fps = 0.0
         self._labels: list = []
@@ -99,9 +109,19 @@ class ObjectDetector:
         if not self.cfg.enabled:
             return
         if ImageImpulseRunner is None:
-            print("[detector] edge_impulse_linux not installed — object detection "
-                  "disabled (object_align will hold still). Install on the Pi: "
-                  "pip install edge_impulse_linux")
+            missing = getattr(_IMPORT_ERROR, "name", None)
+            if isinstance(_IMPORT_ERROR, ModuleNotFoundError) and missing and missing != "edge_impulse_linux":
+                # edge_impulse_linux is present, but one of its deps isn't — the
+                # usual culprit is OpenCV, which the Pi doesn't have by default.
+                hint = ("sudo apt install python3-opencv" if missing == "cv2"
+                        else f"pip install {missing}")
+                print(f"[detector] edge_impulse_linux is installed, but its dependency "
+                      f"'{missing}' is missing — object detection disabled "
+                      f"(object_align will hold still). Install it on the Pi: {hint}")
+            else:
+                print(f"[detector] edge_impulse_linux unavailable ({_IMPORT_ERROR}) — "
+                      "object detection disabled (object_align will hold still). "
+                      "Install on the Pi: pip install edge_impulse_linux")
             return
         path = os.path.expanduser(self.cfg.model_path)
         if not os.path.exists(path):
@@ -114,6 +134,10 @@ class ObjectDetector:
             print(f"[detector] model {path} is not executable — object detection "
                   f"disabled. Fix: chmod +x {path}")
             return
+        if self.camera is None:
+            print("[detector] camera disabled — object detection disabled "
+                  "(object_align will hold still)")
+            return
 
         self._running = True
         self._thread = threading.Thread(target=self._read_loop, name="detector-rx", daemon=True)
@@ -125,8 +149,7 @@ class ObjectDetector:
             # Must outlast one in-flight inference (up to ~200ms) plus a frame
             # read; the 1.0s the GPS/IMU readers use is too tight here.
             self._thread.join(timeout=2.0)
-        if self._source is not None:
-            self._source.close()
+        # The camera is shared and owned elsewhere — don't close it here.
         if self._runner is not None:
             try:
                 self._runner.stop()  # reap the .eim subprocess
@@ -170,13 +193,7 @@ class ObjectDetector:
                   "turn to face the target but will NOT approach or stop at standoff. "
                   "Export a YOLO-style (object_detection) model for approach.")
 
-        self._source = open_source(self.camera_cfg)
-        if self._source is None:
-            print("[detector] no camera/deps available — object detection disabled "
-                  "(install python3-picamera2 or opencv-python)")
-            return False
-        print(f"[detector] capturing {self.camera_cfg.width}x{self.camera_cfg.height} "
-              f"via {describe(self._source)}, inference capped at {self.cfg.max_fps:g} fps")
+        print(f"[detector] inference capped at {self.cfg.max_fps:g} fps")
         return True
 
     def _read_loop(self) -> None:
@@ -187,13 +204,17 @@ class ObjectDetector:
             self._ok = True
 
         errors = 0
+        last_stamp = -1.0
         while self._running:
             t0 = time.monotonic()
             try:
-                frame = self._source.read()  # BGR — see camera.py
-                if frame is None:
+                # Frames come from the shared Camera (which the FPV streamer also
+                # reads); sample the latest and skip one we've already classified.
+                frame, stamp = self.camera.frame_and_stamp()
+                if frame is None or stamp == last_stamp:
                     time.sleep(0.01)
                     continue
+                last_stamp = stamp
                 features, _cropped = self._runner.get_features_from_image(frame)
                 res = self._runner.classify(features)
                 errors = 0
@@ -206,7 +227,7 @@ class ObjectDetector:
                 time.sleep(0.5)
                 continue
 
-            self._consume(res, time.monotonic())
+            self._consume(res, frame, time.monotonic())
 
             elapsed = time.monotonic() - t0
             with self._lock:
@@ -218,14 +239,13 @@ class ObjectDetector:
         with self._lock:
             self._ok = False
 
-    def _consume(self, res: dict, stamp: float) -> None:
-        """Fold one classification into the cached detection."""
+    def _consume(self, res: dict, frame, stamp: float) -> None:
+        """Fold one classification into the cached detection + FPV overlays."""
         boxes = (res.get("result", {}) or {}).get("bounding_boxes", []) or []
-        best = self._select(
-            [b for b in boxes
-             if b.get("value", 0.0) >= self.cfg.min_confidence
-             and (not self.cfg.target_label or b.get("label") == self.cfg.target_label)]
-        )
+        kept = [b for b in boxes
+                if b.get("value", 0.0) >= self.cfg.min_confidence
+                and (not self.cfg.target_label or b.get("label") == self.cfg.target_label)]
+        best = self._select(kept)
         if best is None:
             # Deliberately do NOT clear — let the sample age out. See docstring.
             return
@@ -248,8 +268,45 @@ class ObjectDetector:
             size=None if self._fomo else _clamp(best["height"] / mh, 0.0, 1.0),
             stamp=stamp,
         )
+
+        # Overlays for the FPV feed: map every kept box from model space back to
+        # full-frame pixels (see _to_full_frame). Uses the frame's real shape so
+        # it's correct even if the camera ignored the requested resolution.
+        h, w = frame.shape[0], frame.shape[1]
+        overlays = []
+        for b in kept:
+            rect = self._to_full_frame(b, w, h)
+            overlays.append((*rect, b.get("label", ""), float(b.get("value", 0.0)), b is best))
+
         with self._lock:
             self._detection = detection
+            self._overlays = overlays
+            self._overlays_stamp = stamp
+
+    def _to_full_frame(self, box: dict, w: int, h: int):
+        """Invert Edge Impulse's resize + center-crop: model-space box -> full-frame
+        pixel rect (x, y, bw, bh), clamped to the frame.
+
+        get_features_from_image() scales the frame by the LARGEST factor so it
+        covers the model input, then center-crops. So the reverse is: undo the
+        crop offset, then undo the scale.
+        """
+        mw, mh = self._model_wh
+        if mw <= 0 or mh <= 0:
+            return 0, 0, 0, 0
+        scale = max(mw / w, mh / h)          # frame -> model resize factor
+        crop_x = (w * scale - mw) / 2.0      # pixels trimmed each side, in model space
+        crop_y = (h * scale - mh) / 2.0
+        x = int((box.get("x", 0) + crop_x) / scale)
+        y = int((box.get("y", 0) + crop_y) / scale)
+        bw = int(box.get("width", 0) / scale)
+        bh = int(box.get("height", 0) / scale)
+        # Clamp to the frame; boxes can spill past the crop edge.
+        x = _clamp(x, 0, w - 1)
+        y = _clamp(y, 0, h - 1)
+        bw = _clamp(bw, 0, w - x)
+        bh = _clamp(bh, 0, h - y)
+        return x, y, bw, bh
 
     def _select(self, boxes: list) -> Optional[dict]:
         """Pick one box out of the candidates.
@@ -287,6 +344,17 @@ class ObjectDetector:
             if (time.monotonic() - d.stamp) > self.cfg.target_timeout:
                 return None
             return d
+
+    def overlays(self) -> list:
+        """Latest detection boxes in full-frame pixels for the FPV overlay, as
+        (x, y, w, h, label, conf, is_target) tuples. Empty once stale, so a lost
+        target stops drawing boxes rather than freezing the last ones."""
+        with self._lock:
+            if not self._overlays:
+                return []
+            if (time.monotonic() - self._overlays_stamp) > self.cfg.target_timeout:
+                return []
+            return self._overlays
 
     def telemetry(self) -> dict:
         """Compact status for the base station. Kept small — the radio is 57600

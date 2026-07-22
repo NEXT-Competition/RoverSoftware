@@ -49,8 +49,13 @@ from robot.sensors.camera import describe, open_source  # noqa: E402
 
 try:
     from edge_impulse_linux.image import ImageImpulseRunner
-except Exception:
+    _IMPORT_ERROR = None
+except Exception as _e:
+    # edge_impulse_linux itself is pure Python, but its image module imports cv2
+    # (OpenCV) and numpy at load time. Keep the real error so a missing cv2 on
+    # the Pi doesn't masquerade as "edge_impulse_linux not installed".
     ImageImpulseRunner = None
+    _IMPORT_ERROR = _e
 
 _FOMO_TYPE = "constrained_object_detection"
 
@@ -76,7 +81,18 @@ def main() -> int:
 
     # 1. Library present?
     if ImageImpulseRunner is None:
-        print("edge_impulse_linux not installed — nothing to test here.")
+        missing = getattr(_IMPORT_ERROR, "name", None)
+        if isinstance(_IMPORT_ERROR, ModuleNotFoundError) and missing and missing != "edge_impulse_linux":
+            # edge_impulse_linux is installed, but a dependency of it isn't —
+            # usually OpenCV, which the Pi lacks by default. This is a real FAIL
+            # on the Pi, not the "nothing to test on a laptop" case below.
+            hint = ("sudo apt install python3-opencv" if missing == "cv2"
+                    else f"pip install {missing}")
+            print(f"[1/5] FAIL  edge_impulse_linux is installed, but its dependency "
+                  f"'{missing}' is missing.")
+            print(f"            Install it:  {hint}")
+            return 1
+        print(f"edge_impulse_linux not importable ({_IMPORT_ERROR}) — nothing to test here.")
         print("This is expected on a dev laptop (it's Linux-only and needs a")
         print("compiled .eim). On the Pi:  pip install edge_impulse_linux")
         return 0

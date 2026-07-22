@@ -20,10 +20,15 @@ pygame>=2.5          # PS4 controller input, cross-platform
 # Edge Impulse object detection. Linux-only (it shells out to a compiled .eim
 # binary), so it stays out of pyproject.toml the same way fusion_hat and the
 # BNO055 stack do — adding it there would break `uv sync` on a Mac.
-#   pip install edge_impulse_linux     # also pulls numpy; needs opencv below
+#   pip install edge_impulse_linux
+# IMPORTANT: the edge_impulse_linux wheel is tiny and does NOT pull its own deps.
+# Its image module imports numpy and OpenCV (cv2) at load time, so you must also
+# install OpenCV or the import fails with "No module named 'cv2'" (which reads as
+# "not installed" until you look). numpy usually comes with the OS.
+#   sudo apt install python3-opencv    # OpenCV (cv2) — REQUIRED, any camera
 # Plus ONE capture stack:
 #   sudo apt install python3-picamera2 # Pi Camera (CSI ribbon)
-#   pip install opencv-python          # USB webcam / any V4L2 device
+#   # (a USB/V4L2 webcam needs no extra package beyond OpenCV above)
 #
 # The model itself is not in git (large binary). Grab one and make it executable
 # — Edge Impulse EXECUTES the .eim, and forgetting this is the #1 first-run

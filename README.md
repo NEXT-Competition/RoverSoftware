@@ -335,9 +335,15 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
 - **GPS waypoint autonomy** — parse GY-GPS6MV2 (NEO-6M) NMEA with `pynmea2` into
   `(lat, lon, heading)` and pass it as `WaypointController`'s `pose_provider`.
   Bearing/distance math already done.
+- **FPV live video** — ✅ done: the robot streams its camera as JPEG-over-UDP to
+  the base station, which serves it as browser-native MJPEG in the dashboard's
+  Camera panel. When a model is loaded, detection boxes are drawn onto the feed
+  (green = the object `object_align` is tracking, amber = others). Enable on the
+  robot with `--fpv --fpv-host <base-ip>` (needs WiFi/LAN — the XBee radio can't
+  carry video). Shares the one camera with object detection.
 - **Base station app** — ✅ done: map view + live multi-robot tracking, PS4
-  teleop of the selected robot, mode switching, and click-to-route waypoints.
-  Next: offline tile caching and a telemetry/log panel.
+  teleop of the selected robot, mode switching, click-to-route waypoints, and the
+  FPV camera feed. Next: offline tile caching and a telemetry/log panel.
 - **Voice → multi-robot planning** — a local LLM turns a high-level spoken order
   into a plan; a dispatcher agent slices it into per-vehicle chunks and sends
   them as `mode`/`route`/task messages over XBee, one manageable step at a time.
