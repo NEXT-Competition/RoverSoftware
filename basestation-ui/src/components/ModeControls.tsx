@@ -4,6 +4,7 @@ import type { Mode } from "../net/types.ts";
 const MODES: { key: Mode; label: string }[] = [
   { key: "teleop", label: "Teleop" },
   { key: "object_align", label: "Object align" },
+  { key: "shooter_align", label: "Shooter" },
   { key: "waypoint", label: "Waypoint" },
 ];
 

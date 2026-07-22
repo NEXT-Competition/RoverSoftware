@@ -99,6 +99,12 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             dispatch(rid, {"type": "drive",
                            "throttle": float(data.get("throttle", 0)),
                            "steer": float(data.get("steer", 0))})
+        elif action in ("arm_shooter", "disarm_shooter", "fire"):
+            # Pass-through: the robot owns every firing rule (arm latch, dwell,
+            # cooldown, magazine). Duplicating any of that here would give two
+            # sources of truth for when it's safe to shoot, and the base station
+            # is the one that can be out of date or disconnected.
+            dispatch(rid, {"type": action})
 
     async def broadcast_loop() -> None:
         ui_period = 1.0 / float(web_cfg.get("ui_hz", 30))

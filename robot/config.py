@@ -172,6 +172,42 @@ class FPVConfig:
 
 
 @dataclass
+class ShooterConfig:
+    # Servo-actuated launcher on its own PWM channel -> the shooter_align mode.
+    #
+    # Off by default: a stock chassis has no launcher, and enabling it would
+    # drive an unused channel at boot. Set RS_SHOOTER_ENABLED=1 on builds that
+    # have one.
+    enabled: bool = False
+    # Channels 0 and 1 are the drive ESCs (see DriveConfig), so a shooter starts
+    # at 2. Changing this to 0 or 1 would fight the drivetrain for a channel.
+    channel: int = 2
+    rest_angle: float = -30.0  # home position; also where a disarm/e-stop parks it
+    fire_angle: float = 30.0  # position that trips the mechanism
+    # How long to HOLD the fire angle. Too short and the servo never reaches it;
+    # too long and it stalls against the mechanical stop. Find it with
+    # tools/servo_sweep.py, then add a little margin.
+    fire_seconds: float = 0.35
+    retract_seconds: float = 0.35  # settle at rest before another shot may start
+
+    # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
+    # Hold the alignment this long before firing. This is the single most
+    # important safety/accuracy knob: the detector is noisy and a single centered
+    # frame is not evidence the robot is actually pointed at anything.
+    dwell: float = 0.5
+    cooldown: float = 2.0  # minimum seconds between shots
+    # Require an explicit {"type":"arm_shooter"} before any shot. Leave True.
+    # Arming is dropped on mode exit and on e-stop, so it can never be latched on
+    # from a previous run.
+    require_arm: bool = True
+    # Also require the standoff distance to be reached, not just the bearing.
+    # Automatically skipped when the model can't measure size (FOMO), since
+    # arrival can never latch there — see VisionConfig.
+    require_arrived: bool = True
+    max_shots: int = 0  # magazine capacity; 0 = unlimited
+
+
+@dataclass
 class RobotConfig:
     drive: DriveConfig = field(default_factory=DriveConfig)
     comms: CommsConfig = field(default_factory=CommsConfig)
@@ -180,8 +216,9 @@ class RobotConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
     fpv: FPVConfig = field(default_factory=FPVConfig)
+    shooter: ShooterConfig = field(default_factory=ShooterConfig)
     loop_hz: float = 5.0  # Control loop rate
-    start_mode: str = "teleop"  # teleop | object_align | waypoint
+    start_mode: str = "teleop"  # teleop | object_align | waypoint | shooter_align
     robot_id: str = "rover1"  # unique id on the shared XBee channel
     telemetry_hz: float = (
         5.0  # rate of status frames back to the base station (0 disables)

@@ -10,7 +10,9 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD, RS_IMU_ENABLED/ADDRESS/OFFSET,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
-    RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY
+    RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
+    RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
+        MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED
 
 Without the Fusion HAT / XBee present, the servo layer falls back to a mock so
 you can still exercise the control and comms logic on a laptop. Likewise
@@ -18,6 +20,12 @@ RS_MOCK_DETECTOR=1 synthesizes a moving target, so object_align can be driven
 end-to-end with no camera and no model:
 
     RS_MOCK_MOTORS=1 RS_MOCK_DETECTOR=1 python run_robot.py --mode object_align
+
+The same trick drives the shooter end-to-end with no launcher attached — the
+servo is mocked, and every shot still prints:
+
+    RS_MOCK_MOTORS=1 RS_MOCK_DETECTOR=1 python run_robot.py \\
+        --mode shooter_align --shooter
 """
 
 import argparse
@@ -38,7 +46,7 @@ def main():
     parser.add_argument("--baud", type=int,
                         default=int(os.environ.get("RS_XBEE_BAUD", cfg.comms.baud)))
     parser.add_argument("--mode", default=os.environ.get("RS_START_MODE", cfg.start_mode),
-                        choices=["teleop", "object_align", "waypoint"])
+                        choices=["teleop", "object_align", "shooter_align", "waypoint"])
     parser.add_argument("--hz", type=float,
                         default=float(os.environ.get("RS_LOOP_HZ", cfg.loop_hz)))
     parser.add_argument("--telemetry-hz", type=float,
@@ -91,6 +99,10 @@ def main():
                         help="stream first-person video to the base station over UDP (needs WiFi)")
     parser.add_argument("--fpv-host", default=os.environ.get("RS_FPV_HOST", cfg.fpv.base_host),
                         help="base-station host that receives the video feed")
+    parser.add_argument("--shooter", dest="shooter", action="store_true",
+                        default=os.environ.get("RS_SHOOTER_ENABLED", "").strip().lower()
+                        in ("1", "true", "yes", "on"),
+                        help="enable the servo launcher (required for shooter_align to fire)")
     args = parser.parse_args()
 
     if args.mock_motors:
@@ -130,6 +142,19 @@ def main():
     cfg.fpv.base_port = int(os.environ.get("RS_FPV_PORT", cfg.fpv.base_port))
     cfg.fpv.fps = int(os.environ.get("RS_FPV_FPS", cfg.fpv.fps))
     cfg.fpv.jpeg_quality = int(os.environ.get("RS_FPV_QUALITY", cfg.fpv.jpeg_quality))
+    # Shooter. Same policy as vision: only the on/off switch gets a CLI flag,
+    # the geometry and firing policy are env-only (see the module docstring).
+    cfg.shooter.enabled = args.shooter
+    cfg.shooter.channel = int(os.environ.get("RS_SHOOTER_CHANNEL", cfg.shooter.channel))
+    cfg.shooter.rest_angle = float(os.environ.get("RS_SHOOTER_REST", cfg.shooter.rest_angle))
+    cfg.shooter.fire_angle = float(os.environ.get("RS_SHOOTER_FIRE", cfg.shooter.fire_angle))
+    cfg.shooter.fire_seconds = float(os.environ.get("RS_SHOOTER_FIRE_S", cfg.shooter.fire_seconds))
+    cfg.shooter.retract_seconds = float(os.environ.get("RS_SHOOTER_RETRACT_S", cfg.shooter.retract_seconds))
+    cfg.shooter.dwell = float(os.environ.get("RS_SHOOTER_DWELL", cfg.shooter.dwell))
+    cfg.shooter.cooldown = float(os.environ.get("RS_SHOOTER_COOLDOWN", cfg.shooter.cooldown))
+    cfg.shooter.max_shots = int(os.environ.get("RS_SHOOTER_MAX_SHOTS", cfg.shooter.max_shots))
+    cfg.shooter.require_arm = os.environ.get("RS_SHOOTER_REQUIRE_ARM", "1").strip().lower() in ("1", "true", "yes", "on")
+    cfg.shooter.require_arrived = os.environ.get("RS_SHOOTER_REQUIRE_ARRIVED", "1").strip().lower() in ("1", "true", "yes", "on")
 
     motors = "MOCK" if args.mock_motors else "real"
     gps = f"{cfg.gps.port}@{cfg.gps.baud}" if cfg.gps.enabled else "off"
@@ -143,8 +168,10 @@ def main():
         if cfg.vision.target_label:
             vision += f" [{cfg.vision.target_label}]"
     fpv = f"{cfg.fpv.base_host}:{cfg.fpv.base_port}" if cfg.fpv.enabled else "off"
+    shooter = f"ch{cfg.shooter.channel}" if cfg.shooter.enabled else "off"
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "
-          f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} vision={vision} fpv={fpv}")
+          f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} vision={vision} "
+          f"fpv={fpv} shooter={shooter}")
     Robot(cfg).run()
 
 

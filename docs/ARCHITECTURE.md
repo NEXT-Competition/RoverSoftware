@@ -97,11 +97,13 @@ robot/                        # runs on the rover Pi (also imported by the base 
     pid.py                    reusable PID with output + integral clamping
     teleop.py                 drive from base-station commands (+ link failsafe)
     object_align.py           Edge Impulse object alignment — inject a detection provider
+    shooter_align.py          object_align + a trigger: align, settle, fire
     detection.py              the Detection contract the controller consumes
     waypoint.py               GPS waypoint navigation — inject a pose provider
   drive/
     motor.py                  ESCMotor: throttle [-1,1] → servo angle (mock if no HAT)
     tank_drive.py             left/right + slew-rate limiting
+    shooter.py                servo launcher: non-blocking fire/retract cycle
   comms/
     protocol.py               newline-delimited JSON encode/decode
     xbee_link.py              threaded transparent-mode XBee serial reader
@@ -150,6 +152,7 @@ from environment variables / CLI flags, and hands it to `Robot`.
 | `MotorConfig` | `channel`, `inverted`, `neutral_angle`, `max_angle`, `min_angle`, `deadband=0.03`, `max_forward/reverse=1.0` | Per-motor calibration: maps throttle to servo angle. |
 | `DriveConfig` | `left` (ch0), `right` (ch1, `inverted=True`), `arm_seconds=2.0`, `slew_rate=4.0` | Two motors + arming + slew limiting. |
 | `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=9600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. |
+| `ShooterConfig` | `enabled=False`, `channel=2`, `rest_angle=-30`, `fire_angle=30`, `fire_seconds=0.35`, `retract_seconds=0.35`, `dwell=0.5`, `cooldown=2.0`, `require_arm=True`, `require_arrived=True`, `max_shots=0` | Servo launcher geometry + the firing policy for `shooter_align`. Off by default. |
 | `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5` | NEO-6M reader settings. |
 | `RobotConfig` | `drive`, `comms`, `gps`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5` | Top-level composition. |
 
@@ -190,9 +193,12 @@ a fix, which is what makes the robot appear on the base-station map.
 
 ### 4.3 Control layer
 
-**`Controller` (base class).** Four hooks: `on_activate()`, `on_deactivate()`,
-`on_message(msg)`, and `update(dt) → DriveCommand | None`. `update` is called
-every tick; returning `None` means "hold/stop".
+**`Controller` (base class).** Five hooks: `on_activate()`, `on_deactivate()`,
+`on_message(msg)`, `on_estop()`, and `update(dt) → DriveCommand | None`. `update`
+is called every tick; returning `None` means "hold/stop". `on_estop()` is
+broadcast to **every** controller when the latch engages — stopping the motors
+needs no cooperation (the manager just stops calling `update`), so this hook is
+purely for state that must not survive an e-stop, like an armed shooter.
 
 **`ControlManager` (`manager.py`).** The single place that decides *who* drives.
 It owns the mode and the e-stop latch:
@@ -224,6 +230,10 @@ kd·de/dt`; `reset()` clears the integrator and last-error.
   horizontal error, and pivots → approaches → stops at a standoff. Sweeps to
   reacquire a lost target, then gives up. Holds still with no provider/target.
   See [§6](#6-gps-waypoint-autonomy) for the detector it's fed by.
+- **`ShooterAlignController`** — `ObjectAlignController` **subclass** that adds a
+  trigger. It inherits the alignment state machine wholesale (a forked copy would
+  drift out of sync with fixes to the subtle timing logic) and asks one extra
+  question per tick: should we shoot now? See [§6](#6-gps-waypoint-autonomy).
 - **`WaypointController`** — GPS navigation; see [§6](#6-gps-waypoint-autonomy).
 
 ### 4.4 Drive layer
@@ -281,15 +291,19 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 // base station -> robot
 {"type":"drive","throttle":0.5,"steer":-0.2,"to":"rover1"}  // arcade mixing
 {"type":"drive","left":0.4,"right":0.6,"to":"rover1"}        // direct tank
-{"type":"mode","mode":"teleop","to":"rover1"}                // teleop|object_align|waypoint
+{"type":"mode","mode":"teleop","to":"rover1"}                // teleop|object_align|shooter_align|waypoint
 {"type":"route","waypoints":[[lat,lon],...],"to":"rover1"}   // waypoint route
 {"type":"estop","to":"rover1"}                               // latch motors off
 {"type":"clear_estop","to":"rover1"}                         // release latch
+{"type":"arm_shooter","to":"rover1"}                         // shooter_align: permit firing
+{"type":"disarm_shooter","to":"rover1"}                      // shooter_align: forbid + park
+{"type":"fire","to":"rover1"}                                // shooter_align: manual shot
 
 // robot -> base station (telemetry, ~5 Hz)
 {"type":"telemetry","from":"rover1","mode":"teleop","estop":false,
  "left":0.4,"right":0.6,"battery":87.0,
- "lat":37.77,"lon":-122.41,"heading":30.0}   // lat/lon/heading only when GPS has a fix
+ "lat":37.77,"lon":-122.41,"heading":30.0,  // lat/lon/heading only when GPS has a fix
+ "shooter":{"armed":true,"shots":1,"ready":false,"cool":0.0}}  // only while in shooter_align
 ```
 
 The base station rate-limits `drive` frames it sends (see [§7](#7-the-base-station))
@@ -412,6 +426,57 @@ in the right place on the 640×480 feed. Drawing happens on a copy of the frame,
 never the shared one, and only the freshest boxes are used, so they lag the
 video by at most a frame.
 
+**`shooter_align` and the launcher (`drive/shooter.py`).** `shooter_align` is
+`object_align` plus a trigger. The alignment, approach, standoff, and search
+behaviour above are inherited unchanged; the only addition is the decision to
+fire:
+
+```
+aligned + (arrived, when the model reports size)  ->  hold still, start dwelling
+held continuously for `dwell` seconds             ->  fire
+then `cooldown` seconds before the next shot
+```
+
+- **Dwell is the point.** The detector is noisy and asynchronous to the control
+  loop, so a single centered frame is equally consistent with a false positive, a
+  mislabeled box, or the target crossing the center on its way past. Requiring
+  the alignment to *hold* costs half a second and rejects nearly all of it. This
+  is the difference between shooting at the target and shooting at whatever
+  flickers.
+- **It stops before firing.** Once the conditions are met the controller
+  overrides the alignment command with `stopped()`: a still-creeping robot aims
+  worse, and a spring mechanism can shove the chassis. Align → settle → shoot.
+- **Three independent safety gates.** (1) Arming is explicit (`arm_shooter`) and
+  is dropped on mode exit *and* on e-stop, so it can never be inherited from a
+  previous run or resumed by a bare `clear_estop`. (2) The dwell timer resets
+  whenever ticks stop arriving — without this, clearing an e-stop while still
+  aligned would fire instantly, the dwell having "held" across a period when
+  nothing was checked. (3) The `Shooter` owns its mechanical cycle, so asking to
+  fire every tick still yields at most one shot per cycle.
+- **Firing is a state machine, not a sleep.** `fire()` returns immediately and
+  `update()` advances rest → firing → retracting on wall-clock deadlines. A
+  blocking `sleep(0.3)` would exceed the 100 ms slow-tick budget on every shot
+  and freeze the drive outputs at whatever they last were.
+- **The launcher is ticked by `Robot`, not by the controller.** A mode switch or
+  e-stop mid-pulse stops `update()` being called, and the servo must still
+  retract instead of stalling against its stop with the mechanism cocked.
+- **FOMO fires on bearing alone.** Arrival can never latch without `size`, so
+  requiring it there would mean a robot that aligns perfectly and never shoots.
+- **No launcher on the build?** `RS_SHOOTER_ENABLED=0` (the default) leaves
+  `Robot.shooter` as `None` and `shooter_align` behaves exactly like
+  `object_align` — it aligns and never fires.
+
+The controller depends on a structural `ShooterLike` protocol (`fire()`/`stop()`)
+rather than importing the hardware module, the same rule that keeps controllers
+out of `sensors/`. So it unit-tests against a trivial fake
+(`tests/test_shooter_align.py`) and a different launcher — solenoid, relay,
+flywheel ESC — drops in without touching the control logic.
+
+> Bring-up is in `packaging/robot.env`, and step 1 is *unloaded, on blocks*. Use
+> `tools/servo_sweep.py` on the shooter channel to find the rest/fire angles:
+> wrong angles stall the servo against a mechanical stop and it will heat up and
+> draw current until someone notices.
+
 ---
 
 ## 7. The base station
@@ -516,10 +581,15 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
-| `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `waypoint`. |
+| `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
 | `RS_GPS_ENABLED` / `RS_GPS_PORT` / `RS_GPS_BAUD` | `1` / `/dev/ttyAMA0` / `9600` | NEO-6M reader. |
+| `RS_SHOOTER_ENABLED` / `RS_SHOOTER_CHANNEL` | `0` / `2` | Servo launcher. Channels 0–1 are the drive ESCs. |
+| `RS_SHOOTER_REST` / `RS_SHOOTER_FIRE` | `-30` / `30` | Home and fire angles (find with `tools/servo_sweep.py`). |
+| `RS_SHOOTER_FIRE_S` / `RS_SHOOTER_RETRACT_S` | `0.35` / `0.35` | Hold at the fire angle, then settle before re-arming. |
+| `RS_SHOOTER_DWELL` / `RS_SHOOTER_COOLDOWN` | `0.5` / `2.0` | Hold the aim this long before firing; min seconds between shots. |
+| `RS_SHOOTER_REQUIRE_ARM` / `RS_SHOOTER_REQUIRE_ARRIVED` / `RS_SHOOTER_MAX_SHOTS` | `1` / `1` / `0` | Firing gates; magazine size (0 = unlimited). |
 
 **Base station (`run_basestation.py`):**
 
@@ -605,5 +675,11 @@ GPS exists.
   missing or stale fix.
 - **Fleet addressing** — robots ignore any message not addressed to their id or
   `"all"`, so one channel can't cross-drive robots.
-- **Clean shutdown** — SIGINT/SIGTERM bring motors to neutral and stop all
-  threads.
+- **Clean shutdown** — SIGINT/SIGTERM bring motors to neutral, park the shooter
+  at its rest angle, and stop all threads.
+- **Shooter arming is never sticky** — firing requires an explicit `arm_shooter`,
+  and the latch is dropped on e-stop and on leaving the mode. `clear_estop` alone
+  never resumes a pending shot.
+- **Shooter dwell** — the aim must hold for `dwell` seconds before a shot, and the
+  timer resets on any gap in control ticks, so time spent e-stopped or paused can
+  never count toward it.

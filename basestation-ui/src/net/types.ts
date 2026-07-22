@@ -3,7 +3,12 @@
 //   outbound: basestation/app.py handle_action()
 
 /** Drive/autonomy mode a robot can be in. */
-export type Mode = "teleop" | "object_align" | "waypoint" | (string & {});
+export type Mode =
+  | "teleop"
+  | "object_align"
+  | "shooter_align"
+  | "waypoint"
+  | (string & {});
 
 export type LatLon = [number, number];
 
@@ -20,6 +25,15 @@ export interface VisionStatus {
   age?: number; // seconds since this detection
 }
 
+/** Shooter state, present only while shooter_align is the active mode
+ *  (robot/control/shooter_align.py::status). */
+export interface ShooterStatus {
+  armed: boolean; // operator has permitted firing
+  shots: number; // rounds fired this session
+  ready: boolean; // on target and dwelling toward a shot
+  cool: number; // seconds left on the cooldown, 0 when clear
+}
+
 /** One robot in a fleet snapshot (fleet.py::FleetManager.snapshot). */
 export interface Robot {
   robot_id: string;
@@ -33,6 +47,7 @@ export interface Robot {
   heading: number | null; // degrees, 0=N, CW-positive (BNO055)
   vision: VisionStatus | null; // null when the robot has vision disabled
   imu_calib: number[] | null; // (sys, gyro, accel, mag), each 0-3
+  shooter?: ShooterStatus | null; // absent unless shooter_align is active
   online: boolean;
   age: number | null; // seconds since last telemetry, or null
   trail: LatLon[]; // breadcrumb of past positions
@@ -62,6 +77,9 @@ export type Action =
   | { action: "estop"; robot_id: string }
   | { action: "clear_estop"; robot_id: string }
   | { action: "route"; robot_id: string; waypoints: LatLon[] }
-  | { action: "drive"; robot_id: string; throttle: number; steer: number };
+  | { action: "drive"; robot_id: string; throttle: number; steer: number }
+  | { action: "arm_shooter"; robot_id: string }
+  | { action: "disarm_shooter"; robot_id: string }
+  | { action: "fire"; robot_id: string };
 
 export type ConnState = "connecting" | "live" | "reconnecting";

@@ -89,6 +89,11 @@ class ObjectAlignController(Controller):
         self._last_stamp: Optional[float] = None
         self._steer = 0.0
         self._aligned = False
+        # The sample this tick acted on (None when nothing is currently seen).
+        # Subclasses need it to answer "aligned on *what*" — shooter_align gates
+        # firing on whether the detection carries size, which aligned()/arrived()
+        # alone can't distinguish from "no target at all".
+        self._last_detection: Optional[Detection] = None
 
     def set_detection_provider(self, provider: DetectionProvider) -> None:
         self.detection_provider = provider
@@ -102,6 +107,7 @@ class ObjectAlignController(Controller):
         self._last_stamp = None
         self._steer = 0.0
         self._aligned = False
+        self._last_detection = None
         # Treat activation as "just saw it" so we sit still for search_after
         # instead of immediately spinning on entry to the mode.
         self._last_seen = time.monotonic()
@@ -113,6 +119,10 @@ class ObjectAlignController(Controller):
     def arrived(self) -> bool:
         """True once stopped at the standoff distance (telemetry)."""
         return self._arrived
+
+    def last_detection(self) -> Optional[Detection]:
+        """The sample the last update() acted on, or None if nothing was seen."""
+        return self._last_detection
 
     def update(self, dt: float) -> Optional[DriveCommand]:
         if self.detection_provider is None:
@@ -129,9 +139,11 @@ class ObjectAlignController(Controller):
             self._aligned = False
             self._last_stamp = None
             self._steer = 0.0
+            self._last_detection = None
             return self._search(now)
 
         self._last_seen = now
+        self._last_detection = d
         self._last_error_x = d.error_x
         self._aligned = abs(d.error_x) <= self.aligned_tolerance
 
