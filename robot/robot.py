@@ -23,6 +23,7 @@ from .sensors.camera import Camera
 from .sensors.detector import MockDetector, ObjectDetector
 from .sensors.fpv import FPVStreamer
 from .sensors.gps import GPS
+from .sensors.imx500 import IMX500Detector, resolve_backend
 from .sensors.pose import PoseEstimator
 
 # Log a warning if a control tick's work (excluding the sleep) exceeds this. A
@@ -110,25 +111,44 @@ class Robot:
         need_camera = config.camera.enabled and (
             (config.vision.enabled and not mock_det) or config.fpv.enabled
         )
-        self.camera: Optional[Camera] = Camera(config.camera) if need_camera else None
+        # Which detector we run also decides which capture backend to open (an
+        # IMX500 detector needs the camera that loaded the sensor's network), so
+        # resolve it BEFORE constructing the camera. Skipped entirely for the
+        # mock, which touches no hardware.
+        self.vision_backend = (
+            resolve_backend(config.vision, config.camera)
+            if (config.vision.enabled and not mock_det) else "mock" if mock_det else "off"
+        )
+        self.camera: Optional[Camera] = (
+            Camera(config.camera, config.vision) if need_camera else None
+        )
 
-        # Edge Impulse object detection feeds object_align. Reads frames from the
-        # shared camera and runs the model on its own thread; detection() is a
-        # cheap cached lookup, so inference (50-200ms) never lands inside a
-        # control tick. No model / no camera / no deps -> inert, object_align holds.
+        # Object detection feeds object_align. Either backend reads from the
+        # shared camera on its own thread and caches the result; detection() is a
+        # cheap cached lookup, so neither Edge Impulse inference (50-200ms) nor a
+        # tensor decode ever lands inside a control tick. No model / no camera /
+        # no deps -> inert, object_align holds.
         self.detector = None
         if config.vision.enabled:
-            self.detector = MockDetector() if mock_det else ObjectDetector(config.vision, self.camera)
+            if mock_det:
+                self.detector = MockDetector()
+            elif self.vision_backend == "imx500":
+                self.detector = IMX500Detector(config.vision, self.camera)
+            else:
+                self.detector = ObjectDetector(config.vision, self.camera)
 
         # First-person live video to the base station. Independent of the model:
-        # the feed works with just a camera, no Edge Impulse needed. If a real
-        # detector is running, its boxes are drawn onto the feed so you can see
-        # what was detected (the mock has no real frames to annotate).
+        # the feed works with just a camera and no detection stack at all. If a
+        # real detector is running, its boxes are drawn onto the feed so you can
+        # see what was detected — keyed on the overlays() capability rather than
+        # a backend type, so both real detectors qualify and the mock (which has
+        # no real frames to annotate) doesn't.
         self.fpv: Optional[FPVStreamer] = (
             FPVStreamer(config.fpv, self.camera, config.robot_id) if config.fpv.enabled else None
         )
-        if self.fpv is not None and isinstance(self.detector, ObjectDetector):
-            self.fpv.set_overlay_provider(self.detector.overlays)
+        overlays = getattr(self.detector, "overlays", None)
+        if self.fpv is not None and overlays is not None:
+            self.fpv.set_overlay_provider(overlays)
 
         # Give the waypoint controller the fused pose source and the IMU yaw-rate
         # (for the heading PID's measured derivative).
@@ -210,7 +230,8 @@ class Robot:
         if self.imu is not None:
             self.imu.start()
         # Camera before its consumers (detector, FPV) so frames are flowing when
-        # they start; the detector is heaviest (spawns the .eim subprocess).
+        # they start; the detector is heaviest (it spawns the .eim subprocess, or
+        # waits on the sensor's network upload).
         if self.camera is not None:
             self.camera.start()
         if self.detector is not None:

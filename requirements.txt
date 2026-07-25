@@ -23,7 +23,18 @@ uvicorn[standard]>=0.27
 pygame>=2.5          # PS4 controller input, cross-platform
 
 # --- Vision / object_align autonomy (Raspberry Pi only) ---
-# Edge Impulse object detection. Linux-only (it shells out to a compiled .eim
+# Two interchangeable detection backends; install ONE. RS_VISION_BACKEND picks.
+#
+# 1) IMX500 — Raspberry Pi AI Camera. The network runs on the sensor, so there's
+#    no CPU inference and no Python package beyond picamera2:
+#      sudo apt install python3-picamera2 imx500-all
+#    imx500-all pulls the firmware, the Sony model zoo (/usr/share/imx500-models/,
+#    .rpk files) and the picamera2 IMX500 helpers. The .rpk is DATA the sensor
+#    loads — no chmod +x, unlike the .eim below. Nothing here goes in
+#    pyproject.toml either: picamera2 is a system package on Bookworm.
+#    Verify with:  tools/detector_selftest.py --backend imx500
+#
+# 2) Edge Impulse object detection. Linux-only (it shells out to a compiled .eim
 # binary), so it stays out of pyproject.toml the same way fusion_hat and the
 # BNO055 stack do — adding it there would break `uv sync` on a Mac.
 #   pip install edge_impulse_linux

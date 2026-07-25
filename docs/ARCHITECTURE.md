@@ -111,8 +111,9 @@ robot/                        # runs on the rover Pi (also imported by the base 
     gps.py                    Adafruit GPS reader → (lat, lon, track angle)
     bno085.py                 BNO085 IMU → absolute heading + yaw rate
     pose.py                   GPS position + IMU-or-track-angle heading → pose()
-    camera.py                 shared frame capture (picamera2 → OpenCV → none)
+    camera.py                 shared frame capture (IMX500 → picamera2 → OpenCV → none)
     detector.py               Edge Impulse .eim runner → Detection
+    imx500.py                 Sony IMX500 on-sensor detection → Detection
     fpv.py                    JPEG-over-UDP live video → base station
 run_robot.py                  robot entry point (env + CLI → RobotConfig)
 
@@ -379,15 +380,41 @@ and track angle — walk it in a straight line and watch the track angle settle.
 > the driver **system-wide** (the service runs as root): `sudo pip install
 > adafruit-circuitpython-gps`.
 
-**Object detection (`sensors/detector.py`) and `object_align`.** Same shape as the
-GPS and IMU readers: a background thread owns the camera and the Edge Impulse
-model, and the control loop only ever calls `detection()` — a cheap locked read.
-This is not a stylistic choice. Inference is 50–200 ms and the tick budget is a
-few ms, so running the model inline would trip the slow-tick watchdog every frame
-and make the robot unsteerable.
+**Object detection and `object_align`.** Same shape as the GPS and IMU readers: a
+background thread owns the perception work, and the control loop only ever calls
+`detection()` — a cheap locked read. This is not a stylistic choice. Inference is
+50–200 ms and the tick budget is a few ms, so running a model inline would trip
+the slow-tick watchdog every frame and make the robot unsteerable.
+
+There are **two interchangeable backends**, chosen by `RS_VISION_BACKEND` and
+resolved once at startup by `sensors/imx500.resolve_backend()`:
+
+| | `edge_impulse` (`sensors/detector.py`) | `imx500` (`sensors/imx500.py`) |
+|---|---|---|
+| Where inference runs | the Pi's CPU, from a compiled `.eim` | **inside the sensor** (Raspberry Pi AI Camera) |
+| Pi cost per frame | 50–200 ms, ~one core | a tensor decode, well under 1 ms |
+| Model file | `.eim`, a binary the Pi **executes** (`chmod +x`) | `.rpk`, data the sensor loads (no chmod) |
+| Camera | any (CSI or USB/V4L2) | the AI Camera only |
+| `Detection.size` | `None` on FOMO models — no approach | always available |
+| `hfov_deg` | the **post-crop** FOV (~50°) | the camera's **real** FOV (~66°) |
+
+They present the identical interface — `start/stop/detection/overlays/telemetry`,
+including the staleness contract below — so everything downstream is unchanged.
+`auto` picks `imx500` only when an AI Camera is attached *and* its `.rpk` exists;
+otherwise it falls back to Edge Impulse, so an existing rover never has its model
+swapped out from under it by an upgrade.
+
+The IMX500's one structural difference is that its results arrive as **libcamera
+metadata attached to each frame**, not as something computed from the frame
+afterwards. `sensors/camera.py` therefore caches frames and metadata *together*
+(`frame_meta_and_stamp()`) and the detector opens nothing itself — pairing them
+anywhere else would let boxes drift a frame out of step with the pixels they
+describe. The decode itself lives in `imx500.Decoder`, which
+`tools/detector_selftest.py` drives directly, so the bring-up tool and the rover
+cannot disagree about coordinates.
 
 `ObjectAlignController` consumes an injected `detection_provider() ->
-Optional[Detection]`, so it neither knows nor cares that Edge Impulse is behind
+Optional[Detection]`, so it neither knows nor cares which backend is behind
 it, and it unit-tests with a stub provider on a laptop with no camera
 (`tests/test_object_align.py`). It faces the target, approaches, and stops at a
 standoff; on loss it sweeps back toward the last sighting and then gives up.
@@ -407,23 +434,36 @@ Details worth knowing:
   feeds `-yaw_rate` (deg/s) straight in. Here the error is normalized to
   `[-1, 1]` across `hfov_deg`, so the same rate must be scaled by `2/hfov_deg` —
   ~25–60× smaller. This is the easiest thing in the file to get wrong.
-- **FOMO can't do standoff.** FOMO reports centroids with fixed cell-sized boxes,
-  so object size is unavailable; `Detection.size` is `None` and the controller
-  degrades to align-only rather than driving at the target blind. Export a
-  YOLO-style (`object_detection`) model if you want approach.
-- **Coordinates are the model's, not the camera's.** `get_features_from_image()`
-  resizes and *center-crops* to the model input, so boxes are normalized against
-  `image_input_width/height`. The crop is centered (alignment stays correct) but
-  discards ~25% of the width at 640×480 — which is why `hfov_deg` must be the
-  **post-crop** FOV.
-- **Graceful degradation** — no `edge_impulse_linux`, no model, a model that isn't
-  `chmod +x`, or no camera each log one line and leave the detector inert;
-  `object_align` simply holds still.
+- **FOMO can't do standoff** (Edge Impulse only). FOMO reports centroids with
+  fixed cell-sized boxes, so object size is unavailable; `Detection.size` is
+  `None` and the controller degrades to align-only rather than driving at the
+  target blind. Export a YOLO-style (`object_detection`) model if you want
+  approach. The IMX500 zoo is all real bounding-box detectors, so this caveat
+  doesn't apply there.
+- **Which rectangle the coordinates are relative to differs.** On Edge Impulse,
+  `get_features_from_image()` resizes and *center-crops* to the model input, so
+  boxes are normalized against `image_input_width/height`; the crop is centered
+  (alignment stays correct) but discards ~25% of the width at 640×480 — which is
+  why `hfov_deg` must be the **post-crop** FOV. On the IMX500,
+  `convert_inference_coords()` maps the sensor's boxes back to full-frame pixels
+  against the same request's crop metadata, so nothing is discarded and
+  `hfov_deg` is the camera's real FOV. Both then normalize to the same
+  `[-1, 1]` the controller expects — but **`standoff_size` must be recalibrated
+  if you switch backends**, since the denominators differ.
+- **Graceful degradation** — a missing runtime, a missing model, an `.eim` that
+  isn't `chmod +x`, an AI Camera that doesn't come up, or no camera at all each
+  log one line and leave the detector inert; `object_align` simply holds still.
+  Vision failing must never cost the rover its ESCs or its radio, which is why
+  every expensive open (the `.eim` subprocess, the sensor's network upload)
+  happens on a background thread rather than in `Robot.start()`.
 
-> Bring-up and standoff calibration both go through `tools/detector_selftest.py`:
-> it checks deps/chmod/labels/`model_type`/fps, and `--save` dumps the model's
-> cropped input so you can confirm the colour order and framing by eye. Park at
-> your stop distance and read the printed `size` — that's `RS_VISION_STANDOFF`.
+> Bring-up and standoff calibration both go through `tools/detector_selftest.py`,
+> which tests whichever backend the rover would use (or `--backend` to force
+> one). It checks deps, the model file, labels and rate, and `--save` dumps a
+> frame — the model's cropped input on Edge Impulse (confirm colour order and
+> framing by eye), the full frame with the sensor's boxes drawn on the IMX500
+> (confirm the boxes land on the objects). Park at your stop distance and read
+> the printed `size` — that's `RS_VISION_STANDOFF`.
 
 **FPV live video (`sensors/fpv.py`, `comms/video_udp.py`).** The camera is a
 single shared reader (`sensors/camera.py`) because a V4L2/CSI device can't be
@@ -442,9 +482,10 @@ station's IP.
 When a model *is* running, the streamer draws the detection boxes onto each
 frame before encoding (green for the tracked target, amber for the rest). The
 boxes come from the detector via an injected `overlay_provider`, in full-frame
-pixels — the detector inverts Edge Impulse's resize + center-crop
-(`_to_full_frame`) so a box the model reported in its cropped input space lands
-in the right place on the 640×480 feed. Drawing happens on a copy of the frame,
+pixels — Edge Impulse's detector inverts its resize + center-crop
+(`_to_full_frame`) so a box reported in the model's cropped input space lands in
+the right place on the 640×480 feed, and the IMX500's uses
+`convert_inference_coords()` for the same job. Drawing happens on a copy of the frame,
 never the shared one, and only the freshest boxes are used, so they lag the
 video by at most a frame.
 
@@ -608,6 +649,13 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
 | `RS_GPS_ENABLED` / `RS_GPS_PORT` / `RS_GPS_BAUD` / `RS_GPS_RATE_MS` | `1` / `/dev/ttyAMA0` / `9600` / `1000` | Adafruit GPS reader; `RATE_MS` is the PMTK220 fix interval. |
 | `RS_HEADING_SOURCE` | `auto` | `auto` (IMU when calibrated, else the GPS track angle) \| `gps` \| `imu`. |
+| `RS_VISION_BACKEND` | `auto` | `auto` \| `edge_impulse` \| `imx500` (AI Camera, on-sensor). |
+| `RS_VISION_MODEL` | `/var/lib/roversoftware/model.eim` | Edge Impulse model. Must be `chmod +x`. |
+| `RS_VISION_IMX500_MODEL` | `…/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk` | Network uploaded to the IMX500 sensor (`apt install imx500-all`). |
+| `RS_VISION_IMX500_LABELS` / `_IOU` / `_MAX_DET` | `` / `0.65` / `10` | Labels file (empty = embedded in the `.rpk`), NMS overlap, boxes per frame. |
+| `RS_VISION_LABEL` / `RS_VISION_CONF` | `` / `0.6` | Label to track (empty = any); score floor. |
+| `RS_VISION_STANDOFF` / `RS_VISION_HFOV` | `0.45` / `50` | **Both backend-dependent** — calibrate with `tools/detector_selftest.py`; HFOV is post-crop on Edge Impulse, the real ~66° on the IMX500. |
+| `RS_CAMERA_DEVICE` | `auto` | `auto` \| `imx500` \| `picamera2` \| `/dev/videoN` \| index. Set for you when the IMX500 backend is selected. |
 | `RS_SHOOTER_ENABLED` / `RS_SHOOTER_CHANNEL` | `0` / `2` | Servo launcher. Channels 0–1 are the drive ESCs. |
 | `RS_SHOOTER_REST` / `RS_SHOOTER_FIRE` | `-30` / `30` | Home and fire angles (find with `tools/servo_sweep.py`). |
 | `RS_SHOOTER_FIRE_S` / `RS_SHOOTER_RETRACT_S` | `0.35` / `0.35` | Hold at the fire angle, then settle before re-arming. |

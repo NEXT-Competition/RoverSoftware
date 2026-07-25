@@ -58,7 +58,7 @@ robot/
     manager.py          ControlManager: modes + e-stop
     teleop.py           drive from base-station commands (with link failsafe)
     pid.py              reusable PID
-    object_align.py     Edge Impulse object alignment — inject a detection provider
+    object_align.py     object alignment — inject a detection provider
     detection.py        the Detection contract the controller consumes
     waypoint.py         autonomy scaffold — inject a GPS pose provider
   robot.py              wires it all together; the control loop
@@ -326,12 +326,21 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
 
 ## Roadmap (the seams are already here)
 
-- **Object-align autonomy** — ✅ done: an Edge Impulse `.eim` model detects the
-  target and `ObjectAlignController` faces it, approaches, and stops at a
-  standoff. Drop a model at `RS_VISION_MODEL` and run `--mode object_align`;
-  `tools/detector_selftest.py` covers bring-up and standoff calibration. Export a
-  YOLO-style (`object_detection`) model — FOMO reports centroids, not sized
-  boxes, so it can align but never approach.
+- **Object-align autonomy** — ✅ done: a model detects the target and
+  `ObjectAlignController` faces it, approaches, and stops at a standoff. Two
+  interchangeable detection backends (`RS_VISION_BACKEND`):
+  - `imx500` — the **Raspberry Pi AI Camera** (Sony IMX500) runs the network on
+    the sensor itself, so the Pi spends no CPU on inference and every model
+    reports real sized boxes. `sudo apt install python3-picamera2 imx500-all`,
+    then `--mode object_align`.
+  - `edge_impulse` — a compiled `.eim` run on the Pi's CPU; works with any
+    camera. Drop a model at `RS_VISION_MODEL`. Export a YOLO-style
+    (`object_detection`) model — FOMO reports centroids, not sized boxes, so it
+    can align but never approach.
+
+  `auto` uses the AI Camera when one is attached, else Edge Impulse.
+  `tools/detector_selftest.py` covers bring-up and standoff calibration for
+  whichever backend you're on.
 - **GPS waypoint autonomy** — ✅ done: an Adafruit Ultimate GPS
   (MTK3339/PA1616D) is read with `adafruit_gps` into `(lat, lon, heading)` and
   passed as `WaypointController`'s `pose_provider`. Heading is the module's
