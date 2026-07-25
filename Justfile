@@ -182,9 +182,10 @@ bs-config:
     ssh -t {{bs_target}} "sudo nano /etc/roversoftware/basestation.env && sudo systemctl restart {{bs_service}}"
 
 # ── offline maps ──
-# Build a tile cache for your operating area (run WITH internet), then push it to
-# the base-station Pi so the dashboard map works offline. Args pass through to
-# tools/fetch_tiles.py --help. Examples:
+# Build a satellite-imagery tile cache for your operating area (run WITH
+# internet), then push it to the base-station Pi so the dashboard map works
+# offline. Imagery is JPEG and ~2-3x heavier than street tiles, so keep the bbox
+# tight. Args pass through to tools/fetch_tiles.py --help. Examples:
 #   just bs-fetch-tiles --center 37.7749 -122.4194 --radius-km 5 --max-zoom 17
 #   just bs-fetch-tiles --bbox -122.52 37.70 -122.36 37.81 --max-zoom 17
 bs-fetch-tiles *ARGS:

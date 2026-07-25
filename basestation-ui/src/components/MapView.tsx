@@ -1,10 +1,26 @@
 import { useEffect, useRef } from "preact/hooks";
 import L from "leaflet";
-import { robots, selected, selectRobot, tilesMaxZoom, tilesUrl } from "../net/ws.ts";
+import {
+  robots,
+  selected,
+  selectRobot,
+  tilesAttribution,
+  tilesMaxZoom,
+  tilesUrl,
+} from "../net/ws.ts";
 import { addWaypoint, routeMode, routePts } from "../state/route.ts";
 import type { LatLon, Robot } from "../net/types.ts";
 
-const DEFAULT_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+// Satellite imagery, not a street map: driving a rover is about the terrain you
+// can see (grass, gravel, tree lines), and rural test sites are mostly blank on
+// a road basemap. Esri World Imagery needs no API key. Used only until the
+// bridge's first fleet message arrives with the configured `tiles` URL.
+const DEFAULT_TILES =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+const DEFAULT_ATTRIBUTION = "Imagery © Esri, Maxar, Earthstar Geographics";
+// Global imagery bottoms out around z19. Past that, upscale the deepest tile we
+// can actually get rather than requesting tiles that come back blank.
+const IMAGERY_MAX_NATIVE_ZOOM = 19;
 // 1x1 transparent PNG so uncached (204) tiles render blank, not broken.
 const BLANK_TILE =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -43,6 +59,7 @@ export function MapView() {
   const sel = selected.value;
   const tUrl = tilesUrl.value;
   const tMax = tilesMaxZoom.value;
+  const tAttr = tilesAttribution.value;
   const rMode = routeMode.value;
   const rPts = routePts.value;
   routeModeRef.current = rMode;
@@ -51,12 +68,17 @@ export function MapView() {
   useEffect(() => {
     // Touch-first: no +/- control (it collided with the top bar); pinch and
     // scroll-wheel zoom stay enabled by default.
-    const map = L.map(elRef.current!, { zoomControl: false, attributionControl: false })
+    const map = L.map(elRef.current!, { zoomControl: false })
       .setView([37.7749, -122.4194], 17);
     mapRef.current = map;
+    // Imagery licences want a visible credit, but a kiosk doesn't need the
+    // "Leaflet" link — keep the control, drop the prefix.
+    map.attributionControl.setPrefix(false);
     tileRef.current = L.tileLayer(DEFAULT_TILES, {
       maxZoom: 20,
+      maxNativeZoom: IMAGERY_MAX_NATIVE_ZOOM,
       errorTileUrl: BLANK_TILE,
+      attribution: DEFAULT_ATTRIBUTION,
     }).addTo(map);
 
     map.on("click", (e: L.LeafletMouseEvent) => {
@@ -74,11 +96,17 @@ export function MapView() {
     const map = mapRef.current;
     if (!map) return;
     const url = tUrl || DEFAULT_TILES;
-    const opts: L.TileLayerOptions = { maxZoom: 20, errorTileUrl: BLANK_TILE };
-    if (tMax) opts.maxNativeZoom = tMax; // upscale past the offline cache depth
+    const opts: L.TileLayerOptions = {
+      maxZoom: 20,
+      // Cache depth if we know it, else the imagery source's global limit;
+      // either way Leaflet upscales instead of asking for tiles that don't exist.
+      maxNativeZoom: tMax ?? IMAGERY_MAX_NATIVE_ZOOM,
+      errorTileUrl: BLANK_TILE,
+      attribution: tAttr ?? (tUrl ? undefined : DEFAULT_ATTRIBUTION),
+    };
     if (tileRef.current) map.removeLayer(tileRef.current);
     tileRef.current = L.tileLayer(url, opts).addTo(map);
-  }, [tUrl, tMax]);
+  }, [tUrl, tMax, tAttr]);
 
   // ---- robots: markers + trails (runs each render) ----
   useEffect(() => {

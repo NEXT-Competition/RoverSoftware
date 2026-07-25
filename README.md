@@ -153,12 +153,13 @@ never invents robots, so anything you see is real telemetry from the radio.
 In the browser:
 - **Sidebar** lists every robot with mode, battery, link status, and live track speeds. Click one to **select** it.
 - **Gamepad** (left stick = throttle, right stick = steer) drives the *selected* robot. Buttons e-stop / clear / switch mode.
-- **Map** shows each robot as a heading arrow with a position trail.
+- **Map** shows each robot as a heading arrow with a position trail, over **satellite imagery** (Esri World Imagery by default — no API key) so you navigate by visible terrain rather than street names.
 - **Route**: toggle *Add waypoints*, click the map to drop points, **Send route** — the robot switches to waypoint mode and drives it.
 
 Useful flags: `--robots N` (sim count), `--origin lat,lon` (sim start),
 `--no-controller`, `--tiles <url-template>` (point at a local tile server for
-offline field use), `--host/--web-port`.
+offline field use), `--tiles-upstream <url-template>` (swap the imagery source,
+e.g. a MapTiler satellite URL with your key), `--host/--web-port`.
 
 ### Touch UI (Deno Desktop / iPad) — `basestation-ui/`
 

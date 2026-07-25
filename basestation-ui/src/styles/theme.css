@@ -661,6 +661,18 @@ body {
   border: none !important;
   box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.8);
 }
+/* Basemap credit: required by the imagery licence, so it stays visible — but
+   small and dim enough not to compete with telemetry on the kiosk. */
+.leaflet-control-attribution {
+  background: rgba(0, 0, 0, 0.45) !important;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 5px 0 0 0;
+}
+.leaflet-control-attribution a {
+  color: var(--muted);
+}
 .wp-tip {
   background: var(--warn);
   color: #1a1206;

@@ -6,6 +6,10 @@ run fully offline, fills cache misses from an upstream tile server and writes
 them back — so coverage grows as you pan, and the base station keeps working
 when the network later goes away.
 
+The .png in the request path is just Leaflet's URL template: the bytes we serve
+are whatever the upstream sent. Satellite imagery (the default basemap) is JPEG,
+so callers ask content_type() what a tile actually is rather than assuming PNG.
+
 MBTiles stores rows in TMS order (origin bottom-left) while Leaflet/XYZ uses
 origin top-left, so we flip Y on every read and write.
 
@@ -29,6 +33,37 @@ CREATE TABLE IF NOT EXISTS tiles (
 CREATE UNIQUE INDEX IF NOT EXISTS tile_index
     ON tiles (zoom_level, tile_column, tile_row);
 """
+
+
+def content_type(data: bytes) -> str:
+    """Guess a tile's MIME type from its magic bytes (JPEG imagery vs PNG maps).
+
+    A cache built before a basemap switch can hold both formats, so sniff each
+    tile rather than trusting the MBTiles 'format' metadata.
+    """
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def attribution_for(url: Optional[str]) -> Optional[str]:
+    """Credit line for a tile source, or None if we don't recognise the host.
+
+    Imagery licences require visible credit, and the browser usually loads tiles
+    from our own /tiles/... proxy — so the bridge derives this from the upstream
+    URL it actually fetches and ships it to the dashboard in the fleet snapshot.
+    """
+    if not url:
+        return None
+    if "arcgisonline.com" in url:
+        return "Imagery © Esri, Maxar, Earthstar Geographics"
+    if "maptiler.com" in url:
+        return "© MapTiler © OpenStreetMap contributors"
+    if "openstreetmap.org" in url:
+        return "© OpenStreetMap contributors"
+    return None
 
 
 class TileStore:
@@ -114,7 +149,7 @@ class TileStore:
             return None  # offline / upstream error -> blank tile
 
     def get(self, z: int, x: int, y: int) -> Optional[bytes]:
-        """Return PNG bytes for a tile, or None if it can't be served."""
+        """Return the image bytes for a tile, or None if it can't be served."""
         with self._lock:
             data = self._db_get(z, x, y)
         if data is not None:

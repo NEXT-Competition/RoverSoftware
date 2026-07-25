@@ -86,7 +86,8 @@ export async function proxyVideo(
  * Proxy a raster map tile from the Python bridge's /tiles/{z}/{x}/{y}.png.
  * Status is preserved so the bridge's 204 (uncached + offline -> blank tile)
  * passes through and Leaflet renders it as a transparent tile rather than a
- * broken-image icon.
+ * broken-image icon. The bridge's content-type is passed through too — the
+ * default satellite basemap serves JPEG, not the PNG the path suggests.
  */
 export async function proxyTiles(
   pathname: string,
@@ -100,7 +101,7 @@ export async function proxyTiles(
     return new Response(r.body, {
       status: r.status,
       headers: {
-        "content-type": "image/png",
+        "content-type": r.headers.get("content-type") ?? "image/png",
         "cache-control": "public, max-age=86400",
       },
     });

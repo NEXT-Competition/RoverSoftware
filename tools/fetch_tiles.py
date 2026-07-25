@@ -16,8 +16,10 @@ when configured, falls back online for anything not cached.
 Tiles are stored TMS-flipped per the MBTiles spec, so the file also opens in
 QGIS / other MBTiles tools. Re-running resumes: tiles already present are kept.
 
-Be a good citizen: the default source is the public OpenStreetMap server, whose
-usage policy discourages bulk downloads. Keep areas modest, leave the rate low,
+The default source is Esri World Imagery — satellite, no API key — matching the
+dashboard's basemap. Imagery is JPEG and heavier than street tiles (~50 KB each,
+so a zoom level costs roughly 2-3x an OSM one); prefer a tight bbox over a deep
+--max-zoom. Be a good citizen either way: keep areas modest, leave the rate low,
 and for anything large point --url at your own/commercial tile source.
 """
 
@@ -38,6 +40,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS tile_index
 """
 
 _MAX_LAT = 85.05112878  # web-mercator clamp
+
+# Same satellite basemap the dashboard shows by default (run_basestation.py).
+SATELLITE_TILES = (
+    "https://server.arcgisonline.com/ArcGIS/rest/services/"
+    "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+)
 
 
 def deg2num(lat, lon, z):
@@ -75,8 +83,8 @@ def main():
     p.add_argument("--min-zoom", type=int, default=12)
     p.add_argument("--max-zoom", type=int, default=17)
     p.add_argument("--out", default="dist/tiles.mbtiles", help="output .mbtiles path")
-    p.add_argument("--url", default="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-                   help="tile URL template")
+    p.add_argument("--url", default=SATELLITE_TILES,
+                   help="tile URL template (default: Esri World Imagery, satellite)")
     p.add_argument("--rate", type=float, default=2.0, help="max tiles/sec (be polite)")
     p.add_argument("--user-agent", default="roversoftware-basestation tile fetch (offline map)")
     p.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
@@ -97,7 +105,7 @@ def main():
         plan.append((z, xs, ys))
         total += len(xs) * len(ys)
 
-    est_mb = total * 20 / 1024  # ~20 KB/tile rule of thumb
+    est_mb = total * 45 / 1024  # ~45 KB/tile for imagery (street tiles are lighter)
     print(f"area: W{west:.4f} S{south:.4f} E{east:.4f} N{north:.4f}")
     print(f"zoom {args.min_zoom}-{args.max_zoom}: {total} tiles (~{est_mb:.0f} MB), "
           f"~{total / max(args.rate, 0.1) / 60:.1f} min at {args.rate}/s")
@@ -142,9 +150,13 @@ def main():
                     print(f"  ! z{z}/{x}/{y}: {e}")
 
     # MBTiles metadata (so QGIS et al. and our TileStore know the extent).
+    # Record the format we actually downloaded: satellite imagery is JPEG, and
+    # claiming png here would mislead any other MBTiles reader.
+    sample = conn.execute("SELECT tile_data FROM tiles LIMIT 1").fetchone()
+    fmt = "jpg" if sample and bytes(sample[0])[:3] == b"\xff\xd8\xff" else "png"
     meta = {
         "name": "roversoftware offline tiles",
-        "format": "png",
+        "format": fmt,
         "type": "baselayer",
         "version": "1.0",
         "minzoom": str(args.min_zoom),

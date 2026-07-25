@@ -79,6 +79,7 @@ export interface FleetMessage {
   controller: ControllerStatus;
   tiles: string | null; // tile URL template the map should load
   tiles_maxzoom: number | null; // for offline upscaling (Leaflet maxNativeZoom)
+  tiles_attribution: string | null; // basemap credit line, derived from the source URL
   video?: string[]; // robot_ids with a live FPV feed right now
 }
 
