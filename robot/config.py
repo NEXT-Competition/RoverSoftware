@@ -109,12 +109,18 @@ class CameraConfig:
     # Frame source for the vision stack. Backend is auto-detected: the Pi Camera
     # (CSI ribbon) via picamera2, else a USB/V4L2 device via OpenCV, else nothing
     # (vision disables itself and the rest of the robot runs unchanged).
+    #   AI Camera:  sudo apt install python3-picamera2 imx500-all
     #   Pi Camera:  sudo apt install python3-picamera2
     #   USB webcam: pip install opencv-python
     # Kept separate from VisionConfig because the camera is a *device* — a future
     # live-video feed would want the same frames without any model involved.
+    #
+    # "imx500" is never chosen by "auto": loading the sensor's network costs tens
+    # of seconds on a cold boot, so it happens only when something actually wants
+    # on-sensor inference. VisionConfig.backend does that for you — it rewrites
+    # this field when it resolves to the IMX500 (see sensors/imx500.py).
     enabled: bool = True
-    device: str = "auto"  # auto | picamera2 | /dev/videoN | a numeric index
+    device: str = "auto"  # auto | imx500 | picamera2 | /dev/videoN | a numeric index
     width: int = 640
     height: int = 480
     fps: int = 15
@@ -122,8 +128,22 @@ class CameraConfig:
 
 @dataclass
 class VisionConfig:
-    # Edge Impulse object detection -> the object_align autonomy mode.
+    # Object detection -> the object_align autonomy mode. Two interchangeable
+    # backends; object_align cannot tell them apart.
     #
+    #   edge_impulse — a compiled `.eim` binary run on the Pi's CPU. Costs a
+    #                  core, 50-200ms/frame, works with any camera.
+    #   imx500       — the Raspberry Pi AI Camera (Sony IMX500) runs the network
+    #                  INSIDE the sensor and ships boxes out as frame metadata.
+    #                  Near-zero Pi cost, but needs that specific camera.
+    #
+    # `backend` picks one. "auto" = imx500 if an AI Camera is attached and its
+    # network file exists, else edge_impulse. Resolving it also points
+    # CameraConfig.device at the right capture backend — see
+    # sensors/imx500.resolve_backend().
+    backend: str = "auto"  # auto | edge_impulse | imx500
+
+    # --- edge_impulse backend ---
     # The model is a compiled `.eim` binary the Edge Impulse runtime EXECUTES, so
     # it must be chmod +x. Download one with:
     #   edge-impulse-linux-runner --download model.eim
@@ -133,10 +153,31 @@ class VisionConfig:
     # object size is unavailable and standoff/approach is impossible; the mode
     # degrades to align-only (turn to face, never advance). Export a YOLO-style
     # model (model_type == 'object_detection') if you want approach + standoff.
+    # (This caveat is Edge Impulse's alone — the IMX500 model zoo is all real
+    # bounding-box detectors, so approach always works there.)
     enabled: bool = True
     # Lives alongside the BNO055 calibration in the pi-owned dir postinst creates.
     # Keep .eim binaries out of git; ship them with the .deb or scp them over.
     model_path: str = "/var/lib/roversoftware/model.eim"
+
+    # --- imx500 backend ---
+    # The `.rpk` network that gets uploaded into the sensor. `sudo apt install
+    # imx500-all` drops the Sony model zoo in /usr/share/imx500-models/; this
+    # default is its general-purpose COCO detector. Unlike the .eim, this is data
+    # the sensor loads, NOT a binary the Pi runs — no chmod +x needed.
+    imx500_model: str = ("/usr/share/imx500-models/"
+                         "imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")
+    # Class-name file, one per line. Empty = use the labels embedded in the .rpk,
+    # which is right for every model-zoo network; only a custom export packaged
+    # without them needs this.
+    imx500_labels: str = ""
+    # NMS overlap threshold and cap on boxes per frame. Only the nanodet
+    # postprocess path uses the IoU (the `_pp` networks do NMS on-sensor); the
+    # cap applies to both.
+    imx500_iou: float = 0.65
+    imx500_max_detections: int = 10
+
+    # --- shared by both backends ---
     target_label: str = ""  # "" = track any label the model reports
     min_confidence: float = 0.6  # ignore boxes below this score
     max_fps: float = 10.0  # cap inference rate; it costs a core
@@ -145,15 +186,23 @@ class VisionConfig:
     # thread fail safe: no new stamps -> target ages out -> the robot stops.
     target_timeout: float = 0.5
     select: str = "largest"  # largest | confidence | centermost
-    # EFFECTIVE horizontal FOV *after* Edge Impulse's center-crop, not the
-    # camera's spec. get_features_from_image() resizes then center-crops to the
-    # model input, discarding ~25% of the width at 640x480 -> square. This scales
-    # the IMU yaw-rate into normalized error units; too high and the D term is
-    # too small, too low and the steering oscillates.
+    # Horizontal FOV the normalized error units span. This scales the IMU
+    # yaw-rate into those units; too high and the D term is too small, too low
+    # and the steering oscillates.
+    #
+    # *** Its correct value DEPENDS ON THE BACKEND. ***
+    #   edge_impulse — the EFFECTIVE FOV *after* EI's center-crop, not the
+    #                  camera's spec: get_features_from_image() resizes then
+    #                  center-crops to the model input, discarding ~25% of the
+    #                  width at 640x480 -> square. Hence this 50 deg default.
+    #   imx500       — the camera's REAL horizontal FOV (~66 deg for the AI
+    #                  Camera's stock lens). Boxes are mapped back to the full
+    #                  frame, so nothing is cropped away. Set RS_VISION_HFOV=66.
     hfov_deg: float = 50.0
-    # Stop once the box height reaches this fraction of the model input height.
-    # Calibrate it, don't guess: park at the distance you want, run
-    # tools/detector_selftest.py, and read off the printed size.
+    # Stop once the box height reaches this fraction of the frame height (of the
+    # model input height, on the edge_impulse backend). Calibrate it, don't
+    # guess: park at the distance you want, run tools/detector_selftest.py, and
+    # read off the printed size.
     standoff_size: float = 0.45
     search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
 

@@ -9,7 +9,8 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_START_MODE, RS_LOOP_HZ,
     RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD, RS_IMU_ENABLED/ADDRESS/OFFSET,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
-    RS_VISION_ENABLED/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
+    RS_VISION_ENABLED/BACKEND/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
+    RS_VISION_IMX500_MODEL/LABELS/IOU/MAX_DET,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
         MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED
@@ -79,8 +80,14 @@ def main():
     # Vision. Only the flags you actually reach for in the field get a CLI arg;
     # the rest of the tuning (confidence, fps, hfov, standoff, search speed) is
     # env-only to keep this list readable — see the module docstring.
+    parser.add_argument("--vision-backend", default=os.environ.get("RS_VISION_BACKEND", cfg.vision.backend),
+                        choices=["auto", "edge_impulse", "imx500"],
+                        help="detection backend: on-CPU Edge Impulse, or on-sensor "
+                             "IMX500 (Raspberry Pi AI Camera). auto = imx500 if one is attached")
     parser.add_argument("--vision-model", default=os.environ.get("RS_VISION_MODEL", cfg.vision.model_path),
                         help="path to the Edge Impulse .eim model (must be chmod +x)")
+    parser.add_argument("--imx500-model", default=os.environ.get("RS_VISION_IMX500_MODEL", cfg.vision.imx500_model),
+                        help="path to the IMX500 .rpk network uploaded to the sensor")
     parser.add_argument("--vision-label", default=os.environ.get("RS_VISION_LABEL", cfg.vision.target_label),
                         help="object label to track ('' = any label the model reports)")
     parser.add_argument("--no-vision", dest="vision", action="store_false",
@@ -124,7 +131,9 @@ def main():
     cfg.imu.heading_offset_deg = args.imu_offset
     cfg.imu.calibration_path = args.imu_calib
     cfg.vision.enabled = args.vision
+    cfg.vision.backend = args.vision_backend
     cfg.vision.model_path = args.vision_model
+    cfg.vision.imx500_model = args.imx500_model
     cfg.vision.target_label = args.vision_label
     cfg.camera.device = args.camera_device
     # Env-only vision tuning (see the module docstring for the full list).
@@ -137,6 +146,10 @@ def main():
     cfg.vision.standoff_size = float(os.environ.get("RS_VISION_STANDOFF", cfg.vision.standoff_size))
     cfg.vision.hfov_deg = float(os.environ.get("RS_VISION_HFOV", cfg.vision.hfov_deg))
     cfg.vision.search_speed = float(os.environ.get("RS_VISION_SEARCH_SPEED", cfg.vision.search_speed))
+    cfg.vision.imx500_labels = os.environ.get("RS_VISION_IMX500_LABELS", cfg.vision.imx500_labels)
+    cfg.vision.imx500_iou = float(os.environ.get("RS_VISION_IMX500_IOU", cfg.vision.imx500_iou))
+    cfg.vision.imx500_max_detections = int(
+        os.environ.get("RS_VISION_IMX500_MAX_DET", cfg.vision.imx500_max_detections))
     cfg.fpv.enabled = args.fpv
     cfg.fpv.base_host = args.fpv_host
     cfg.fpv.base_port = int(os.environ.get("RS_FPV_PORT", cfg.fpv.base_port))
@@ -164,7 +177,10 @@ def main():
     elif args.mock_detector:
         vision = "MOCK"
     else:
-        vision = f"{cfg.vision.model_path}"
+        # The requested backend; Robot logs the one "auto" actually resolves to.
+        model = (cfg.vision.imx500_model if cfg.vision.backend == "imx500"
+                 else cfg.vision.model_path)
+        vision = f"{cfg.vision.backend}:{os.path.basename(model)}"
         if cfg.vision.target_label:
             vision += f" [{cfg.vision.target_label}]"
     fpv = f"{cfg.fpv.base_host}:{cfg.fpv.base_port}" if cfg.fpv.enabled else "off"
