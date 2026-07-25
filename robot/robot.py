@@ -71,18 +71,21 @@ class Robot:
         self.link = XBeeLink(config.comms.port, config.comms.baud, self._inbox.put)
         self._running = False
 
-        # GPS (NEO-6M) feeds waypoint navigation and position telemetry. Reads on
-        # its own thread; pose() is a cheap cached lookup for the control loop.
-        # Disabled -> no position, and waypoint mode holds position.
+        # Adafruit Ultimate GPS feeds waypoint navigation, position telemetry and
+        # the track-angle heading. Reads on its own thread; pose() is a cheap
+        # cached lookup for the control loop. Disabled -> no position, and
+        # waypoint mode holds position.
         self.gps: Optional[GPS] = (
             GPS(config.gps.port, config.gps.baud,
-                config.gps.fix_timeout, config.gps.min_move_mps)
+                config.gps.fix_timeout, config.gps.min_move_mps,
+                config.gps.update_rate_ms)
             if config.gps.enabled else None
         )
 
-        # BNO085 IMU supplies an absolute, standstill-valid heading (the compass
-        # the GPS lacks). Reads on its own thread; heading() is a cheap cached
-        # lookup. Disabled/uncalibrated -> heading falls back to GPS course.
+        # BNO085 IMU supplies an absolute, standstill-valid heading (which the
+        # GPS track angle is not). Reads on its own thread; heading() is a cheap
+        # cached lookup. Disabled/uncalibrated -> heading falls back to the track
+        # angle (see heading_source).
         self.imu: Optional[IMU] = (
             IMU(config.imu.i2c_address, config.imu.heading_offset_deg,
                 config.imu.invert, config.imu.min_calib,
@@ -90,10 +93,10 @@ class Robot:
             if config.imu.enabled else None
         )
 
-        # Fuse GPS position + IMU heading behind one pose_provider (unchanged shape:
+        # Fuse GPS position + heading behind one pose_provider (unchanged shape:
         # () -> (lat, lon, heading_deg)), so telemetry and the waypoint controller
         # get the best heading without knowing which sensor produced it.
-        self.pose_estimator = PoseEstimator(self.gps, self.imu)
+        self.pose_estimator = PoseEstimator(self.gps, self.imu, config.heading_source)
         self.pose_provider: Optional[Callable[[], Optional[Tuple[float, float, Optional[float]]]]] = (
             self.pose_estimator.pose if (self.gps is not None) else None
         )
@@ -173,8 +176,15 @@ class Robot:
             pose = self.pose_provider()
             if pose is not None:
                 t["lat"], t["lon"], t["heading"] = pose
+        # Fix health (quality, satellites, HDOP, speed, track angle + its age).
+        # The lat/lon above says where the robot thinks it is; this says whether
+        # to believe it, which is the difference between "the GPS is broken" and
+        # "it has 3 satellites under a tree".
+        if self.gps is not None:
+            t["gps"] = self.gps.telemetry()
         # Surface IMU calibration (sys, gyro, accel, mag) so the base station can
-        # tell whether the heading is trustworthy or still falling back to GPS.
+        # tell whether the heading is trustworthy or still falling back to the
+        # GPS track angle.
         if self.imu is not None:
             t["imu_calib"] = self.imu.calibration()
         # Vision summary (target, error, size, fps) so the base station can see

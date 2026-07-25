@@ -1,28 +1,39 @@
-"""Pose fusion: GPS position + IMU heading behind one pose_provider.
+"""Pose fusion: GPS position + a heading behind one pose_provider.
 
 The waypoint controller and telemetry consume a single provider with the shape:
 
     pose() -> (lat, lon, heading_deg) or None
         heading_deg: 0 = North, clockwise-positive, or None when unknown.
 
-Historically that was just `GPS.pose`. But the NEO-6M has no compass, so its
-heading (course-over-ground) is invalid at a standstill — which is exactly when
-the rover needs to point itself at the next waypoint. The BNO055 IMU supplies an
-ABSOLUTE heading that's valid at rest. `PoseEstimator` keeps the provider shape
-identical while swapping in the better heading source:
+Two sensors can answer "which way am I facing", and they fail in opposite ways:
+
+  * The **GPS track angle** (course over ground, from the Adafruit module's
+    RMC/VTG) is a true-North heading with no calibration and no declination
+    correction — but it describes where the antenna is *travelling*, so it's
+    noise at a standstill and blind to a pivot in place.
+  * The **BNO085 IMU** gives an ABSOLUTE heading that's valid at rest — which is
+    exactly when the rover needs to point itself at the next waypoint — but only
+    once its fused calibration has converged.
+
+`PoseEstimator` keeps the provider shape identical while choosing between them:
 
   * Position (lat, lon) always comes from the GPS — the IMU can't give position
-    (no wheel encoders here, so dead-reckoning would drift). No GPS fix => None,
-    exactly as before.
-  * Heading prefers the IMU when it's calibrated (imu.heading() is not None);
-    otherwise it falls back to the GPS course-over-ground. So with the IMU absent
-    or still calibrating, behavior is byte-for-byte what it was before.
+    (no wheel encoders here, so dead-reckoning would drift). No GPS fix => None.
+  * Heading follows `heading_source`:
+      "auto" (default) — the IMU when it's calibrated, else the GPS track angle.
+                         With the IMU absent or still calibrating, this is
+                         byte-for-byte the GPS-only behavior.
+      "gps"            — the track angle only; the IMU is ignored for heading
+                         (it can still supply the yaw rate). This is the
+                         no-IMU-needed configuration.
+      "imu"            — the IMU only; heading stays None until it calibrates,
+                         rather than falling back to a course over ground.
 
 It also exposes `heading_rate()` (the IMU gyro yaw-rate) so the heading PID can
 use a clean measured derivative instead of finite-differencing a noisy heading.
 
 Everything degrades gracefully: a None `gps` (GPS disabled) yields no position;
-a None `imu` (IMU disabled) just means heading always comes from the GPS.
+a None `imu` (IMU disabled) just means heading comes from the GPS track angle.
 """
 
 from __future__ import annotations
@@ -31,27 +42,48 @@ from typing import Optional, Tuple
 
 Pose = Tuple[float, float, Optional[float]]  # (lat, lon, heading_deg | None)
 
+HEADING_SOURCES = ("auto", "gps", "imu")
+
 
 class PoseEstimator:
-    def __init__(self, gps=None, imu=None):
+    def __init__(self, gps=None, imu=None, heading_source: str = "auto"):
         self.gps = gps
         self.imu = imu
+        source = (heading_source or "auto").strip().lower()
+        if source not in HEADING_SOURCES:
+            # A typo here would silently pick a heading sensor you didn't mean,
+            # so name it and fall back to the safe default rather than raising
+            # (a bad env var must not stop the rover from booting).
+            print(f"[Pose] unknown heading_source {heading_source!r} — using 'auto' "
+                  f"(one of {', '.join(HEADING_SOURCES)})")
+            source = "auto"
+        self.heading_source = source
 
     def pose(self) -> Optional[Pose]:
         """Fused (lat, lon, heading_deg), or None when there's no position fix.
 
-        Position is from the GPS; heading is the IMU's absolute heading when it's
-        calibrated, else the GPS course-over-ground.
+        Position is from the GPS; heading follows `heading_source` (see above).
         """
         gps_fix = self.gps.pose() if self.gps is not None else None
         if gps_fix is None:
             return None  # no position -> no pose (waypoint nav needs a position)
         lat, lon, gps_heading = gps_fix
 
+        if self.heading_source == "gps":
+            return (lat, lon, gps_heading)
+
         imu_heading = self.imu.heading() if self.imu is not None else None
+        if self.heading_source == "imu":
+            return (lat, lon, imu_heading)
+
         heading = imu_heading if imu_heading is not None else gps_heading
         return (lat, lon, heading)
 
     def heading_rate(self) -> Optional[float]:
-        """IMU yaw rate in deg/s (CW+) for the heading PID's derivative, or None."""
+        """IMU yaw rate in deg/s (CW+) for the heading PID's derivative, or None.
+
+        Not gated on `heading_source`: even when the heading itself comes from the
+        GPS, the gyro is still the cleanest derivative available, and the GPS has
+        nothing to offer here.
+        """
         return self.imu.yaw_rate() if self.imu is not None else None

@@ -1,5 +1,5 @@
-"""Robot sensors: GPS (position), BNO085 IMU (absolute heading), and the
-PoseEstimator that fuses them into one pose_provider."""
+"""Robot sensors: GPS (position + track-angle heading), BNO085 IMU (absolute
+heading), and the PoseEstimator that fuses them into one pose_provider."""
 
 from .bno085 import IMU
 from .gps import GPS

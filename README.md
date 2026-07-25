@@ -332,9 +332,13 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   `tools/detector_selftest.py` covers bring-up and standoff calibration. Export a
   YOLO-style (`object_detection`) model — FOMO reports centroids, not sized
   boxes, so it can align but never approach.
-- **GPS waypoint autonomy** — parse GY-GPS6MV2 (NEO-6M) NMEA with `pynmea2` into
-  `(lat, lon, heading)` and pass it as `WaypointController`'s `pose_provider`.
-  Bearing/distance math already done.
+- **GPS waypoint autonomy** — ✅ done: an Adafruit Ultimate GPS
+  (MTK3339/PA1616D) is read with `adafruit_gps` into `(lat, lon, heading)` and
+  passed as `WaypointController`'s `pose_provider`. Heading is the module's
+  **track angle** (course over ground) — a true-North heading with no compass and
+  no calibration — so the rover navigates without an IMU; the BNO085 is still
+  preferred when present, because a track angle is meaningless standing still.
+  Choose with `--heading-source auto|gps|imu`. Bring-up: `tools/gps_monitor.py`.
 - **FPV live video** — ✅ done: the robot streams its camera as JPEG-over-UDP to
   the base station, which serves it as browser-native MJPEG in the dashboard's
   Camera panel. When a model is loaded, detection boxes are drawn onto the feed

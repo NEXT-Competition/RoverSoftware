@@ -11,7 +11,7 @@ without hardware:
         derivative for the heading PID.
 
 --- Heading: absolute from the IMU, standstill-valid ---
-The BNO055 IMU gives an ABSOLUTE heading (via PoseEstimator) that's valid even at
+The BNO085 IMU gives an ABSOLUTE heading (via PoseEstimator) that's valid even at
 rest, so the rover can point itself at the next waypoint before moving:
 
   * point-then-go: when the heading error is large, PIVOT IN PLACE toward the
@@ -19,12 +19,13 @@ rest, so the rover can point itself at the next waypoint before moving:
   * the PID derivative uses the gyro yaw-rate (derivative-on-measurement), which
     is far cleaner than finite-differencing the heading.
 
-Fallback for when heading is unknown (no IMU calibration AND no GPS course yet —
-rare): drive STRAIGHT forward to build up a GPS course-over-ground, rather than
-pivoting blind. This is the old NEO-6M-only behavior, now just a safety net.
+Fallback for when heading is unknown (no IMU calibration AND no GPS track angle
+yet — rare): drive STRAIGHT forward to build up a course over ground, rather than
+pivoting blind. This is also the whole story with --heading-source gps, where the
+GPS track angle is the only heading and it doesn't exist until the rover moves.
 
 The math (bearing + haversine distance) is real; the sensor source is injected
-(GPS position + BNO055 heading, fused by PoseEstimator).
+(GPS position + IMU or GPS-track-angle heading, fused by PoseEstimator).
 """
 
 from __future__ import annotations

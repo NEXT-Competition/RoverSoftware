@@ -34,6 +34,18 @@ export interface ShooterStatus {
   cool: number; // seconds left on the cooldown, 0 when clear
 }
 
+/** GPS fix health (gps.py::GPS.telemetry). Optional fields are absent until
+ * the module reports them — hdop/alt need a GGA, track needs the rover to move. */
+export interface GpsStatus {
+  fix: number; // 0 = no fix, 1 = GPS, 2 = DGPS
+  sats: number | null; // satellites in use
+  speed: number; // ground speed, m/s
+  hdop?: number; // horizontal dilution of precision; under ~2 is good
+  alt?: number; // altitude, metres
+  track?: number; // track angle (course over ground), degrees, 0=N, CW+
+  track_age?: number; // seconds since that track angle was measured
+}
+
 /** One robot in a fleet snapshot (fleet.py::FleetManager.snapshot). */
 export interface Robot {
   robot_id: string;
@@ -44,9 +56,10 @@ export interface Robot {
   battery: number | null; // percent, or null (real robots don't emit it yet)
   lat: number | null;
   lon: number | null;
-  heading: number | null; // degrees, 0=N, CW-positive (BNO085)
+  heading: number | null; // degrees, 0=N, CW-positive (BNO085, or the GPS track angle)
   vision: VisionStatus | null; // null when the robot has vision disabled
   imu_calib: number | null; // BNO085 fused-orientation calibration level, 0-3
+  gps: GpsStatus | null; // null when the robot has GPS disabled
   shooter?: ShooterStatus | null; // absent unless shooter_align is active
   online: boolean;
   age: number | null; // seconds since last telemetry, or null

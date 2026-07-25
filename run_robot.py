@@ -7,7 +7,8 @@ Defaults are read from the environment first (so the systemd service can be
 configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
 
     RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_START_MODE, RS_LOOP_HZ,
-    RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD, RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
+    RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD/RATE_MS, RS_HEADING_SOURCE,
+    RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
@@ -57,13 +58,22 @@ def main():
                         in ("1", "true", "yes", "on"),
                         help="run without the Fusion HAT: mock the motors (for comms testing)")
     parser.add_argument("--gps-port", default=os.environ.get("RS_GPS_PORT", cfg.gps.port),
-                        help="NEO-6M GPS serial port (Pi UART; default /dev/ttyAMA0)")
+                        help="Adafruit GPS serial port (Pi UART; default /dev/ttyAMA0)")
     parser.add_argument("--gps-baud", type=int,
                         default=int(os.environ.get("RS_GPS_BAUD", cfg.gps.baud)))
+    parser.add_argument("--gps-rate", type=int,
+                        default=int(os.environ.get("RS_GPS_RATE_MS", cfg.gps.update_rate_ms)),
+                        help="ms between fixes (PMTK220; 1000 = 1 Hz). Below ~200 "
+                             "the sentences don't fit 9600 baud")
     parser.add_argument("--no-gps", dest="gps", action="store_false",
                         default=os.environ.get("RS_GPS_ENABLED", "1").strip().lower()
                         in ("1", "true", "yes", "on"),
                         help="disable the GPS reader (waypoint mode will hold position)")
+    parser.add_argument("--heading-source",
+                        default=os.environ.get("RS_HEADING_SOURCE", cfg.heading_source),
+                        choices=["auto", "gps", "imu"],
+                        help="which sensor gives heading: auto (IMU, else the GPS "
+                             "track angle), gps (track angle only), imu (no fallback)")
     parser.add_argument("--imu-address", type=lambda x: int(x, 0),
                         default=int(os.environ.get("RS_IMU_ADDRESS", hex(cfg.imu.i2c_address)), 0),
                         help="BNO085 I2C address (default 0x4a; 0x4b if DI/AD0 high)")
@@ -73,7 +83,7 @@ def main():
     parser.add_argument("--no-imu", dest="imu", action="store_false",
                         default=os.environ.get("RS_IMU_ENABLED", "1").strip().lower()
                         in ("1", "true", "yes", "on"),
-                        help="disable the BNO085 IMU (heading falls back to GPS course)")
+                        help="disable the BNO085 IMU (heading falls back to the GPS track angle)")
     parser.add_argument("--no-imu-save-calib", dest="imu_save_calib", action="store_false",
                         default=os.environ.get("RS_IMU_SAVE_CALIB", "1").strip().lower()
                         in ("1", "true", "yes", "on"),
@@ -121,6 +131,8 @@ def main():
     cfg.gps.enabled = args.gps
     cfg.gps.port = args.gps_port
     cfg.gps.baud = args.gps_baud
+    cfg.gps.update_rate_ms = args.gps_rate
+    cfg.heading_source = args.heading_source
     cfg.imu.enabled = args.imu
     cfg.imu.i2c_address = args.imu_address
     cfg.imu.heading_offset_deg = args.imu_offset
@@ -172,7 +184,8 @@ def main():
     fpv = f"{cfg.fpv.base_host}:{cfg.fpv.base_port}" if cfg.fpv.enabled else "off"
     shooter = f"ch{cfg.shooter.channel}" if cfg.shooter.enabled else "off"
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "
-          f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} vision={vision} "
+          f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} "
+          f"heading={cfg.heading_source} vision={vision} "
           f"fpv={fpv} shooter={shooter}")
     Robot(cfg).run()
 

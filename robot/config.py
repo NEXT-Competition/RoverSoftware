@@ -64,26 +64,38 @@ class CommsConfig:
 
 @dataclass
 class GPSConfig:
-    # u-blox NEO-6M (GY-GPS6MV2) on the Pi GPIO UART. Ships as NMEA @ 9600.
+    # Adafruit Ultimate GPS (MTK3339/PA1616D — breakout, FeatherWing or HAT) on
+    # the Pi GPIO UART, read with the adafruit_gps library. Ships as NMEA @ 9600.
     # Kept separate from the XBee port: XBee is the USB adapter (/dev/ttyUSB0),
     # GPS is the PL011 GPIO header UART (/dev/ttyAMA0). Requires the Pi serial
     # console disabled and the UART enabled (raspi-config).
+    #
+    # The module reports a TRACK ANGLE (course over ground) — a true-North
+    # heading needing no compass, no calibration and no declination correction.
+    # It's only valid while moving, though, which is why the IMU is still the
+    # preferred heading source at a standstill; see RobotConfig.heading_source.
     enabled: bool = True
     port: str = "/dev/ttyAMA0"
     baud: int = 9600
     fix_timeout: float = 5.0  # drop the fix (return None) after this long w/o an update
     min_move_mps: float = (
-        0.5  # below this speed, GPS course is noise; hold last heading
+        0.5  # below this speed, the track angle is noise; hold last heading
     )
+    # Fix interval in ms (PMTK220). 1000 = 1 Hz, the module's default. Lower is a
+    # fresher heading, but the sentences have to fit the link: below ~200 ms they
+    # won't at 9600 baud, and truncated sentences read as "no fix". Ignored by a
+    # non-MTK receiver (a NEO-6M keeps whatever rate it was configured for).
+    update_rate_ms: int = 1000
 
 
 @dataclass
 class IMUConfig:
     # CEVA/Bosch BNO085 (BNO08x) 9-DOF IMU on the Pi I2C bus (shared with the
     # Fusion HAT; the bootstrap already enables I2C). Its on-chip fusion gives an
-    # ABSOLUTE heading that's valid at a standstill — the compass the NEO-6M lacks
-    # — so it becomes the heading source for pose estimation and the waypoint
-    # angle loop.
+    # ABSOLUTE heading that's valid at a standstill — which the GPS track angle
+    # is not — so by default it's the heading source for pose estimation and the
+    # waypoint angle loop. Set RobotConfig.heading_source="gps" (or disable this
+    # sensor) to navigate on the GPS track angle alone.
     #
     # Wiring note: unlike the BNO055 it replaces, the BNO08x speaks SHTP and does
     # NOT abuse I2C clock stretching, so it runs at the Pi's normal bus speed — no
@@ -221,6 +233,11 @@ class RobotConfig:
     shooter: ShooterConfig = field(default_factory=ShooterConfig)
     loop_hz: float = 5.0  # Control loop rate
     start_mode: str = "teleop"  # teleop | object_align | waypoint | shooter_align
+    # Which sensor answers "which way am I facing" (see sensors/pose.py):
+    #   auto - IMU when calibrated, else the GPS track angle (recommended)
+    #   gps  - the GPS track angle only; no IMU needed for heading
+    #   imu  - the IMU only; no fallback to course over ground
+    heading_source: str = "auto"
     robot_id: str = "rover1"  # unique id on the shared XBee channel
     telemetry_hz: float = (
         5.0  # rate of status frames back to the base station (0 disables)

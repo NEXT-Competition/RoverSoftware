@@ -32,6 +32,12 @@ class RobotState:
     # never reach the browser.
     vision: Optional[dict] = None
     imu_calib: Optional[int] = None  # BNO085 fused-orientation calibration level 0-3
+    # GPS fix health from the robot: {fix, sats, speed, hdop, alt, track,
+    # track_age}. Opaque here for the same reason as `vision` above. This is how
+    # you tell "the rover is lost" from "the rover has 3 satellites", and
+    # track_age is how you tell a live heading from one held since the last time
+    # it moved.
+    gps: Optional[dict] = None
     # Shooter summary {armed, shots, ready, cool}, present only while the robot
     # is in shooter_align. Unlike the fields above this one is NOT sticky — see
     # update_from_telemetry for why a stale arm indicator would be dangerous.
@@ -79,6 +85,8 @@ class FleetManager:
                 st.vision = msg["vision"]
             if msg.get("imu_calib") is not None:
                 st.imu_calib = int(msg["imu_calib"])
+            if msg.get("gps") is not None:
+                st.gps = msg["gps"]
             # Assigned unconditionally, breaking the "only overwrite when present"
             # pattern above on purpose. The robot omits this field entirely once
             # shooter_align is no longer active, and a sticky copy would leave the
@@ -117,6 +125,7 @@ class FleetManager:
                     "heading": st.heading,
                     "vision": st.vision,
                     "imu_calib": st.imu_calib,
+                    "gps": st.gps,
                     "shooter": st.shooter,
                     "online": st.online(now),
                     "age": round(now - st.last_seen, 2) if st.last_seen else None,

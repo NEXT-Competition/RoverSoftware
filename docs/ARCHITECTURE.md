@@ -45,7 +45,7 @@ themselves. They receive a *provider callable* (`pose_provider()`,
 (`robot.py`), so the decision logic runs and unit-tests with no hardware.
 
 **Graceful degradation.** Anything hardware-dependent is guarded so the stack
-still runs on a laptop: no Fusion HAT → mock servos; no `pynmea2`/serial → GPS
+still runs on a laptop: no Fusion HAT → mock servos; no `adafruit_gps`/serial → GPS
 disabled; no gamepad → touch-only. A missing piece prints one line and the rest
 keeps running.
 
@@ -108,9 +108,9 @@ robot/                        # runs on the rover Pi (also imported by the base 
     protocol.py               newline-delimited JSON encode/decode
     xbee_link.py              threaded transparent-mode XBee serial reader
   sensors/
-    gps.py                    NEO-6M NMEA reader → (lat, lon, heading)
+    gps.py                    Adafruit GPS reader → (lat, lon, track angle)
     bno085.py                 BNO085 IMU → absolute heading + yaw rate
-    pose.py                   fuses GPS position + IMU heading → one pose()
+    pose.py                   GPS position + IMU-or-track-angle heading → pose()
     camera.py                 shared frame capture (picamera2 → OpenCV → none)
     detector.py               Edge Impulse .eim runner → Detection
     fpv.py                    JPEG-over-UDP live video → base station
@@ -153,8 +153,8 @@ from environment variables / CLI flags, and hands it to `Robot`.
 | `DriveConfig` | `left` (ch0), `right` (ch1, `inverted=True`), `arm_seconds=2.0`, `slew_rate=4.0` | Two motors + arming + slew limiting. |
 | `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=9600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. |
 | `ShooterConfig` | `enabled=False`, `channel=2`, `rest_angle=-30`, `fire_angle=30`, `fire_seconds=0.35`, `retract_seconds=0.35`, `dwell=0.5`, `cooldown=2.0`, `require_arm=True`, `require_arrived=True`, `max_shots=0` | Servo launcher geometry + the firing policy for `shooter_align`. Off by default. |
-| `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5` | NEO-6M reader settings. |
-| `RobotConfig` | `drive`, `comms`, `gps`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5` | Top-level composition. |
+| `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5`, `update_rate_ms=1000` | Adafruit Ultimate GPS reader settings. |
+| `RobotConfig` | `drive`, `comms`, `gps`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5`, `heading_source="auto"` | Top-level composition. `heading_source`: `auto` (IMU, else the GPS track angle) \| `gps` \| `imu`. |
 
 > **ESC-as-servo mapping.** An ESC takes the same PWM as a servo — neutral pulse
 > = stop, longer = forward, shorter = reverse. Throttle `-1..+1` maps onto servo
@@ -276,7 +276,7 @@ swap the transport internals; the `start/stop/send + on_message` interface stays
 
 ### 4.6 Sensors
 
-**`gps.py` — NEO-6M reader.** See [§6](#6-gps-waypoint-autonomy).
+**`gps.py` — Adafruit Ultimate GPS reader.** See [§6](#6-gps-waypoint-autonomy).
 
 ---
 
@@ -303,6 +303,8 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 {"type":"telemetry","from":"rover1","mode":"teleop","estop":false,
  "left":0.4,"right":0.6,"battery":87.0,
  "lat":37.77,"lon":-122.41,"heading":30.0,  // lat/lon/heading only when GPS has a fix
+ "gps":{"fix":1,"sats":9,"speed":1.2,"hdop":0.9,"track":54.7,"track_age":0.4},  // fix health
+ "imu_calib":3,
  "shooter":{"armed":true,"shots":1,"ready":false,"cool":0.0}}  // only while in shooter_align
 ```
 
@@ -337,25 +339,45 @@ list in and resets to leg 0.
 > An interactive, animated walkthrough of exactly this algorithm lives in
 > [`docs/waypoint-navigation.html`](./waypoint-navigation.html).
 
-**The GPS reader (`sensors/gps.py`).** A background thread reads NMEA sentences
-from the NEO-6M and caches the latest fix; the 50 Hz loop calls `pose()` (a cheap
-locked lookup) and never blocks on serial. Details:
+**The GPS reader (`sensors/gps.py`).** An **Adafruit Ultimate GPS**
+(MTK3339/PA1616D — breakout, FeatherWing or HAT) read through Adafruit's own
+`adafruit_gps` library over pyserial. A background thread drains sentences and
+caches the latest fix; the 50 Hz loop calls `pose()` (a cheap locked lookup) and
+never blocks on serial. Details:
 
-- Parses **GGA** (position + fix quality; ignored while `gps_qual == 0`) and
-  **RMC** (position + course + speed; ignored unless `status == 'A'`).
-- **Heading has no compass.** The NEO-6M's only heading is *course over ground*,
-  valid only while moving. Below `min_move_mps` (0.5 m/s) the course is treated as
-  noise and the last good heading is held; before the first movement it reports
-  `0°`. The waypoint PID self-corrects once real motion produces a course.
+- **Configured over PMTK at start-up** — `PMTK314` asks for **GGA + RMC + VTG**
+  only (no GSV satellite-detail spam on a 9600-baud link), `PMTK220` sets the fix
+  interval (`update_rate_ms`, 1000 ms default). A non-MTK receiver — a u-blox
+  NEO-6M, say — ignores both and still parses fine.
+- **Heading is the GPS track angle** (course over ground, from RMC/VTG): a
+  true-North heading with no compass, no calibration and no declination
+  correction. It's what `pose()` returns whenever the IMU isn't supplying one.
+  But it's the direction the antenna is *travelling*, so it's noise at a
+  standstill and blind to a pivot in place. Below `min_move_mps` (0.5 m/s) it's
+  ignored and the last good value is held; until the rover has moved once,
+  heading is `None` (never `0°` — that would read as "pointing North").
+- **A position needs a fix.** `adafruit_gps` keeps writing `latitude`/`longitude`
+  through a no-fix sentence, so the reader gates every update on `has_fix` and
+  drops null-island `(0, 0)`.
 - **Staleness** — a fix older than `fix_timeout` (5 s) makes `pose()` return
   `None`, so lost satellites stop the robot rather than steering on stale data.
-- **Graceful degradation** — missing `pyserial`/`pynmea2`, or a UART that won't
-  open, disables GPS (logs one line); waypoint mode simply holds position.
+- **Fix health on the radio** — `telemetry()` sends `{fix, sats, speed, hdop,
+  alt, track, track_age}`, which is how you tell "the GPS is broken" from "it has
+  3 satellites under a tree", and a live heading from one held since the rover
+  last moved.
+- **Survives garbage** — the library does string arithmetic on whatever arrives,
+  so a wrong baud rate or a marginal wire can raise out of `update()`; the reader
+  catches, logs at most one line per 5 s, and keeps going.
+- **Graceful degradation** — missing `pyserial`/`adafruit_gps`, or a UART that
+  won't open, disables GPS (logs one line); waypoint mode simply holds position.
+
+Bring-up: `python tools/gps_monitor.py` prints live position, satellites, HDOP
+and track angle — walk it in a straight line and watch the track angle settle.
 
 > On the Pi, freeing `/dev/ttyAMA0` requires disabling the serial console and
 > enabling the UART (`raspi-config` → Interface Options → Serial Port). Install
-> `pynmea2` **system-wide** (the service runs as root): `sudo apt install
-> python3-pynmea2`.
+> the driver **system-wide** (the service runs as root): `sudo pip install
+> adafruit-circuitpython-gps`.
 
 **Object detection (`sensors/detector.py`) and `object_align`.** Same shape as the
 GPS and IMU readers: a background thread owns the camera and the Edge Impulse
@@ -584,7 +606,8 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
-| `RS_GPS_ENABLED` / `RS_GPS_PORT` / `RS_GPS_BAUD` | `1` / `/dev/ttyAMA0` / `9600` | NEO-6M reader. |
+| `RS_GPS_ENABLED` / `RS_GPS_PORT` / `RS_GPS_BAUD` / `RS_GPS_RATE_MS` | `1` / `/dev/ttyAMA0` / `9600` / `1000` | Adafruit GPS reader; `RATE_MS` is the PMTK220 fix interval. |
+| `RS_HEADING_SOURCE` | `auto` | `auto` (IMU when calibrated, else the GPS track angle) \| `gps` \| `imu`. |
 | `RS_SHOOTER_ENABLED` / `RS_SHOOTER_CHANNEL` | `0` / `2` | Servo launcher. Channels 0–1 are the drive ESCs. |
 | `RS_SHOOTER_REST` / `RS_SHOOTER_FIRE` | `-30` / `30` | Home and fire angles (find with `tools/servo_sweep.py`). |
 | `RS_SHOOTER_FIRE_S` / `RS_SHOOTER_RETRACT_S` | `0.35` / `0.35` | Hold at the fire angle, then settle before re-arming. |

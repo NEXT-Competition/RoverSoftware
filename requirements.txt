@@ -1,6 +1,12 @@
 # --- Robot (Raspberry Pi) ---
 pyserial>=3.5
-pynmea2>=1.19        # parse NEO-6M (GY-GPS6MV2) NMEA sentences for waypoint autonomy
+# Adafruit Ultimate GPS (MTK3339/PA1616D) for waypoint autonomy: parses NMEA and
+# sends the PMTK setup commands, and gives the track angle we use as heading.
+# It declares Adafruit-Blinka as a dependency (same as the BNO085 stack below),
+# so it stays out of pyproject.toml and is installed on the Pi:
+#   pip install adafruit-circuitpython-gps
+# Reads the serial port through pyserial — no board/busio needed for UART.
+# Verify with tools/gps_monitor.py.
 # fusion_hat is installed from SunFounder's package/setup on the Pi, not PyPI:
 #   https://docs.sunfounder.com/projects/fusion-hat/en/latest/
 # The BNO085 IMU stack is likewise Pi-only (pulls in Blinka/board/busio), so it's

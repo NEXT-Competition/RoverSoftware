@@ -2,8 +2,8 @@
 
 The BNO085 runs its own sensor-fusion (the SH-2 firmware) and outputs an ABSOLUTE
 orientation quaternion (the "rotation vector") that's valid at a standstill, unlike
-the NEO-6M's course-over-ground. We read it on a background thread and cache the
-latest heading / yaw-rate / calibration, so the control loop can poll `heading()`
+the GPS track angle (course over ground). We read it on a background thread and
+cache the latest heading / yaw-rate / calibration, so the control loop can poll `heading()`
 without ever touching the I2C bus (which would stall the tick — see robot.py's
 slow-tick watchdog).
 

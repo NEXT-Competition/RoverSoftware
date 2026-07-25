@@ -7,14 +7,14 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110",
     "pygame>=2.5",
-    "pynmea2>=1.19",
     "pyserial>=3.5",
     "uvicorn[standard]>=0.27",
 ]
 
-# Pi-only hardware/vision deps (fusion_hat, adafruit-circuitpython-bno08x,
-# edge_impulse_linux, opencv/picamera2) are deliberately NOT listed above — they
-# don't install on a dev laptop and would break `uv sync`. See requirements.txt.
+# Pi-only hardware/vision deps (fusion_hat, adafruit-circuitpython-gps,
+# adafruit-circuitpython-bno08x, edge_impulse_linux, opencv/picamera2) are
+# deliberately NOT listed above — they don't install on a dev laptop and would
+# break `uv sync`. See requirements.txt.
 
 [dependency-groups]
 dev = [
