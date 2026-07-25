@@ -41,20 +41,21 @@ test *ARGS:
     uv run pytest {{ARGS}}
 
 # One-time Pi setup: install SunFounder Fusion HAT drivers + the fusion_hat
-# Python library, and the BNO055 IMU driver. This may enable I2C and require a
+# Python library, and the BNO085 IMU driver. This may enable I2C and require a
 # reboot afterwards. Run this ONCE per robot before the first `just deploy`.
 #
-# BNO055 note: it clock-stretches on the Pi's hardware I2C, which corrupts reads.
-# 100 kHz (the Pi default) is NOT slow enough — add
+# BNO085 note: unlike the BNO055 it replaces, the BNO08x speaks SHTP and does NOT
+# abuse I2C clock stretching, so it wants the Pi's normal 100 kHz bus. If
 #     dtparam=i2c_arm_baudrate=10000
-# to /boot/firmware/config.txt (older Pi OS: /boot/config.txt) and reboot (or use
-# a software i2c-gpio bus to keep full speed). Verify the sensor with
-# python3 tools/imu_selftest.py (one-shot PASS/FAIL), then calibrate with
-# tools/imu_monitor.py.
+# is still in /boot/firmware/config.txt (older Pi OS: /boot/config.txt) from the
+# old sensor, REMOVE it and reboot: at 10 kHz the bus cannot drain the BNO085's
+# reports as fast as they arrive, and the driver's start-up wedges. Strap PS0/PS1
+# for I2C mode. Verify the sensor with python3 tools/imu_selftest.py (one-shot
+# PASS/FAIL), then calibrate with tools/imu_monitor.py.
 bootstrap:
     ssh -t {{target}} "curl -sSL https://raw.githubusercontent.com/sunfounder/fusion-hat/v1/install.sh | sudo bash"
-    ssh -t {{target}} "pip install --break-system-packages adafruit-circuitpython-bno055 || pip install adafruit-circuitpython-bno055"
-    @echo "==> Fusion HAT + BNO055 driver installed on {{host}}. Set dtparam=i2c_arm_baudrate=10000 then reboot: just reboot"
+    ssh -t {{target}} "pip install --break-system-packages adafruit-circuitpython-bno08x || pip install adafruit-circuitpython-bno08x"
+    @echo "==> Fusion HAT + BNO085 driver installed on {{host}}. Remove any dtparam=i2c_arm_baudrate line from config.txt, then: just reboot"
 
 # Reboot the Pi (handy after bootstrap enables I2C).
 reboot:

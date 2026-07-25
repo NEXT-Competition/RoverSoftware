@@ -82,6 +82,11 @@ except Exception:
 
 _RAD_TO_DEG = 180.0 / 3.141592653589793
 
+# How often the reader polls the chip's calibration accuracy. Each poll is a
+# command round-trip on the I2C bus (not a cached register), and the level moves
+# over seconds, so there's nothing to gain from polling it every sample.
+CALIB_POLL_S = 1.0
+
 
 class IMU:
     def __init__(
@@ -118,20 +123,52 @@ class IMU:
         self._calib_saved = False      # save the chip's calibration once per session
 
     def start(self) -> None:
-        """Open the I2C device and begin reading on a background thread."""
+        """Begin reading on a background thread; the sensor is opened there.
+
+        Opening a BNO08x is NOT quick or reliably bounded — the SHTP handshake,
+        the feature subscriptions and the calibration command all talk to the
+        chip, and the adafruit driver's packet-drain loops have no hard cap (see
+        _open). So none of it happens here: start() only spawns the reader and
+        returns, and a sick sensor can never wedge the boot sequence. That keeps
+        the promise the module docstring makes — a bad IMU degrades to GPS-course
+        heading — for a HANG, not just for an exception.
+        """
         if board is None or busio is None or adafruit_bno08x is None:
             print("[IMU] adafruit-circuitpython-bno08x / blinka not installed — IMU "
                   "disabled (heading falls back to GPS course). "
                   "Install on the Pi: pip install adafruit-circuitpython-bno08x")
             return
+        self._running = True
+        self._thread = threading.Thread(target=self._run, name="imu-rx", daemon=True)
+        self._thread.start()
+        print(f"[IMU] opening BNO085 @ 0x{self.i2c_address:02x} on I2C "
+              f"(background; heading uses GPS course until it's up)")
+
+    def _run(self) -> None:
+        """Thread body: open the sensor, then stream from it."""
+        if not self._open():
+            self._running = False
+            return
+        self._read_loop()
+
+    def _open(self) -> bool:
+        """Open the I2C device and subscribe to the reports. True on success.
+
+        Ordering matters here. begin_calibration() blocks until the chip
+        acknowledges the ME-calibrate command, and the adafruit driver waits for
+        that ack by draining EVERY queued packet — an inner `while
+        self._data_ready:` loop with no packet cap, so its outer timeout is only
+        re-checked once the queue runs dry. Enable the 20 Hz rotation-vector and
+        gyro reports first and the queue never runs dry on a slow bus (the
+        classic case: a leftover `dtparam=i2c_arm_baudrate=10000` from the
+        BNO055, where reports arrive faster than 10 kHz can drain them) — the
+        call then hangs forever instead of timing out. Calibrating BEFORE
+        subscribing means nothing is streaming yet, which is also the order
+        Adafruit's own calibration example uses.
+        """
         try:
             self._i2c = busio.I2C(board.SCL, board.SDA)
             self._sensor = BNO08X_I2C(self._i2c, address=self.i2c_address)
-            # Subscribe to the reports we consume: the fused absolute orientation
-            # (magnetometer-corrected, standstill-valid) and the raw gyro for yaw
-            # rate. The sensor sends nothing until asked.
-            self._sensor.enable_feature(BNO_REPORT_ROTATION_VECTOR)
-            self._sensor.enable_feature(BNO_REPORT_GYROSCOPE)
             # Run dynamic calibration so calibration_status is populated and the
             # magnetometer keeps converging; it loads any calibration already in
             # the chip's flash on power-up regardless.
@@ -140,23 +177,35 @@ class IMU:
                     self._sensor.begin_calibration()
                 except Exception as e:
                     print(f"[IMU] begin_calibration failed ({e}); running uncalibrated")
+            # Subscribe to the reports we consume: the fused absolute orientation
+            # (magnetometer-corrected, standstill-valid) and the raw gyro for yaw
+            # rate. The sensor sends nothing until asked.
+            self._sensor.enable_feature(BNO_REPORT_ROTATION_VECTOR)
+            self._sensor.enable_feature(BNO_REPORT_GYROSCOPE)
         except Exception as e:
-            print(f"[IMU] could not open BNO085 @ 0x{self.i2c_address:02x}: {e} — IMU disabled")
+            print(f"[IMU] could not open BNO085 @ 0x{self.i2c_address:02x}: {e} — IMU "
+                  "disabled (heading falls back to GPS course)")
             self._sensor = None
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._read_loop, name="imu-rx", daemon=True)
-        self._thread.start()
+            return False
         print(f"[IMU] reading BNO085 @ 0x{self.i2c_address:02x} (rotation vector), "
               f"offset={self.heading_offset_deg:g} invert={self.invert}")
+        return True
 
     def _read_loop(self) -> None:
+        next_calib = 0.0
         while self._running:
             t0 = time.monotonic()
             try:
                 quat = self._sensor.quaternion              # (i, j, k, real)
                 gyro = self._sensor.gyro                     # (x, y, z) rad/s
-                calib = self._sensor.calibration_status      # single level 0-3
+                # calibration_status is not a cached value: every read sends an
+                # ME command and waits for the reply, so polling it at the loop
+                # rate triples the bus traffic for a number that moves over
+                # seconds. Once a second is plenty for telemetry and autosave.
+                calib = None
+                if t0 >= next_calib:
+                    next_calib = t0 + CALIB_POLL_S
+                    calib = self._sensor.calibration_status  # single level 0-3
             except Exception as e:  # keep the reader alive across transient I2C glitches
                 print(f"[IMU] read error: {e}")
                 time.sleep(0.2)
