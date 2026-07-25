@@ -12,7 +12,7 @@ dependencies = [
     "uvicorn[standard]>=0.27",
 ]
 
-# Pi-only hardware/vision deps (fusion_hat, adafruit-circuitpython-bno055,
+# Pi-only hardware/vision deps (fusion_hat, adafruit-circuitpython-bno08x,
 # edge_impulse_linux, opencv/picamera2) are deliberately NOT listed above — they
 # don't install on a dev laptop and would break `uv sync`. See requirements.txt.
 

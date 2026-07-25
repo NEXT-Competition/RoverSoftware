@@ -7,7 +7,7 @@ Defaults are read from the environment first (so the systemd service can be
 configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
 
     RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_START_MODE, RS_LOOP_HZ,
-    RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD, RS_IMU_ENABLED/ADDRESS/OFFSET,
+    RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD, RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
@@ -66,16 +66,18 @@ def main():
                         help="disable the GPS reader (waypoint mode will hold position)")
     parser.add_argument("--imu-address", type=lambda x: int(x, 0),
                         default=int(os.environ.get("RS_IMU_ADDRESS", hex(cfg.imu.i2c_address)), 0),
-                        help="BNO055 I2C address (default 0x28; 0x29 if ADR high)")
+                        help="BNO085 I2C address (default 0x4a; 0x4b if DI/AD0 high)")
     parser.add_argument("--imu-offset", type=float,
                         default=float(os.environ.get("RS_IMU_OFFSET", cfg.imu.heading_offset_deg)),
                         help="heading offset (deg) to align the IMU yaw with North")
     parser.add_argument("--no-imu", dest="imu", action="store_false",
                         default=os.environ.get("RS_IMU_ENABLED", "1").strip().lower()
                         in ("1", "true", "yes", "on"),
-                        help="disable the BNO055 IMU (heading falls back to GPS course)")
-    parser.add_argument("--imu-calib", default=os.environ.get("RS_IMU_CALIB", cfg.imu.calibration_path),
-                        help="path to persist/restore BNO055 calibration ('' to disable)")
+                        help="disable the BNO085 IMU (heading falls back to GPS course)")
+    parser.add_argument("--no-imu-save-calib", dest="imu_save_calib", action="store_false",
+                        default=os.environ.get("RS_IMU_SAVE_CALIB", "1").strip().lower()
+                        in ("1", "true", "yes", "on"),
+                        help="don't auto-save the BNO085's calibration to its on-chip flash")
     # Vision. Only the flags you actually reach for in the field get a CLI arg;
     # the rest of the tuning (confidence, fps, hfov, standoff, search speed) is
     # env-only to keep this list readable — see the module docstring.
@@ -122,7 +124,7 @@ def main():
     cfg.imu.enabled = args.imu
     cfg.imu.i2c_address = args.imu_address
     cfg.imu.heading_offset_deg = args.imu_offset
-    cfg.imu.calibration_path = args.imu_calib
+    cfg.imu.persist_calibration = args.imu_save_calib
     cfg.vision.enabled = args.vision
     cfg.vision.model_path = args.vision_model
     cfg.vision.target_label = args.vision_label

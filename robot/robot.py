@@ -18,7 +18,7 @@ from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
 from .drive.shooter import Shooter
 from .drive.tank_drive import TankDrive
-from .sensors.bno055 import IMU
+from .sensors.bno085 import IMU
 from .sensors.camera import Camera
 from .sensors.detector import MockDetector, ObjectDetector
 from .sensors.fpv import FPVStreamer
@@ -80,13 +80,13 @@ class Robot:
             if config.gps.enabled else None
         )
 
-        # BNO055 IMU supplies an absolute, standstill-valid heading (the compass
+        # BNO085 IMU supplies an absolute, standstill-valid heading (the compass
         # the GPS lacks). Reads on its own thread; heading() is a cheap cached
         # lookup. Disabled/uncalibrated -> heading falls back to GPS course.
         self.imu: Optional[IMU] = (
             IMU(config.imu.i2c_address, config.imu.heading_offset_deg,
                 config.imu.invert, config.imu.min_calib,
-                config.imu.calibration_path or None)
+                config.imu.persist_calibration)
             if config.imu.enabled else None
         )
 

@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Stray lockfile from running npm at the repo root; the UI's real one lives in
+# basestation-ui/ and is tracked. Anchored so it can't match that one.
+/package-lock.json

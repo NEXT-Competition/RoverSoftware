@@ -79,29 +79,31 @@ class GPSConfig:
 
 @dataclass
 class IMUConfig:
-    # Bosch BNO055 9-DOF IMU on the Pi I2C bus (shared with the Fusion HAT; the
-    # bootstrap already enables I2C). Its on-chip NDOF fusion gives an ABSOLUTE
-    # heading that's valid at a standstill — the compass the NEO-6M lacks — so it
-    # becomes the heading source for pose estimation and the waypoint angle loop.
+    # CEVA/Bosch BNO085 (BNO08x) 9-DOF IMU on the Pi I2C bus (shared with the
+    # Fusion HAT; the bootstrap already enables I2C). Its on-chip fusion gives an
+    # ABSOLUTE heading that's valid at a standstill — the compass the NEO-6M lacks
+    # — so it becomes the heading source for pose estimation and the waypoint
+    # angle loop.
     #
-    # Wiring note: the BNO055 clock-stretches on the Pi's hardware I2C, which
-    # corrupts reads. 100 kHz (the Pi default) is NOT slow enough — set
-    # dtparam=i2c_arm_baudrate=10000 in /boot/firmware/config.txt and reboot, or
-    # use a software I2C bus (dtoverlay=i2c-gpio) to keep full speed. Verify with
-    # tools/imu_selftest.py. See packaging/robot.env.
+    # Wiring note: unlike the BNO055 it replaces, the BNO08x speaks SHTP and does
+    # NOT abuse I2C clock stretching, so it runs at the Pi's normal bus speed — no
+    # dtparam=i2c_arm_baudrate workaround needed (remove it if it was set for the
+    # old sensor). Strap PS0/PS1 for I2C mode. Verify with tools/imu_selftest.py.
+    # See packaging/robot.env.
     enabled: bool = True
-    i2c_address: int = 0x28  # BNO055 default; 0x29 if the ADR pin is pulled high
+    i2c_address: int = 0x4A  # BNO085 default; 0x4B if the DI/AD0 pin is pulled high
     # Rotation applied to the sensor's raw yaw to align it with the robot's
     # forward axis and true North (0 = North, CW positive). Tune during bring-up.
     heading_offset_deg: float = 0.0
     invert: bool = False  # flip yaw sign to CW-positive if the board is mounted mirrored
-    # Minimum system/magnetometer calibration level (0-3) before we trust the
+    # Minimum fused-orientation calibration level (0-3) before we trust the
     # heading. Below this, heading() returns None and the fusion falls back to GPS.
     min_calib: int = 1
-    # Where to persist/restore BNO055 calibration offsets (the sensor forgets them
-    # on every power cycle). A fixed, shared path so the root systemd service and a
-    # manually-run calibration tool use the same file. Empty disables persistence.
-    calibration_path: str = "/var/lib/roversoftware/bno055_calibration.json"
+    # Run the sensor's dynamic calibration and save it to the BNO08x's own flash
+    # once it converges, so the board boots calibrated. The chip persists this
+    # itself — there is no offsets file to manage (the BNO055 needed one because it
+    # forgot its calibration on every power cycle). False disables auto-save.
+    persist_calibration: bool = True
 
 
 @dataclass

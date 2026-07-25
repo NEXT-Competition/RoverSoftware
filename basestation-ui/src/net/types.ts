@@ -44,9 +44,9 @@ export interface Robot {
   battery: number | null; // percent, or null (real robots don't emit it yet)
   lat: number | null;
   lon: number | null;
-  heading: number | null; // degrees, 0=N, CW-positive (BNO055)
+  heading: number | null; // degrees, 0=N, CW-positive (BNO085)
   vision: VisionStatus | null; // null when the robot has vision disabled
-  imu_calib: number[] | null; // (sys, gyro, accel, mag), each 0-3
+  imu_calib: number | null; // BNO085 fused-orientation calibration level, 0-3
   shooter?: ShooterStatus | null; // absent unless shooter_align is active
   online: boolean;
   age: number | null; // seconds since last telemetry, or null

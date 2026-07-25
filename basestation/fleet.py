@@ -31,7 +31,7 @@ class RobotState:
     # just forwards it. Note fields must be listed here AND in snapshot() or they
     # never reach the browser.
     vision: Optional[dict] = None
-    imu_calib: Optional[list] = None
+    imu_calib: Optional[int] = None  # BNO085 fused-orientation calibration level 0-3
     # Shooter summary {armed, shots, ready, cool}, present only while the robot
     # is in shooter_align. Unlike the fields above this one is NOT sticky — see
     # update_from_telemetry for why a stale arm indicator would be dangerous.
@@ -78,7 +78,7 @@ class FleetManager:
             if msg.get("vision") is not None:
                 st.vision = msg["vision"]
             if msg.get("imu_calib") is not None:
-                st.imu_calib = list(msg["imu_calib"])
+                st.imu_calib = int(msg["imu_calib"])
             # Assigned unconditionally, breaking the "only overwrite when present"
             # pattern above on purpose. The robot omits this field entirely once
             # shooter_align is no longer active, and a sticky copy would leave the

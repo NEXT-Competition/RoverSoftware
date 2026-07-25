@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Live BNO055 heading / yaw-rate / calibration monitor — IMU bring-up.
+"""Live BNO085 heading / yaw-rate / calibration monitor — IMU bring-up.
 
 Use this to confirm the IMU is wired and reading before trusting it for
 navigation, and to run the first-power-up magnetometer calibration: move the
-rover in a few figure-8s until the mag/sys calibration levels reach 3.
+rover in a few figure-8s until the calibration level reaches 3.
 
     python tools/imu_monitor.py
-    python tools/imu_monitor.py --address 0x29 --offset 90 --invert
+    python tools/imu_monitor.py --address 0x4b --offset 90 --invert
 
-Calibration levels are 0-3 (3 = fully calibrated). heading() only reports a
-value once sys and mag reach the driver's min_calib; below that it prints
+The calibration level is 0-3 (3 = fully calibrated). heading() only reports a
+value once it reaches the driver's min_calib; below that it prints
 "(uncalibrated -> GPS fallback)", which is exactly how the rover behaves.
 
-Once sys and mag reach 3 the driver auto-saves the calibration offsets to the
-shared file (default /var/lib/roversoftware/bno055_calibration.json) so the robot
-boots pre-calibrated. Run this with sudo so it can write that path. Use
---calibration to change it, or --no-save for a dry run.
+Once the level reaches 3 the driver saves the calibration to the BNO08x's own
+on-chip flash (there is no file — the chip remembers it across power cycles), so
+the robot boots pre-calibrated. Use --no-save for a monitor-only dry run.
 
-Off-hardware (no adafruit-circuitpython-bno055 / Blinka): prints a clear note
+Off-hardware (no adafruit-circuitpython-bno08x / Blinka): prints a clear note
 and exits, so this is safe to run on a laptop.
 """
 
@@ -30,49 +29,45 @@ from time import sleep
 # when run as `python tools/imu_monitor.py`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from robot.config import IMUConfig
-from robot.sensors.bno055 import IMU, adafruit_bno055
+from robot.sensors.bno085 import IMU, adafruit_bno08x
 
 
 def main():
-    p = argparse.ArgumentParser(description="BNO055 IMU live monitor / calibration")
-    p.add_argument("--address", type=lambda x: int(x, 0), default=0x28,
-                   help="I2C address (default 0x28; 0x29 if ADR high)")
+    p = argparse.ArgumentParser(description="BNO085 IMU live monitor / calibration")
+    p.add_argument("--address", type=lambda x: int(x, 0), default=0x4A,
+                   help="I2C address (default 0x4a; 0x4b if DI/AD0 high)")
     p.add_argument("--offset", type=float, default=0.0,
                    help="heading offset (deg) to align yaw with North")
     p.add_argument("--invert", action="store_true", help="flip yaw sign to CW-positive")
     p.add_argument("--min-calib", type=int, default=1,
-                   help="min sys/mag calibration (0-3) before heading is reported")
+                   help="min calibration level (0-3) before heading is reported")
     p.add_argument("--rate", type=float, default=5.0, help="print rate (Hz)")
-    p.add_argument("--calibration", default=IMUConfig().calibration_path,
-                   help="where to auto-save calibration once sys/mag hit 3")
     p.add_argument("--no-save", action="store_true",
-                   help="don't persist calibration (monitor only)")
+                   help="don't persist calibration to the chip's flash (monitor only)")
     args = p.parse_args()
 
-    if adafruit_bno055 is None:
-        print("adafruit_bno055 not found — install on the Pi: "
-              "pip install adafruit-circuitpython-bno055\n"
+    if adafruit_bno08x is None:
+        print("adafruit_bno08x not found — install on the Pi: "
+              "pip install adafruit-circuitpython-bno08x\n"
               "(nothing to monitor on a dev laptop without the sensor libraries)")
         return
 
     imu = IMU(i2c_address=args.address, heading_offset_deg=args.offset,
               invert=args.invert, min_calib=args.min_calib,
-              calibration_path=None if args.no_save else args.calibration)
+              persist_calibration=not args.no_save)
     imu.start()
-    dest = "off" if args.no_save else args.calibration
-    print(f"Move the rover in figure-8s until mag/sys reach 3 (auto-save -> {dest}). "
-          "Ctrl-C to stop.\n")
+    dest = "off" if args.no_save else "BNO085 flash"
+    print(f"Move the rover in figure-8s until the calibration level reaches 3 "
+          f"(auto-save -> {dest}). Ctrl-C to stop.\n")
     period = 1.0 / args.rate if args.rate > 0 else 0.2
     try:
         while True:
             heading = imu.heading()
             rate = imu.yaw_rate()
-            sys_l, gyro_l, accel_l, mag_l = imu.calibration()
+            calib = imu.calibration()
             h = f"{heading:6.1f}°" if heading is not None else "  --   (uncalibrated -> GPS fallback)"
             r = f"{rate:+6.1f}°/s" if rate is not None else "  --  "
-            print(f"heading={h}  yaw_rate={r}  "
-                  f"calib[sys={sys_l} gyro={gyro_l} accel={accel_l} mag={mag_l}]")
+            print(f"heading={h}  yaw_rate={r}  calib={calib}/3")
             sleep(period)
     except KeyboardInterrupt:
         pass

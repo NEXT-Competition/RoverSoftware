@@ -109,7 +109,7 @@ robot/                        # runs on the rover Pi (also imported by the base 
     xbee_link.py              threaded transparent-mode XBee serial reader
   sensors/
     gps.py                    NEO-6M NMEA reader → (lat, lon, heading)
-    bno055.py                 BNO055 IMU → absolute heading + yaw rate
+    bno085.py                 BNO085 IMU → absolute heading + yaw rate
     pose.py                   fuses GPS position + IMU heading → one pose()
     camera.py                 shared frame capture (picamera2 → OpenCV → none)
     detector.py               Edge Impulse .eim runner → Detection
