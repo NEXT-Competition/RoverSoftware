@@ -26,6 +26,17 @@ import uvicorn
 from basestation.app import build_app
 from basestation.fleet import FleetManager
 
+# Aerial/satellite imagery is the useful basemap for driving a rover: you steer
+# by the terrain you can actually see (grass, gravel, tree lines), not by street
+# names. Esri World Imagery needs no API key, so this works on a fresh clone.
+# Tiles are JPEG, which the whole /tiles path handles (see basestation/tiles.py).
+# Swap in another provider with --tiles-upstream / RS_TILES_UPSTREAM, e.g.
+# MapTiler satellite: https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=KEY
+SATELLITE_TILES = (
+    "https://server.arcgisonline.com/ArcGIS/rest/services/"
+    "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+)
+
 
 def _env(name, default):
     return os.environ.get(name, default)
@@ -50,12 +61,12 @@ def main():
     p.add_argument("--web-port", type=int, default=int(_env("RS_WEB_PORT", 8000)))
     p.add_argument("--no-controller", action="store_true", default=_envbool("RS_NO_CONTROLLER"),
                    help="skip gamepad input (touch-only base station)")
-    p.add_argument("--tiles", default=_env("RS_TILES", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+    p.add_argument("--tiles", default=_env("RS_TILES", SATELLITE_TILES),
                    help="map tile URL the browser loads; set to /tiles/{z}/{x}/{y}.png to serve offline")
     p.add_argument("--tiles-mbtiles", default=_env("RS_TILES_MBTILES", None),
                    help="offline .mbtiles cache served at /tiles/... (build with tools/fetch_tiles.py)")
     p.add_argument("--tiles-upstream",
-                   default=_env("RS_TILES_UPSTREAM", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+                   default=_env("RS_TILES_UPSTREAM", SATELLITE_TILES),
                    help="online source used to fill /tiles cache misses (unless --tiles-offline)")
     p.add_argument("--tiles-offline", action="store_true", default=_envbool("RS_TILES_OFFLINE"),
                    help="never fetch missing tiles online; serve only what's cached")

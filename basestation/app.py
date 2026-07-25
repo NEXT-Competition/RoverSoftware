@@ -24,7 +24,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
 from .fleet import FleetManager
-from .tiles import TileStore
+from .tiles import TileStore, attribution_for, content_type
 
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None) -> FastAPI:
@@ -39,6 +39,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         upstream_url=web_cfg.get("tiles_upstream"),
         allow_upstream=not web_cfg.get("tiles_offline", False),
     )
+    # The browser usually loads tiles from our /tiles/... proxy, so credit the
+    # source we actually fetch from (falling back to the URL the browser loads
+    # when tiles come straight off a public server).
+    tiles_attribution = (attribution_for(web_cfg.get("tiles_upstream"))
+                         or attribution_for(web_cfg.get("tiles")))
 
     def dispatch(robot_id, msg: dict) -> None:
         if robot_id:
@@ -117,6 +122,7 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                 }
                 snap["tiles"] = web_cfg.get("tiles")
                 snap["tiles_maxzoom"] = tile_store.maxzoom
+                snap["tiles_attribution"] = tiles_attribution
                 # Which robots currently have a live feed, so the UI shows the
                 # FPV panel only when there's actually something to show.
                 snap["video"] = video_rx.robots() if video_rx is not None else []
@@ -168,7 +174,9 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         data = await asyncio.to_thread(tile_store.get, z, x, y)
         if data is None:
             return Response(status_code=204)  # uncached + offline -> blank tile
-        return Response(content=data, media_type="image/png",
+        # The .png in the route is Leaflet's template, not a promise: satellite
+        # imagery comes back as JPEG, so label each tile by what it really is.
+        return Response(content=data, media_type=content_type(data),
                         headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/video/{robot_id}.mjpg")

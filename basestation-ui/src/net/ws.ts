@@ -18,6 +18,8 @@ export const robots = signal<Robot[]>([]);
 export const controller = signal<ControllerStatus>({ connected: false, name: null });
 export const tilesUrl = signal<string | null>(null);
 export const tilesMaxZoom = signal<number | null>(null);
+/** Credit line for the basemap (imagery licences require it on screen). */
+export const tilesAttribution = signal<string | null>(null);
 /** robot_ids currently streaming a live FPV feed. */
 export const videoRobots = signal<string[]>([]);
 
@@ -73,6 +75,7 @@ export function connect(): void {
       controller.value = msg.controller ?? { connected: false, name: null };
       tilesUrl.value = msg.tiles ?? null;
       tilesMaxZoom.value = msg.tiles_maxzoom ?? null;
+      tilesAttribution.value = msg.tiles_attribution ?? null;
       videoRobots.value = msg.video ?? [];
       if (selected.value == null) selected.value = msg.selected;
     });
