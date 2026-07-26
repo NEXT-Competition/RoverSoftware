@@ -151,7 +151,7 @@ from environment variables / CLI flags, and hands it to `Robot`.
 |---|---|---|
 | `MotorConfig` | `channel`, `inverted`, `neutral_angle`, `max_angle`, `min_angle`, `deadband=0.03`, `max_forward/reverse=1.0` | Per-motor calibration: maps throttle to servo angle. |
 | `DriveConfig` | `left` (ch0), `right` (ch1, `inverted=True`), `arm_seconds=2.0`, `slew_rate=4.0` | Two motors + arming + slew limiting. |
-| `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=9600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. |
+| `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=57600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. Must match the base station and the radios' `BD`. |
 | `ShooterConfig` | `enabled=False`, `channel=2`, `rest_angle=-30`, `fire_angle=30`, `fire_seconds=0.35`, `retract_seconds=0.35`, `dwell=0.5`, `cooldown=2.0`, `require_arm=True`, `require_arrived=True`, `max_shots=0` | Servo launcher geometry + the firing policy for `shooter_align`. Off by default. |
 | `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5` | NEO-6M reader settings. |
 | `RobotConfig` | `drive`, `comms`, `gps`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5` | Top-level composition. |
