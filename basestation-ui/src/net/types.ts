@@ -81,6 +81,7 @@ export interface FleetMessage {
   tiles_maxzoom: number | null; // for offline upscaling (Leaflet maxNativeZoom)
   tiles_attribution: string | null; // basemap credit line, derived from the source URL
   video?: string[]; // robot_ids with a live FPV feed right now
+  drive_hz?: number; // server's radio airtime budget; the touch joystick obeys it
 }
 
 // ---- Outbound actions (browser -> bridge). ----

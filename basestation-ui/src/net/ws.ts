@@ -22,6 +22,12 @@ export const tilesMaxZoom = signal<number | null>(null);
 export const tilesAttribution = signal<string | null>(null);
 /** robot_ids currently streaming a live FPV feed. */
 export const videoRobots = signal<string[]>([]);
+/**
+ * Max drive-command rate the bridge wants us to send at, in Hz. Comes from the
+ * server's --drive-hz so the touch joystick and the server-side gamepad share
+ * one radio budget; see net/drive.ts. Null until the first snapshot arrives.
+ */
+export const driveHz = signal<number | null>(null);
 
 // Locally-owned selection so a tap feels instant; seeded from the server the
 // first time it tells us who's selected (matches the old app.js behaviour).
@@ -77,6 +83,7 @@ export function connect(): void {
       tilesMaxZoom.value = msg.tiles_maxzoom ?? null;
       tilesAttribution.value = msg.tiles_attribution ?? null;
       videoRobots.value = msg.video ?? [];
+      driveHz.value = typeof msg.drive_hz === "number" && msg.drive_hz > 0 ? msg.drive_hz : null;
       if (selected.value == null) selected.value = msg.selected;
     });
   };

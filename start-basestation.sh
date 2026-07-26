@@ -12,9 +12,20 @@
 #   --sim                 use the built-in simulator (default if no --port)
 #   --port <dev>          talk to real robots over this serial device
 #   --baud <n>            serial baud for --port (default 57600)
+#   --drive-hz <n>        max drive-command send rate over the radio (default 15)
 #   --dev                 serve the UI via Vite with hot reload (else a prod build)
 #   --no-open             don't open a browser
 #   --no-controller       skip the gamepad reader
+#
+# --baud must match the rate the XBee modules themselves are programmed to (the
+# radios' BD parameter) AND the robots' robot/config.py CommsConfig.baud. A
+# mismatch here is silent: the link still "works" but the slower side's serial
+# buffer backs up and command latency grows for as long as you keep driving.
+#
+# --drive-hz is the airtime budget, not a feel knob. One drive frame is ~62 B
+# ≈ 11 ms at 57600; telemetry (GPS + IMU + vision @ 5 Hz) already eats ~26% of a
+# half-duplex channel, so 15 Hz keeps total utilisation near 40% with headroom
+# for retries. Raise it only if you have also cut RS_TELEMETRY_HZ on the robots.
 #
 # Ports (override via env): RS_WEB_PORT (bridge, default 8001),
 #   RS_UI_PORT (UI, default 8000). Python override: BASESTATION_PYTHON=/path/to/python
@@ -26,7 +37,8 @@ cd "$ROOT"
 BRIDGE_PORT="${RS_WEB_PORT:-8001}"
 UI_PORT="${RS_UI_PORT:-8000}"
 VITE_PORT=5173
-BAUD=57600
+BAUD="${RS_XBEE_BAUD:-57600}"
+DRIVE_HZ="${RS_DRIVE_HZ:-15}"
 DEV=0
 OPEN=1
 CONTROLLER=1
@@ -37,6 +49,7 @@ while [ $# -gt 0 ]; do
     --sim) SOURCE_ARGS=(--sim); shift ;;
     --port) SOURCE_ARGS=(--port "$2"); shift 2 ;;
     --baud) BAUD="$2"; shift 2 ;;
+    --drive-hz) DRIVE_HZ="$2"; shift 2 ;;
     --dev) DEV=1; shift ;;
     --no-open) OPEN=0; shift ;;
     --no-controller) CONTROLLER=0; shift ;;
@@ -78,8 +91,10 @@ if [ ! -d basestation-ui/node_modules ]; then
 fi
 
 # --- start the Python bridge ---
-echo "[start] bridge:  $PY run_basestation.py ${SOURCE_ARGS[*]} --web-port $BRIDGE_PORT"
-"$PY" run_basestation.py "${SOURCE_ARGS[@]}" --web-port "$BRIDGE_PORT" &
+# --drive-hz applies to the simulator too, on purpose: driving in --sim should
+# feel like driving the real radio, so a rate that is wrong shows up in dev.
+echo "[start] bridge:  $PY run_basestation.py ${SOURCE_ARGS[*]} --drive-hz $DRIVE_HZ --web-port $BRIDGE_PORT"
+"$PY" run_basestation.py "${SOURCE_ARGS[@]}" --drive-hz "$DRIVE_HZ" --web-port "$BRIDGE_PORT" &
 BRIDGE_PID=$!
 
 # --- start the UI ---

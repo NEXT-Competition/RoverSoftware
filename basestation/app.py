@@ -123,6 +123,12 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                 snap["tiles"] = web_cfg.get("tiles")
                 snap["tiles_maxzoom"] = tile_store.maxzoom
                 snap["tiles_attribution"] = tiles_attribution
+                # The bridge does NOT rate-limit browser {action:"drive"} frames
+                # (see handle_action), so the on-screen joystick has to throttle
+                # itself. Ship the server's budget instead of letting the client
+                # hardcode a copy: a --drive-hz that the touch UI ignored is
+                # exactly how the radio ended up oversubscribed.
+                snap["drive_hz"] = float(web_cfg.get("drive_hz", 15))
                 # Which robots currently have a live feed, so the UI shows the
                 # FPV panel only when there's actually something to show.
                 snap["video"] = video_rx.robots() if video_rx is not None else []
