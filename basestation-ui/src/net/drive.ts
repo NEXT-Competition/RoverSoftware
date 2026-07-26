@@ -2,26 +2,37 @@
 //
 // IMPORTANT: the Python bridge does NOT rate-limit browser {action:"drive"}
 // frames — its throttling in app.py::on_drive only guards the server-side
-// pygame gamepad. So an un-capped on-screen joystick would flood a 9600-baud
-// XBee and latency would grow without bound. We reproduce the exact server
-// policy here (see basestation/app.py:53-69):
+// pygame gamepad. So an un-capped on-screen joystick would flood the XBee and
+// latency would grow without bound. We apply the same policy here:
 //
 //   DRIVE_EPS          0.01   send only on a meaningful change...
-//   DRIVE_MIN_INTERVAL 1/30s  ...at most this often, plus...
+//   drive rate         server ...at most this often, plus...
 //   DRIVE_KEEPALIVE    0.25s  ...a periodic keepalive so the robot's teleop
 //                             command_timeout failsafe doesn't trip while the
 //                             stick is held steady.
+//
+// The rate is NOT hardcoded: it comes from the bridge's --drive-hz via the
+// fleet snapshot (ws.ts::driveHz). Radio airtime is one shared budget across
+// the touch joystick, the server gamepad and telemetry, so the server owns the
+// number. A local copy is how a lowered --drive-hz silently failed to reach the
+// touch UI and left the link oversubscribed.
 //
 // Deadzone (0.08) and the throttle = -Y / steer = X convention mirror the
 // server gamepad reader (basestation/controller_input.py:27-36,90-91) so touch
 // and physical gamepad feel identical.
 
-import { selected, send } from "./ws.ts";
+import { driveHz, selected, send } from "./ws.ts";
 
 export const DRIVE_EPS = 0.01;
-export const DRIVE_MIN_INTERVAL_MS = 1000 / 30;
+/** Used only until the first snapshot lands; matches run_basestation.py. */
+export const DRIVE_HZ_FALLBACK = 15;
 export const DRIVE_KEEPALIVE_MS = 250;
 export const DEADZONE = 0.08;
+
+/** Minimum gap between drive frames, from the server's budget. */
+export function driveMinIntervalMs(): number {
+  return 1000 / (driveHz.value ?? DRIVE_HZ_FALLBACK);
+}
 
 export function deadzone(v: number, dz = DEADZONE): number {
   return Math.abs(v) < dz ? 0 : v;
@@ -52,7 +63,7 @@ export function makeDriveSender() {
     const dt = now - last.t;
     const changed = Math.abs(throttle - last.throttle) > DRIVE_EPS ||
       Math.abs(steer - last.steer) > DRIVE_EPS;
-    if (force || (changed && dt >= DRIVE_MIN_INTERVAL_MS) || dt >= DRIVE_KEEPALIVE_MS) {
+    if (force || (changed && dt >= driveMinIntervalMs()) || dt >= DRIVE_KEEPALIVE_MS) {
       last = { throttle, steer, t: now };
       send({
         action: "drive",
