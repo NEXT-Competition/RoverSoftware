@@ -569,10 +569,16 @@ fleet as a dict, including the auto-selected robot.
 
 **`ControllerReader` (`controller_input.py`).** Reads a PS4/DualShock-style
 gamepad via pygame on a background thread, headless (`SDL_VIDEODRIVER=dummy`) so
-it works on a Mac or a display-less Pi. Emits `(throttle, steer)` at 40 Hz (left
-stick Y negated, right stick X, 0.08 dead-zone) and fires edge-triggered actions
-(e-stop / clear / mode). Hot-plugging reconnects automatically. The app binds
-these to the **currently selected** robot.
+it works on a Mac or a display-less Pi. Emits `(throttle, steer)` at 40 Hz
+(throttle = R2 minus L2, steer = right stick X, 0.08 dead-zone) and fires
+edge-triggered actions (e-stop / clear / mode). Hot-plugging reconnects
+automatically. The app binds these to the **currently selected** robot.
+
+Analog triggers arm before they steer: SDL scales a trigger to -1 released /
++1 pulled, but some drivers report a flat `0.0` for a trigger untouched since
+the joystick opened — which rescales to *half throttle*. `Trigger` therefore
+reports 0 until it has seen the axis genuinely at rest, so a freshly plugged-in
+controller can never launch the robot on its own.
 
 **`SimulatedFleet` (`simulator.py`).** A drop-in for `XBeeLink` (same
 `start/stop/send + on_message`). Each fake robot is a unicycle model: tank

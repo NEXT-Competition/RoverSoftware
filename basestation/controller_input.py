@@ -8,6 +8,8 @@ Runs headless (SDL dummy video driver) so it works on a Mac and on a Pi without
 a display. Hot-plugging is handled: unplug/replug the controller and it
 reconnects. Axis/button indices default to a typical DualShock 4 layout; adjust
 the constants if your OS/driver differs.
+
+Controls: R2 = forward, L2 = reverse, right stick X = steer.
 """
 
 from __future__ import annotations
@@ -24,16 +26,51 @@ try:
 except Exception:  # pragma: no cover
     pygame = None
 
-AXIS_THROTTLE = 1   # left stick Y (up is negative; we negate)
 AXIS_STEER = 2      # right stick X
+AXIS_L2 = 4         # L2 analog trigger -> reverse
+AXIS_R2 = 5         # R2 analog trigger -> forward
 BTN_ESTOP = 1       # circle
 BTN_CLEAR = 0       # cross
 BTN_TELEOP = 4      # L1
 BTN_ALIGN = 5       # R1
 
+# Value an untouched trigger reports. SDL scales triggers to -1 (released)
+# .. +1 (fully pulled); set to 0.0 for drivers that report a plain 0..1.
+TRIGGER_REST = -1.0
+
 
 def _dz(v, dz=0.08):
     return 0.0 if abs(v) < dz else v
+
+
+class Trigger:
+    """Normalize one analog trigger axis to 0..1, safely.
+
+    The mapping itself is trivial -- rescale [TRIGGER_REST, 1] onto [0, 1].
+    The reason this is a class is the arming latch: some drivers report a flat
+    0.0 for a trigger that has not been moved since the joystick was opened.
+    Rescaled naively that resting 0.0 becomes 0.5, i.e. the robot pulls away at
+    half throttle the instant a controller is plugged in. So a trigger stays
+    disarmed, reporting 0.0, until it has been seen at rest at least once. On a
+    well-behaved driver that happens on the very first sample (-1.0); on a
+    broken one it happens the first time you pull the trigger and let go, and
+    if it never happens the trigger simply stays dead. Fail stopped, not fast.
+    """
+
+    def __init__(self):
+        self.armed = False
+
+    def reset(self) -> None:
+        """Re-arm from scratch (call when a joystick is opened/replaced)."""
+        self.armed = False
+
+    def value(self, raw: float) -> float:
+        if raw <= TRIGGER_REST + 0.5:
+            self.armed = True
+        if not self.armed:
+            return 0.0
+        span = 1.0 - TRIGGER_REST
+        return max(0.0, min(1.0, (raw - TRIGGER_REST) / span))
 
 
 class ControllerReader:
@@ -47,6 +84,8 @@ class ControllerReader:
         self.name = None
         self._js = None
         self._prev = {}
+        self._l2 = Trigger()
+        self._r2 = Trigger()
         self._thread = None
         self._running = False
 
@@ -62,6 +101,9 @@ class ControllerReader:
             return False
         self._js = pygame.joystick.Joystick(0)
         self._js.init()
+        # A fresh device has fresh triggers: make them prove they're at rest.
+        self._l2.reset()
+        self._r2.reset()
         self.connected = True
         self.name = self._js.get_name()
         print(f"[controller] connected: {self.name}")
@@ -87,8 +129,11 @@ class ControllerReader:
                     if not self._open():
                         time.sleep(1.0)
                         continue
-                throttle = -_dz(self._js.get_axis(AXIS_THROTTLE))
-                steer = _dz(self._js.get_axis(AXIS_STEER)) if self._js.get_numaxes() > AXIS_STEER else 0.0
+                naxes = self._js.get_numaxes()
+                r2 = self._r2.value(self._js.get_axis(AXIS_R2)) if naxes > AXIS_R2 else 0.0
+                l2 = self._l2.value(self._js.get_axis(AXIS_L2)) if naxes > AXIS_L2 else 0.0
+                throttle = _dz(r2 - l2)  # R2 forward, L2 reverse, both = cancel
+                steer = _dz(self._js.get_axis(AXIS_STEER)) if naxes > AXIS_STEER else 0.0
                 if self.on_drive:
                     self.on_drive(throttle, steer)
                 for idx, name in ((BTN_ESTOP, "estop"), (BTN_CLEAR, "clear"),
