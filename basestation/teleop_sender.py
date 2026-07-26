@@ -11,7 +11,7 @@ your end-to-end teleop test today, and the seed of the full base station later.
     # no radio handy? print frames to the terminal to sanity-check:
     python -m basestation.teleop_sender
 
-Controls: left stick Y = throttle, right stick X = steer. The robot does the
+Controls: R2 = forward, L2 = reverse, right stick X = steer. The robot does the
 arcade->tank mixing. Buttons map to mode switches / e-stop (see below).
 
 Note: gamepad axis/button indices vary by OS and driver. If throttle/steer feel
@@ -23,6 +23,20 @@ import json
 import sys
 import time
 
+# Shares the axis map and the trigger arming latch with the base station so the
+# two teleop paths can't drift apart. Importing it also pins SDL to the dummy
+# video/audio drivers, which is what this headless sender wants anyway.
+from basestation.controller_input import (
+    AXIS_L2,
+    AXIS_R2,
+    AXIS_STEER,
+    BTN_ALIGN,
+    BTN_CLEAR,
+    BTN_ESTOP,
+    BTN_TELEOP,
+    Trigger,
+)
+
 try:
     import serial
 except Exception:
@@ -32,14 +46,6 @@ try:
     import pygame
 except Exception:
     pygame = None
-
-# Typical DS4 mapping; adjust for your platform if needed.
-AXIS_THROTTLE = 1   # left stick Y (up is negative -> we negate)
-AXIS_STEER = 2      # right stick X
-BTN_ESTOP = 1       # circle
-BTN_CLEAR = 0       # cross
-BTN_TELEOP = 4      # L1
-BTN_ALIGN = 5       # R1
 
 
 def send(ser, msg):
@@ -78,9 +84,10 @@ def main():
     js = pygame.joystick.Joystick(0)
     js.init()
     print(f"Controller: {js.get_name()}  ({js.get_numaxes()} axes, {js.get_numbuttons()} buttons)")
-    print("L-stick Y = throttle, R-stick X = steer. Ctrl-C to quit.")
+    print("R2 = forward, L2 = reverse, R-stick X = steer. Ctrl-C to quit.")
 
     prev_buttons = {}
+    l2, r2 = Trigger(), Trigger()
 
     def edge(idx):
         """True on the frame a button transitions from up to down."""
@@ -103,8 +110,11 @@ def main():
             if edge(BTN_ALIGN):
                 send(ser, {"type": "mode", "mode": "object_align"})
 
-            throttle = -deadzone(js.get_axis(AXIS_THROTTLE))  # push up = forward
-            steer = deadzone(js.get_axis(AXIS_STEER))
+            naxes = js.get_numaxes()
+            fwd = r2.value(js.get_axis(AXIS_R2)) if naxes > AXIS_R2 else 0.0
+            rev = l2.value(js.get_axis(AXIS_L2)) if naxes > AXIS_L2 else 0.0
+            throttle = deadzone(fwd - rev)  # R2 forward, L2 reverse
+            steer = deadzone(js.get_axis(AXIS_STEER)) if naxes > AXIS_STEER else 0.0
             send(ser, {"type": "drive", "throttle": round(throttle, 3), "steer": round(steer, 3)})
 
             time.sleep(period)

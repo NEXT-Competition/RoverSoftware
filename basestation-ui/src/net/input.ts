@@ -48,7 +48,7 @@ function tick(): void {
     prevButtons = gp.buttons;
   }
 
-  // Drive vector: touch pad wins while engaged, else the gamepad sticks.
+  // Drive vector: touch pad wins while engaged, else the gamepad triggers/stick.
   const pad = padInput.value;
   if (pad) {
     sender.update(pad.throttle, pad.steer);
