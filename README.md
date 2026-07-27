@@ -61,6 +61,7 @@ robot/
     object_align.py     object alignment — inject a detection provider
     detection.py        the Detection contract the controller consumes
     waypoint.py         autonomy scaffold — inject a GPS pose provider
+  tuning.py             whitelist of what the dashboard may change, and its limits
   robot.py              wires it all together; the control loop
 run_robot.py            entry point (run on the Pi)
 tools/
@@ -72,11 +73,14 @@ basestation/            bridge: radio <-> WebSocket + gamepad + tiles — see "B
   fleet.py              FleetManager: tracks every robot from its telemetry
   simulator.py          fake fleet (drop-in for the radio) so it all runs w/o hardware
   controller_input.py   PS4/gamepad reader (pygame, headless) -> selected robot
+  settings.py           gamepad mapping + link/UI rates, editable from the UI
   static/               legacy Leaflet dashboard (kept as internal fallback)
   teleop_sender.py      minimal PS4 -> JSON sender (kept for quick point-to-point tests)
 basestation-ui/         touch-first Deno UI (Vite + Preact) — desktop / iPad / kiosk
   server/               Deno.serve front door: serves the SPA, proxies /ws + /tiles
   src/                  Preact app: MapView, DrivePad joystick, fleet, controls
+    settings/schema.ts  how each tunable is presented (labels, ranges, help)
+    components/settings/ the Settings view: robot / controller / base station
 run_basestation.py      entry point for the bridge
 ```
 
@@ -155,6 +159,7 @@ In the browser:
 - **Gamepad** (R2 = forward, L2 = reverse, right stick = steer) drives the *selected* robot. Buttons e-stop / clear / switch mode.
 - **Map** shows each robot as a heading arrow with a position trail, over **satellite imagery** (Esri World Imagery by default — no API key) so you navigate by visible terrain rather than street names.
 - **Route**: toggle *Add waypoints*, click the map to drop points, **Send route** — the robot switches to waypoint mode and drives it.
+- **Settings** (the gear, top-left) — see below.
 
 Useful flags: `--robots N` (sim count), `--origin lat,lon` (sim start),
 `--no-controller`, `--tiles <url-template>` (point at a local tile server for
@@ -177,6 +182,32 @@ always-visible **E-STOP**, responsive **landscape / portrait (bottom-sheet)**
 layouts with iPad safe-area insets, and locally-bundled map + fonts (no CDN, so
 it works fully offline). Physical gamepads still work via the browser Gamepad
 API, and the server-side gamepad path is unchanged.
+
+### Settings
+
+The gear in the top-left opens a full-screen settings view. Changes apply
+immediately and are saved — on the robot for robot settings, on the base station
+for the rest — so field tuning survives the next power cycle.
+
+- **Robot** — the selected rover's tunables, over the radio and live: PID gains
+  for object alignment and waypoint heading hold, drive limits and per-motor ESC
+  calibration, loop and telemetry rates, vision thresholds, shooter geometry and
+  firing policy, GPS/IMU and FPV. Fetched when you open the tab rather than
+  streamed, because the full set is ~2.4 KB on a link shared with telemetry.
+- **Controller** — remap the gamepad by *pressing the control you want*, with a
+  live view of every axis and button and the throttle/steer the current mapping
+  produces. Also dead zone, trigger rest value, throttle/steer authority and
+  steering inversion. Indices describe a driver, not a controller — the same pad
+  enumerates differently on macOS, Linux, USB and Bluetooth — so this replaces
+  editing constants and restarting the service.
+- **Base station** — radio airtime budget (`drive_hz`), dashboard refresh, video
+  frame rate, basemap URL, trail length.
+
+Values are **clamped, not refused**: ask for a gain of 500 and you get the
+maximum, echoed back so the field shows what the robot is actually doing. Fields
+badged `restart` (serial ports, PWM channels, enable flags) are saved but only
+take effect on the next start. Everything works against `--sim`, so the whole
+page can be exercised with no hardware.
 
 **Easiest — one command** (starts the bridge + UI together, opens the browser,
 one Ctrl+C stops both):
@@ -315,11 +346,22 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 {"type": "route", "waypoints": [[lat, lon], ...], "to": "rover1"}    // waypoint mode
 {"type": "estop", "to": "rover1"}                                    // latch motors off
 {"type": "clear_estop", "to": "rover1"}
+{"type": "get_config", "to": "rover1"}                               // every tunable parameter
+{"type": "set_config", "config": {"align.pid.kp": 0.6}, "to": "rover1"}
 
 // robot -> base station (telemetry, ~5 Hz)
 {"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
  "left": 0.4, "right": 0.6, "battery": 87.0, "lat": 37.77, "lon": -122.41, "heading": 30.0}
+{"type": "config", "from": "rover1", "config": {"align.pid.kp": 0.6},
+ "rejected": {}, "restart": [], "save_error": null}
 ```
+
+`config` frames carry flat dotted paths into `RobotConfig`; `robot/tuning.py`
+decides which exist and clamps every value, so a browser can't reach an
+arbitrary attribute. The payload is a *partial* set the base station merges:
+everything in reply to `get_config`, only the applied fields after a `set_config`
+— a full snapshot is ~0.4 s of airtime at 57600, so it is requested explicitly
+and never polled.
 
 Safety built in: teleop stops if commands stop arriving (`command_timeout`), and
 e-stop overrides every mode until cleared. (Position fields appear in telemetry

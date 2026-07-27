@@ -10,7 +10,12 @@ import type {
   ConnState,
   ControllerStatus,
   FleetMessage,
+  GamepadMessage,
+  GamepadState,
   Robot,
+  RobotConfigEntry,
+  SettingsMessage,
+  SettingValue,
 } from "./types.ts";
 
 export const conn = signal<ConnState>("connecting");
@@ -32,6 +37,19 @@ export const driveHz = signal<number | null>(null);
 // Locally-owned selection so a tap feels instant; seeded from the server the
 // first time it tells us who's selected (matches the old app.js behaviour).
 export const selected = signal<string | null>(null);
+
+// ---- the cold channel (see basestation/app.py::settings_frame) ----
+/** Base-station settings and gamepad mapping, by flat dotted path. */
+export const baseSettings = signal<Record<string, SettingValue>>({});
+/** Outcome of the last base-station settings change (clamped, refused, saved). */
+export const settingsResult = signal<SettingsMessage["settings_result"]>(null);
+/** Each robot's tunable config, as the bridge has it cached. */
+export const robotConfigs = signal<Record<string, RobotConfigEntry>>({});
+/** Raw gamepad sample. Only streams while a client is watching. */
+export const gamepad = signal<GamepadState | null>(null);
+/** True once the first settings frame has landed (before that, a blank form
+ *  would be indistinguishable from "every value is zero"). */
+export const settingsReady = signal(false);
 
 /** The currently-selected robot object, or null. */
 export const selectedRobot = computed<Robot | null>(() => {
@@ -69,10 +87,24 @@ export function connect(): void {
   };
 
   ws.onmessage = (ev) => {
-    let msg: FleetMessage;
+    let msg: FleetMessage | SettingsMessage | GamepadMessage;
     try {
       msg = JSON.parse(ev.data);
     } catch {
+      return;
+    }
+    if (msg.type === "settings") {
+      batch(() => {
+        baseSettings.value = msg.settings ?? {};
+        settingsResult.value = msg.settings_result ?? null;
+        robotConfigs.value = msg.configs ?? {};
+        if (msg.gamepad) gamepad.value = msg.gamepad;
+        settingsReady.value = true;
+      });
+      return;
+    }
+    if (msg.type === "gamepad") {
+      gamepad.value = msg.gamepad;
       return;
     }
     if (msg.type !== "fleet") return;

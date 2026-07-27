@@ -15,6 +15,11 @@ configured via /etc/roversoftware/basestation.env), then CLI flags override:
     RS_SIM_ROBOTS, RS_SIM_ORIGIN, RS_NO_CONTROLLER, RS_TILES,
     RS_TILES_MBTILES, RS_TILES_UPSTREAM, RS_TILES_OFFLINE,
     RS_DRIVE_HZ, RS_UI_HZ, RS_VIDEO_ENABLED, RS_VIDEO_PORT, RS_VIDEO_HZ
+
+...and finally the dashboard's own saved settings (RS_BASE_SETTINGS) are loaded
+over the top: the gamepad mapping and the link/UI rates are editable from the
+Settings page, and what the operator saved there should outrank a default that
+was baked into a service file months ago. See basestation/settings.py.
 """
 
 import argparse
@@ -25,6 +30,7 @@ import uvicorn
 
 from basestation.app import build_app
 from basestation.fleet import FleetManager
+from basestation.settings import SettingsStore
 
 # Aerial/satellite imagery is the useful basemap for driving a rover: you steer
 # by the terrain you can actually see (grass, gravel, tree lines), not by street
@@ -94,8 +100,17 @@ def main():
 
     fleet = FleetManager()
 
+    # CLI/env values are the baseline; anything the operator has since changed
+    # from the dashboard is loaded over the top (basestation/settings.py).
+    settings = SettingsStore(defaults={
+        "base.drive_hz": args.drive_hz,
+        "base.ui_hz": args.ui_hz,
+        "base.video_hz": args.video_hz,
+        "base.tiles": args.tiles,
+    })
+
     def on_msg(msg):
-        fleet.update_from_telemetry(msg, time.monotonic())
+        fleet.handle(msg, time.monotonic())
 
     if args.sim:
         from basestation.simulator import SimulatedFleet
@@ -114,7 +129,8 @@ def main():
     if not args.no_controller:
         try:
             from basestation.controller_input import ControllerReader
-            controller = ControllerReader()
+            controller = ControllerReader(hz=settings.base.controller_hz,
+                                          mapping=settings.mapping())
         except Exception as e:
             print(f"[base] gamepad disabled: {e}")
 
@@ -124,11 +140,15 @@ def main():
         video_rx = VideoReceiver(port=args.video_port)
         print(f"[base] FPV video receiver on udp/{args.video_port}")
 
+    # web_cfg now carries only what is fixed for the process's lifetime (the
+    # tile cache is opened once); the live rates and the basemap URL come from
+    # `settings`, which the dashboard can edit.
     app = build_app(fleet, link, controller,
-                    {"tiles": args.tiles, "drive_hz": args.drive_hz, "ui_hz": args.ui_hz,
-                     "tiles_mbtiles": args.tiles_mbtiles, "tiles_upstream": args.tiles_upstream,
-                     "tiles_offline": args.tiles_offline, "video_hz": args.video_hz},
-                    video_rx=video_rx)
+                    {"tiles_mbtiles": args.tiles_mbtiles,
+                     "tiles_upstream": args.tiles_upstream,
+                     "tiles_offline": args.tiles_offline,
+                     "tiles": args.tiles},
+                    video_rx=video_rx, settings=settings)
     print(f"[base] dashboard -> http://{args.host}:{args.web_port}")
     uvicorn.run(app, host=args.host, port=args.web_port, log_level="warning")
 

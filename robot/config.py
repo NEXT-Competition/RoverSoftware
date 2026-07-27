@@ -271,6 +271,56 @@ class ShooterConfig:
 
 
 @dataclass
+class PIDConfig:
+    """Gains for one PID loop (robot/control/pid.py).
+
+    Split out of the controllers so the loops are tunable from the base station
+    instead of being edit-and-redeploy constants. The defaults below ARE the
+    values the controllers used to hardcode, so behaviour is unchanged until
+    someone turns a knob.
+    """
+    kp: float = 0.0
+    ki: float = 0.0
+    kd: float = 0.0
+    out_limit: float = 1.0  # clamp on the loop's output
+    i_limit: float = 1.0  # clamp on the accumulated integral (anti-windup)
+
+
+@dataclass
+class AlignConfig:
+    # Behaviour of the object_align / shooter_align state machine. The geometry
+    # it reasons about (standoff_size, hfov_deg, search_speed) stays in
+    # VisionConfig, because those describe the *detector*, not the loop.
+    forward_speed: float = 0.25  # creep throttle once roughly on bearing
+    pivot_threshold: float = 0.25  # |error_x| above this => turn in place
+    aligned_tolerance: float = 0.05  # |error_x| below this => "aligned"
+    search_after: float = 0.5  # ride out dropouts this long before sweeping
+    search_timeout: float = 10.0  # give up (stop) after sweeping this long
+    # Tuned for ~100-200 ms of perception dead time, which is what actually
+    # limits stability here. Anything hotter oscillates: the robot steers on an
+    # error it measured two frames ago. Start low, not high.
+    pid: PIDConfig = field(
+        default_factory=lambda: PIDConfig(kp=0.5, ki=0.0, kd=0.05, out_limit=0.8)
+    )
+
+
+@dataclass
+class NavConfig:
+    # Waypoint navigation (robot/control/waypoint.py).
+    arrive_radius_m: float = 2.0  # a leg is done inside this radius
+    cruise_speed: float = 0.35  # throttle once roughly on bearing
+    # Straight-line throttle used only to acquire an initial heading when none
+    # is available. Must exceed GPSConfig.min_move_mps or no course ever fixes.
+    acquire_speed: float = 0.4
+    pivot_threshold_deg: float = 25.0  # heading error above this => pivot in place
+    # Gains for the fast, standstill-valid IMU heading: a bit of proportional
+    # bite plus a touch of integral to kill steady-state bias.
+    heading_pid: PIDConfig = field(
+        default_factory=lambda: PIDConfig(kp=0.4, ki=0.02, kd=0.08, out_limit=0.7)
+    )
+
+
+@dataclass
 class RobotConfig:
     drive: DriveConfig = field(default_factory=DriveConfig)
     comms: CommsConfig = field(default_factory=CommsConfig)
@@ -280,6 +330,8 @@ class RobotConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     fpv: FPVConfig = field(default_factory=FPVConfig)
     shooter: ShooterConfig = field(default_factory=ShooterConfig)
+    align: AlignConfig = field(default_factory=AlignConfig)
+    nav: NavConfig = field(default_factory=NavConfig)
     # Control loop rate. This is the rate the motors are actually updated at, so
     # it sets both the floor on teleop latency (a command waits up to 1/loop_hz
     # before anything looks at it) and the granularity of the slew limiter, which
