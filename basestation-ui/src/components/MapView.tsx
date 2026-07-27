@@ -68,8 +68,9 @@ export function MapView() {
   useEffect(() => {
     // Touch-first: no +/- control (it collided with the top bar); pinch and
     // scroll-wheel zoom stay enabled by default.
+    // Default view: the field at 4609 Rapidan River Rd, Fairfax, VA 22030.
     const map = L.map(elRef.current!, { zoomControl: false })
-      .setView([37.7749, -122.4194], 17);
+      .setView([38.8331773, -77.3232135], 17);
     mapRef.current = map;
     // Imagery licences want a visible credit, but a kiosk doesn't need the
     // "Leaflet" link — keep the control, drop the prefix.
