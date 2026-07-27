@@ -44,6 +44,19 @@ class RobotState:
     shooter: Optional[dict] = None
     last_seen: float = 0.0
     trail: List[Tuple[float, float]] = field(default_factory=list)
+    # The robot's tunable parameters (robot/tuning.py), flat dotted paths ->
+    # values, as last reported by the robot itself. Merged rather than replaced:
+    # a robot answers `get_config` with everything but acknowledges a `set_config`
+    # with only the fields it applied, so the base station keeps the union.
+    # Empty until someone asks — it costs ~2.4 KB of radio airtime, so it is
+    # fetched on demand, never polled.
+    config: Dict[str, object] = field(default_factory=dict)
+    # Bumped on every config change so the web layer can push the settings page
+    # an update without diffing, and without putting 2.4 KB in every 30 Hz frame.
+    config_rev: int = 0
+    # Result of the last set_config: {"rejected": {...}, "restart": [...],
+    # "save_error": str|None}. Shown next to the fields the operator just edited.
+    config_result: Optional[dict] = None
 
     def online(self, now: float) -> bool:
         return self.last_seen > 0 and (now - self.last_seen) < ONLINE_TIMEOUT
@@ -99,6 +112,64 @@ class FleetManager:
                 if len(st.trail) > self.trail_max:
                     del st.trail[: len(st.trail) - self.trail_max]
             st.last_seen = now
+
+    def handle(self, msg: dict, now: float) -> None:
+        """Route one inbound frame from the radio (or the simulator).
+
+        The single entry point for everything a robot sends, so callers don't
+        have to know which frame types exist.
+        """
+        if msg.get("type") == "config":
+            self.update_from_config(msg)
+        else:
+            self.update_from_telemetry(msg, now)
+
+    def update_from_config(self, msg: dict) -> Optional[str]:
+        """Absorb a {"type":"config"} frame from a robot; returns its id.
+
+        The payload is MERGED, because it arrives in two flavours: the full
+        snapshot a robot sends when asked, and the applied-fields subset it
+        acknowledges an edit with. Merging makes both correct and means a
+        rejected field keeps showing the robot's real value, not the operator's
+        wish.
+        """
+        robot_id = msg.get("from") or msg.get("robot_id")
+        if not robot_id:
+            return None
+        values = msg.get("config")
+        with self._lock:
+            st = self._ensure(robot_id)
+            if isinstance(values, dict):
+                st.config.update(values)
+            st.config_result = {
+                "rejected": msg.get("rejected") or {},
+                "restart": msg.get("restart") or [],
+                "save_error": msg.get("save_error"),
+            }
+            st.config_rev += 1
+        return robot_id
+
+    def configs(self) -> Dict[str, dict]:
+        """Per-robot config + the last edit's result, for the settings page.
+
+        Pushed only when `config_rev` moves — see basestation/app.py. It is not
+        part of the fleet snapshot on purpose: at 30 Hz, 2.4 KB per robot is a
+        lot of bytes to spend restating a config nobody is looking at.
+        """
+        with self._lock:
+            return {
+                st.robot_id: {
+                    "rev": st.config_rev,
+                    "config": dict(st.config),
+                    "result": st.config_result,
+                }
+                for st in self._robots.values()
+                if st.config_rev > 0
+            }
+
+    def config_revs(self) -> Dict[str, int]:
+        with self._lock:
+            return {st.robot_id: st.config_rev for st in self._robots.values()}
 
     @property
     def selected(self) -> Optional[str]:

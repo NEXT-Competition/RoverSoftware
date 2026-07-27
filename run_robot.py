@@ -16,6 +16,11 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
         MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED
 
+Values tuned from the base station's settings page (PID gains, speeds, drive
+limits) are saved on the robot at RS_TUNING_FILE and applied LAST, over both of
+the above — see robot/tuning.py. They are the operator's most recent deliberate
+decision, and nothing they can reach has a CLI flag or env var here.
+
 Without the Fusion HAT / XBee present, the servo layer falls back to a mock so
 you can still exercise the control and comms logic on a laptop. Likewise
 RS_MOCK_DETECTOR=1 synthesizes a moving target, so object_align can be driven
@@ -33,6 +38,7 @@ servo is mocked, and every shot still prints:
 import argparse
 import os
 
+from robot import tuning
 from robot.config import RobotConfig
 from robot.robot import Robot
 
@@ -182,6 +188,17 @@ def main():
     cfg.shooter.max_shots = int(os.environ.get("RS_SHOOTER_MAX_SHOTS", cfg.shooter.max_shots))
     cfg.shooter.require_arm = os.environ.get("RS_SHOOTER_REQUIRE_ARM", "1").strip().lower() in ("1", "true", "yes", "on")
     cfg.shooter.require_arrived = os.environ.get("RS_SHOOTER_REQUIRE_ARRIVED", "1").strip().lower() in ("1", "true", "yes", "on")
+
+    # Values tuned from the base station's settings page, saved on this robot.
+    # Applied LAST, on purpose: they are the operator's most recent deliberate
+    # decision, and the paths they can touch (gains, speeds, limits) are
+    # disjoint from the wiring flags above — no CLI flag names a PID gain.
+    overrides = tuning.load_overrides()
+    if overrides:
+        applied, rejected = tuning.apply(cfg, overrides)
+        print(f"[Robot] tuning: {len(applied)} saved values from {tuning.overrides_path()}")
+        for path, why in rejected.items():
+            print(f"[Robot] tuning: ignoring {path}: {why}")
 
     motors = "MOCK" if args.mock_motors else "real"
     gps = f"{cfg.gps.port}@{cfg.gps.baud}" if cfg.gps.enabled else "off"

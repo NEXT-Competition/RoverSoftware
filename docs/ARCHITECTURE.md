@@ -115,11 +115,13 @@ robot/                        # runs on the rover Pi (also imported by the base 
     detector.py               Edge Impulse .eim runner → Detection
     imx500.py                 Sony IMX500 on-sensor detection → Detection
     fpv.py                    JPEG-over-UDP live video → base station
+  tuning.py                   whitelist of remotely-settable parameters
 run_robot.py                  robot entry point (env + CLI → RobotConfig)
 
 basestation/                  # cross-platform dashboard (Pi or Mac)
   app.py                      FastAPI: UI, WebSocket bridge, tiles route
   fleet.py                    FleetManager: per-robot state from telemetry
+  settings.py                 gamepad mapping + link/UI rates, persisted
   tiles.py                    TileStore: MBTiles cache + online fallback
   simulator.py                fake fleet (drop-in for the radio)
   controller_input.py         pygame gamepad reader → selected robot
@@ -155,13 +157,45 @@ from environment variables / CLI flags, and hands it to `Robot`.
 | `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=57600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. Must match the base station and the radios' `BD`. |
 | `ShooterConfig` | `enabled=False`, `channel=2`, `rest_angle=-30`, `fire_angle=30`, `fire_seconds=0.35`, `retract_seconds=0.35`, `dwell=0.5`, `cooldown=2.0`, `require_arm=True`, `require_arrived=True`, `max_shots=0` | Servo launcher geometry + the firing policy for `shooter_align`. Off by default. |
 | `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5`, `update_rate_ms=1000` | Adafruit Ultimate GPS reader settings. |
-| `RobotConfig` | `drive`, `comms`, `gps`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5`, `heading_source="auto"` | Top-level composition. `heading_source`: `auto` (IMU, else the GPS track angle) \| `gps` \| `imu`. |
+| `PIDConfig` | `kp`, `ki`, `kd`, `out_limit`, `i_limit` | Gains for one loop, so they are tunable rather than edit-and-redeploy constants. |
+| `AlignConfig` | `forward_speed=0.25`, `pivot_threshold=0.25`, `aligned_tolerance=0.05`, `search_after=0.5`, `search_timeout=10`, `pid` | The `object_align` / `shooter_align` state machine. |
+| `NavConfig` | `arrive_radius_m=2.0`, `cruise_speed=0.35`, `acquire_speed=0.4`, `pivot_threshold_deg=25`, `heading_pid` | Waypoint navigation. |
+| `RobotConfig` | `drive`, `comms`, `gps`, `align`, `nav`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5`, `heading_source="auto"` | Top-level composition. `heading_source`: `auto` (IMU, else the GPS track angle) \| `gps` \| `imu`. |
 
 > **ESC-as-servo mapping.** An ESC takes the same PWM as a servo — neutral pulse
 > = stop, longer = forward, shorter = reverse. Throttle `-1..+1` maps onto servo
 > angle `min_angle..max_angle` with `neutral_angle` as stop. On the Fusion HAT,
 > `Servo.angle()` runs roughly `-90..+90` with `0` at neutral. Calibrate with
 > `tools/esc_calibrate.py` and copy the endpoints into `config.py`.
+
+**Live tuning (`robot/tuning.py`).** The dashboard can change most of the above
+over the radio while the robot is running. `RobotConfig` is the right shape for
+code but the wrong one for a remote form — a browser must not be able to poke
+arbitrary attributes on it, and a slider needs to know a field's range — so
+`tuning.py` is the whitelist. Each parameter is declared once with its type,
+bounds and whether it applies live; `snapshot(cfg)` reads them all out as flat
+dotted paths and `apply(cfg, updates)` writes them back. Unknown paths are
+rejected, numbers are **clamped rather than refused** (a slider pinned at its
+limit is honest; silently dropping the update looks like a broken UI), and a
+malformed frame is reported instead of raised — nothing off a radio may take
+the robot down.
+
+`live=True` is a claim about the code, not a wish. It holds either because the
+consumer re-reads `cfg` on every use (the motors, the shooter servo, the
+detector, the FPV streamer, the loop rates) or because `Robot._push_live_config`
+copies the value into the object that cached it at construction (the
+controllers, the IMU, the GPS). Retuning a PID copies the gains without
+resetting the integrator: changing a gain mid-run should nudge the loop, not
+make the robot forget where it was pointing. `live=False` marks anything owned
+by a constructor — serial ports, I²C addresses, PWM channels, enable flags — and
+those are stored, badged in the UI, and applied on the next start.
+
+Applied values are persisted on the robot (`RS_TUNING_FILE`, default
+`/var/lib/roversoftware/tuning.json`) and re-applied at boot *after* env and CLI:
+they are the operator's most recent deliberate decision, and the paths they can
+reach are disjoint from the wiring flags (no CLI flag names a PID gain). A
+corrupt tuning file is ignored, not fatal — it must leave the robot bootable on
+its compiled-in defaults rather than bricked at the side of a field.
 
 ### 4.2 The orchestrator & control loop (`robot/robot.py`)
 
@@ -557,9 +591,20 @@ fleet as a dict, including the auto-selected robot.
 
 **`app.py` (FastAPI).**
 - `/` and `/static/*` — the dashboard.
-- `/ws` — WebSocket. Inbound: browser actions (select / mode / estop / route /
-  drive). Outbound: a `broadcast_loop` pushes a fleet snapshot at `ui_hz` (30 Hz),
-  enriched with controller status and the tiles URL + max zoom.
+- `/ws` — WebSocket, carrying **two outbound channels**:
+  - `{"type":"fleet"}` — the hot path. A `broadcast_loop` pushes a fleet
+    snapshot at `ui_hz` (30 Hz), enriched with controller status, the tiles URL
+    + max zoom, and the server's drive-rate budget.
+  - `{"type":"settings"}` — the cold path. Base-station settings, the gamepad
+    mapping, and each robot's tunable config. Sent on connect and then only
+    when something changes: a robot's config is ~2.4 KB, and restating it 30
+    times a second would be the largest thing on the socket by far.
+
+  Inbound: browser actions (select / mode / estop / route / drive / shooter),
+  plus `get_config`, `set_config`, `set_settings`, and `watch_gamepad`.
+  `watch_gamepad` subscribes one client to raw `{"type":"gamepad"}` frames —
+  those stream only while a mapping editor is open, since they are useless
+  anywhere else.
 - `/tiles/{z}/{x}/{y}.png` — offline map tiles ([§8](#8-offline-maps)).
 - **Command dispatch** stamps a `to` field so one radio serves the fleet.
 - **Gamepad rate-limiting** — `drive` frames are sent only when the command
@@ -567,12 +612,34 @@ fleet as a dict, including the auto-selected robot.
   keepalive so the robot's `command_timeout` failsafe doesn't trip while a stick
   is held steady. This keeps a slow XBee link from backing up.
 
+**`SettingsStore` (`settings.py`).** The base station's own editable state: the
+gamepad mapping (which axis is steer, which button is E-STOP, dead zone, gains)
+and the link/UI rates. CLI and env set the baseline at startup; the saved file
+(`RS_BASE_SETTINGS`, default `~/.config/roversoftware/basestation.json`) is
+overlaid on top, so a flag still configures anything the operator never touched.
+Values are clamped, not refused, and a corrupt file is ignored rather than
+fatal — the base station must stay launchable.
+
 **`ControllerReader` (`controller_input.py`).** Reads a PS4/DualShock-style
 gamepad via pygame on a background thread, headless (`SDL_VIDEODRIVER=dummy`) so
 it works on a Mac or a display-less Pi. Emits `(throttle, steer)` at 40 Hz
-(throttle = R2 minus L2, steer = right stick X, 0.08 dead-zone) and fires
-edge-triggered actions (e-stop / clear / mode). Hot-plugging reconnects
-automatically. The app binds these to the **currently selected** robot.
+(throttle = R2 minus L2, steer = right stick X) and fires edge-triggered actions
+(e-stop / clear / mode / arm / fire). Hot-plugging reconnects automatically. The
+app binds these to the **currently selected** robot.
+
+Axis and button indices come from the `ControllerMapping` above, not from
+constants: they describe a *driver*, not a controller — the same pad enumerates
+differently across macOS, Linux, USB and Bluetooth — so re-binding is a tap in
+the settings page rather than an ssh session. The reader also publishes
+`state()`, the raw axes and buttons it currently sees, which is what lets that
+page offer "press the button you want" instead of asking for an index.
+
+Analog triggers arm before they steer: SDL scales a trigger to -1 released /
++1 pulled, but some drivers report a flat `0.0` for a trigger untouched since
+the joystick opened — which rescales to *half throttle*. `Trigger` therefore
+reports 0 until it has seen the axis genuinely at rest, so a freshly plugged-in
+controller can never launch the robot on its own. Retuning the rest value
+disarms, for the same reason.
 
 Analog triggers arm before they steer: SDL scales a trigger to -1 released /
 +1 pulled, but some drivers report a flat `0.0` for a trigger untouched since
@@ -584,13 +651,22 @@ controller can never launch the robot on its own.
 `start/stop/send + on_message`). Each fake robot is a unicycle model: tank
 commands become linear/angular velocity integrated into lat/lon/heading, and in
 `waypoint` mode it actually drives clicked routes (using the *same* `bearing_deg`
-/ `haversine_m` as the real controller). This runs the entire dashboard —
-map, teleop, mode switching, routes — with no hardware.
+/ `haversine_m` as the real controller). Each also carries a real `RobotConfig`
+and answers `get_config`/`set_config`, honouring the drive limits and waypoint
+tuning it is given — so the settings page can be exercised end to end with no
+hardware. A settings page you can only test on a real rover is a settings page
+that ships broken. This runs the entire dashboard — map, teleop, mode
+switching, routes, settings — with no hardware.
 
-**Dashboard (`static/`).** A Leaflet map streams fleet state over the WebSocket:
-each robot is a heading arrow with a position trail; the sidebar lists mode /
-battery / link / track speeds and selects a robot; route mode drops waypoints and
-sends them.
+**Dashboard (`basestation-ui/`).** A Leaflet map streams fleet state over the
+WebSocket: each robot is a heading arrow with a position trail; the rail lists
+mode / battery / link / GPS health / track speeds and selects a robot; route
+mode drops waypoints and sends them. The gear opens a full-screen settings view
+with three tabs — **Robot** (the selected rover's tunables, fetched on demand),
+**Controller** (mapping, bound by pressing the control you want), and **Base
+station** (link and UI rates, basemap). `settings/schema.ts` mirrors the two
+Python whitelists for labels, ranges and help text, exactly as `net/types.ts`
+mirrors the `/ws` contract; Python remains the authority and clamps everything.
 
 ---
 
@@ -667,6 +743,12 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_SHOOTER_FIRE_S` / `RS_SHOOTER_RETRACT_S` | `0.35` / `0.35` | Hold at the fire angle, then settle before re-arming. |
 | `RS_SHOOTER_DWELL` / `RS_SHOOTER_COOLDOWN` | `0.5` / `2.0` | Hold the aim this long before firing; min seconds between shots. |
 | `RS_SHOOTER_REQUIRE_ARM` / `RS_SHOOTER_REQUIRE_ARRIVED` / `RS_SHOOTER_MAX_SHOTS` | `1` / `1` / `0` | Firing gates; magazine size (0 = unlimited). |
+| `RS_TUNING_FILE` | `/var/lib/roversoftware/tuning.json` | Where values set from the dashboard are saved. Applied *after* env and CLI (see [§4.1](#41-configuration-robotconfigpy)). |
+
+> **Env, CLI, or the dashboard?** Env and CLI set what the robot boots with;
+> the dashboard changes what it is doing *now* and saves it. PID gains, speeds
+> and limits have no CLI flag on purpose — they are field-tuning knobs, and
+> tuning them over ssh is how they end up never tuned at all.
 
 **Base station (`run_basestation.py`):**
 
@@ -679,6 +761,7 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_DRIVE_HZ` / `RS_UI_HZ` | `30` / `30` | Command send / UI refresh rates. |
 | `RS_TILES` | OSM URL | Tile URL the browser loads (`/tiles/{z}/{x}/{y}.png` for offline). |
 | `RS_TILES_MBTILES` / `RS_TILES_UPSTREAM` / `RS_TILES_OFFLINE` | — / OSM / `0` | Offline cache path / fallback source / air-gap. |
+| `RS_BASE_SETTINGS` | `~/.config/roversoftware/basestation.json` | Where the gamepad mapping and dashboard-set rates are saved. Loaded *over* the flags above, so an operator's saved choice wins. |
 
 ---
 

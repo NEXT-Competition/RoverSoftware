@@ -8,11 +8,13 @@ import signal
 import time
 from typing import Callable, Dict, Optional, Tuple
 
-from .config import RobotConfig
+from . import tuning
+from .config import PIDConfig, RobotConfig
 from .comms.xbee_link import XBeeLink
 from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
+from .control.pid import PID
 from .control.shooter_align import ShooterAlignController
 from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
@@ -29,6 +31,21 @@ from .sensors.pose import PoseEstimator
 # Log a warning if a control tick's work (excluding the sleep) exceeds this. A
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
 SLOW_TICK_S = 0.1
+
+
+def _pid(cfg: PIDConfig) -> PID:
+    return PID(kp=cfg.kp, ki=cfg.ki, kd=cfg.kd,
+               out_limit=cfg.out_limit, i_limit=cfg.i_limit)
+
+
+def _retune(pid: PID, cfg: PIDConfig) -> None:
+    """Copy gains onto a live PID without touching its integrator.
+
+    Deliberately not a reset: retuning mid-run should nudge the loop, not make
+    the robot forget where it was pointing and lurch.
+    """
+    pid.kp, pid.ki, pid.kd = cfg.kp, cfg.ki, cfg.kd
+    pid.out_limit, pid.i_limit = cfg.out_limit, cfg.i_limit
 
 
 class Robot:
@@ -48,21 +65,44 @@ class Robot:
         # mode-switching works today; they hold the robot still until their
         # sensor providers (camera target / GPS pose) are attached.
         if controllers is None:
+            # Tuning (gains, speeds, thresholds) comes from config.align /
+            # config.nav rather than the controllers' own defaults, so the base
+            # station's settings page has something to write to. _push_live_config
+            # copies later edits back onto these same objects.
+            a, v = config.align, config.vision
             controllers = {
                 "teleop": TeleopController(config.comms.command_timeout),
                 "object_align": ObjectAlignController(
-                    standoff_size=config.vision.standoff_size,
-                    search_speed=config.vision.search_speed,
-                    hfov_deg=config.vision.hfov_deg,
+                    forward_speed=a.forward_speed,
+                    pivot_threshold=a.pivot_threshold,
+                    aligned_tolerance=a.aligned_tolerance,
+                    search_after=a.search_after,
+                    search_timeout=a.search_timeout,
+                    standoff_size=v.standoff_size,
+                    search_speed=v.search_speed,
+                    hfov_deg=v.hfov_deg,
+                    pid=_pid(a.pid),
                 ),
                 "shooter_align": ShooterAlignController(
                     shooter=self.shooter,
                     config=config.shooter,
-                    standoff_size=config.vision.standoff_size,
-                    search_speed=config.vision.search_speed,
-                    hfov_deg=config.vision.hfov_deg,
+                    forward_speed=a.forward_speed,
+                    pivot_threshold=a.pivot_threshold,
+                    aligned_tolerance=a.aligned_tolerance,
+                    search_after=a.search_after,
+                    search_timeout=a.search_timeout,
+                    standoff_size=v.standoff_size,
+                    search_speed=v.search_speed,
+                    hfov_deg=v.hfov_deg,
+                    pid=_pid(a.pid),
                 ),
-                "waypoint": WaypointController(),
+                "waypoint": WaypointController(
+                    arrive_radius_m=config.nav.arrive_radius_m,
+                    cruise_speed=config.nav.cruise_speed,
+                    acquire_speed=config.nav.acquire_speed,
+                    pivot_threshold_deg=config.nav.pivot_threshold_deg,
+                    heading_pid=_pid(config.nav.heading_pid),
+                ),
             }
         self.manager = ControlManager(controllers, config.start_mode)
 
@@ -181,7 +221,100 @@ class Robot:
             to = msg.get("to")
             if to is not None and to != self.cfg.robot_id and to != "all":
                 continue  # addressed to a different robot on the shared channel
-            self.manager.handle_message(msg)
+            # Configuration is handled here, not in ControlManager: it reaches
+            # past the active controller into the drivetrain, the sensors and
+            # the loop rate, none of which the manager owns.
+            mtype = msg.get("type")
+            if mtype == "get_config":
+                self._send_config()
+            elif mtype == "set_config":
+                self._set_config(msg)
+            else:
+                self.manager.handle_message(msg)
+
+    # --- configuration ------------------------------------------------------
+
+    def _config_frame(self, values: dict, **extra) -> dict:
+        """A {"type":"config"} frame. `values` is a partial set the base station
+        MERGES into its cached copy — a full snapshot on request, just the
+        applied fields after an edit (the radio is shared with telemetry)."""
+        return {"type": "config", "from": self.cfg.robot_id, "config": values, **extra}
+
+    def _send_config(self) -> None:
+        """Answer get_config, split into radio-sized frames (see tuning.chunks)."""
+        for part in tuning.chunks(tuning.snapshot(self.cfg)):
+            self.link.send(self._config_frame(part))
+
+    def _set_config(self, msg: dict) -> None:
+        applied, rejected = tuning.apply(self.cfg, msg.get("config") or {})
+        if applied:
+            self._push_live_config()
+        # Persist by default: an operator tuning gains in a field expects them
+        # to survive the next power cycle. `"save": false` is the escape hatch
+        # for trying a value without committing to it.
+        error = None
+        if applied and msg.get("save", True):
+            error = tuning.save_overrides(applied)
+            if error:
+                print(f"[Robot] config applied but NOT saved: {error}")
+        restart = tuning.needs_restart(applied)
+        if applied:
+            print(f"[Robot] config: {len(applied)} applied"
+                  + (f", {len(rejected)} rejected" if rejected else "")
+                  + (f", {len(restart)} need a restart" if restart else ""))
+        for path, why in rejected.items():
+            print(f"[Robot] config rejected {path}: {why}")
+        self.link.send(self._config_frame(
+            applied, rejected=rejected, restart=restart, save_error=error))
+
+    def _push_live_config(self) -> None:
+        """Copy config onto the objects that cached it at construction.
+
+        Most consumers (the motors, the shooter servo, the detector, the FPV
+        streamer) read their config dataclass on every use, so mutating the
+        config is enough. The ones below took a copy, and this is what makes
+        `live=True` in tuning.py true for them. Idempotent and cheap — it runs
+        only when a config frame arrives, never in the control loop.
+        """
+        cfg = self.cfg
+        for c in self.manager.controllers.values():
+            if isinstance(c, TeleopController):
+                c.command_timeout = cfg.comms.command_timeout
+            if isinstance(c, ObjectAlignController):
+                c.forward_speed = cfg.align.forward_speed
+                c.pivot_threshold = cfg.align.pivot_threshold
+                c.aligned_tolerance = cfg.align.aligned_tolerance
+                c.search_after = cfg.align.search_after
+                c.search_timeout = cfg.align.search_timeout
+                c.standoff_size = cfg.vision.standoff_size
+                c.search_speed = cfg.vision.search_speed
+                c.hfov_deg = cfg.vision.hfov_deg
+                _retune(c.pid, cfg.align.pid)
+            # Not an elif: shooter_align IS an ObjectAlignController and needs
+            # the alignment tuning above as well as its own firing policy.
+            if isinstance(c, ShooterAlignController):
+                c.dwell = cfg.shooter.dwell
+                c.cooldown = cfg.shooter.cooldown
+                c.require_arm = cfg.shooter.require_arm
+                c.require_arrived = cfg.shooter.require_arrived
+                c.max_shots = cfg.shooter.max_shots
+            if isinstance(c, WaypointController):
+                c.arrive_radius_m = cfg.nav.arrive_radius_m
+                c.cruise_speed = cfg.nav.cruise_speed
+                c.acquire_speed = cfg.nav.acquire_speed
+                c.pivot_threshold_deg = cfg.nav.pivot_threshold_deg
+                _retune(c.heading_pid, cfg.nav.heading_pid)
+        # Safe to assign directly: tuning.py restricts this to the same enum
+        # PoseEstimator validates against.
+        self.pose_estimator.heading_source = cfg.heading_source
+        if self.imu is not None:
+            self.imu.heading_offset_deg = cfg.imu.heading_offset_deg
+            self.imu.invert = cfg.imu.invert
+            self.imu.min_calib = cfg.imu.min_calib
+            self.imu.persist_calibration = cfg.imu.persist_calibration
+        if self.gps is not None:
+            self.gps.fix_timeout = cfg.gps.fix_timeout
+            self.gps.min_move_mps = cfg.gps.min_move_mps
 
     def _telemetry(self, cmd) -> dict:
         t = {
@@ -245,11 +378,14 @@ class Robot:
         signal.signal(signal.SIGINT, self._on_signal)
         signal.signal(signal.SIGTERM, self._on_signal)
 
-        period = 1.0 / self.cfg.loop_hz
         last = time.monotonic()
         print(f"[Robot] running at {self.cfg.loop_hz:.0f} Hz, start mode '{self.manager.mode}'")
         try:
             while self._running:
+                # Read every tick, not once: loop_hz is tunable from the base
+                # station, and a rate that only applied on reboot would be a
+                # slider that appears to do nothing.
+                period = 1.0 / max(self.cfg.loop_hz, 1.0)
                 now = time.monotonic()
                 dt = now - last
                 last = now

@@ -71,6 +71,54 @@ export interface ControllerStatus {
   name: string | null;
 }
 
+/** A settings value. Everything crossing the wire is one of these four. */
+export type SettingValue = number | boolean | string;
+
+/** Raw gamepad sample from the server-side pygame reader
+ *  (basestation/controller_input.py::state). Unmapped on purpose — the mapping
+ *  editor's job is to show what the hardware emits so it can be bound. */
+export interface GamepadState {
+  connected: boolean;
+  name: string | null;
+  axes: number[];
+  buttons: boolean[];
+}
+
+/** One robot's tunable config, as the base station has it cached
+ *  (basestation/fleet.py::configs). */
+export interface RobotConfigEntry {
+  rev: number; // bumped on every change; the UI re-syncs when it moves
+  config: Record<string, SettingValue>; // flat dotted paths -> values
+  result: {
+    rejected: Record<string, string>; // path -> why it was refused
+    restart: string[]; // applied, but only takes effect after a restart
+    save_error: string | null; // applied but not persisted (read-only FS)
+  } | null;
+}
+
+/** The cold channel: sent on connect and then only when something changes.
+ *  Kept out of the 30 Hz fleet frame because a robot's config is ~2.4 KB. */
+export interface SettingsMessage {
+  type: "settings";
+  settings: Record<string, SettingValue>; // "base.*" and "controller.*"
+  /** Outcome of the last set_settings — the base station's equivalent of a
+   *  robot's RobotConfigEntry.result. Null before anything has been changed. */
+  settings_result: {
+    applied: Record<string, SettingValue>;
+    rejected: Record<string, string>;
+    restart: string[];
+    save_error: string | null;
+  } | null;
+  configs: Record<string, RobotConfigEntry>; // by robot_id
+  gamepad: GamepadState | null;
+}
+
+/** Streamed at ui_hz, but only to clients that asked (watch_gamepad). */
+export interface GamepadMessage {
+  type: "gamepad";
+  gamepad: GamepadState | null;
+}
+
 /** The single message type the bridge pushes at ui_hz (default 30 Hz). */
 export interface FleetMessage {
   type: "fleet";
@@ -95,6 +143,20 @@ export type Action =
   | { action: "drive"; robot_id: string; throttle: number; steer: number }
   | { action: "arm_shooter"; robot_id: string }
   | { action: "disarm_shooter"; robot_id: string }
-  | { action: "fire"; robot_id: string };
+  | { action: "fire"; robot_id: string }
+  // Ask a robot for its full tunable config. Explicit rather than polled: the
+  // reply is ~2.4 KB over a radio shared with telemetry.
+  | { action: "get_config"; robot_id: string }
+  // Change some of it. `save` persists on the robot (default true).
+  | {
+    action: "set_config";
+    robot_id: string;
+    config: Record<string, SettingValue>;
+    save?: boolean;
+  }
+  // Base-station settings + gamepad mapping. Local; no radio involved.
+  | { action: "set_settings"; settings: Record<string, SettingValue> }
+  // Subscribe this socket to raw gamepad frames (mapping editor only).
+  | { action: "watch_gamepad"; on: boolean };
 
 export type ConnState = "connecting" | "live" | "reconnecting";

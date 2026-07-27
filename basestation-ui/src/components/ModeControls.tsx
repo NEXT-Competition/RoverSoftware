@@ -11,13 +11,15 @@ const MODES: { key: Mode; label: string }[] = [
 export function ModeControls() {
   const rid = selected.value;
   const current = selectedRobot.value?.mode;
+  // A 2x2 grid rather than a wrapping row: with four modes of unequal name
+  // length, flex-wrap left "Object align" on two lines and "Waypoint" alone on
+  // a third. Equal cells also make the active mode easier to spot at a glance.
   return (
-    <div class="btn-row" style="flex-wrap:wrap">
+    <div class="mode-grid">
       {MODES.map((m) => (
         <button
           key={m.key}
           class={`btn${current === m.key ? " active" : ""}`}
-          style="flex:1 1 30%"
           disabled={!rid}
           onClick={() => rid && send({ action: "mode", robot_id: rid, mode: m.key })}
         >

@@ -14,6 +14,8 @@ Message shapes (base station -> robot):
     {"type": "arm_shooter"}      # shooter_align: permit firing
     {"type": "disarm_shooter"}   # shooter_align: forbid firing, park the servo
     {"type": "fire"}             # shooter_align: manual shot, skips alignment
+    {"type": "get_config"}       # ask for every tunable parameter
+    {"type": "set_config", "config": {"align.pid.kp": 0.6}, "save": true}
 
 Arming is deliberately NOT sticky: it is dropped when the mode is left and when
 the e-stop latches, so `clear_estop` alone never resumes a pending shot — the
@@ -21,6 +23,17 @@ operator must send `arm_shooter` again.
 
 Robot -> base station (telemetry), e.g.:
     {"type": "telemetry", "mode": "teleop", "left": 0.4, "right": 0.6}
+    {"type": "config", "from": "rover1", "config": {...},
+     "rejected": {...}, "restart": [...], "save_error": null}
+
+--- Configuration over the radio ---
+`config` frames carry flat dotted paths into RobotConfig; robot/tuning.py owns
+which ones exist and clamps every value, so a browser can't reach an arbitrary
+attribute. The payload is a PARTIAL set the base station merges into its cached
+copy: everything in reply to `get_config`, only the applied fields in reply to
+`set_config`. That split is about airtime — a full snapshot is ~2.4 KB, which
+is ~0.4 s of a 57600 link shared with telemetry, so it is requested explicitly
+and never polled. `save` (default true) also persists the change on the robot.
 """
 
 from __future__ import annotations

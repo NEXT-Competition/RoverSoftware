@@ -8,6 +8,13 @@ Each fake robot is a simple unicycle model: tank commands become linear/angular
 velocity, integrated into lat/lon/heading. In "waypoint" mode a robot will
 actually drive a route you click on the map, so you can watch navigation work
 end to end before the real GPS exists.
+
+Each one also carries a real `RobotConfig` and answers get_config/set_config
+exactly as a robot does, so the dashboard's settings page can be driven — and
+demoed — with no hardware. The per-motor limits it honours (dead band, forward
+and reverse caps) are the ones you can actually *see* take effect on the map,
+which is the point: a settings page you can only test on a real rover is a
+settings page that ships broken.
 """
 
 from __future__ import annotations
@@ -17,6 +24,8 @@ import threading
 import time
 from typing import Callable, Dict, List, Tuple
 
+from robot import tuning
+from robot.config import RobotConfig
 from robot.control.waypoint import bearing_deg, haversine_m
 
 V_MAX = 3.0          # m/s at full throttle
@@ -38,23 +47,37 @@ class _SimRobot:
         self.battery = 100.0
         self.waypoints: List[Tuple[float, float]] = []
         self.wp_idx = 0
+        self.cfg = RobotConfig(robot_id=rid)
+
+    def _limit(self, value: float, motor) -> float:
+        """Apply one motor's dead band and direction caps, as ESCMotor does."""
+        value = _clamp(value)
+        if abs(value) < motor.deadband:
+            return 0.0
+        return value * (motor.max_forward if value > 0 else motor.max_reverse)
 
     def set_arcade(self, throttle: float, steer: float) -> None:
-        self.left = _clamp(throttle + steer)
-        self.right = _clamp(throttle - steer)
+        drive = self.cfg.drive
+        self.left = self._limit(throttle + steer, drive.left)
+        self.right = self._limit(throttle - steer, drive.right)
 
     def _auto_waypoint(self) -> None:
         if self.wp_idx >= len(self.waypoints):
             self.left = self.right = 0.0
             return
         tlat, tlon = self.waypoints[self.wp_idx]
-        if haversine_m(self.lat, self.lon, tlat, tlon) <= 2.0:
+        nav = self.cfg.nav
+        if haversine_m(self.lat, self.lon, tlat, tlon) <= nav.arrive_radius_m:
             self.wp_idx += 1
             self.left = self.right = 0.0
             return
         err = (bearing_deg(self.lat, self.lon, tlat, tlon) - self.heading + 540) % 360 - 180
         steer = _clamp(err / 45.0)
-        forward = 0.5 * max(0.2, 1.0 - abs(steer))
+        # Point-then-go, like the real controller: pivot while badly off bearing.
+        if abs(err) > nav.pivot_threshold_deg:
+            self.set_arcade(0.0, steer)
+            return
+        forward = nav.cruise_speed * max(0.2, 1.0 - abs(steer))
         self.set_arcade(forward, steer)
 
     def step(self, dt: float) -> None:
@@ -129,9 +152,24 @@ class SimulatedFleet:
             for r in targets:
                 self._apply(r, msg)
 
-    @staticmethod
-    def _apply(r: _SimRobot, msg: dict) -> None:
+    def _apply(self, r: _SimRobot, msg: dict) -> None:
         t = msg.get("type")
+        # Configuration, answered exactly as robot/robot.py answers it: a full
+        # snapshot when asked, the applied subset after an edit.
+        if t == "get_config":
+            # Chunked like the real robot (tuning.chunks), so the dashboard's
+            # progressive fill-in is what you see in the simulator too — the
+            # point of the simulator is that it behaves like the radio.
+            for part in tuning.chunks(tuning.snapshot(r.cfg)):
+                self.on_message({"type": "config", "from": r.rid, "config": part})
+            return
+        if t == "set_config":
+            applied, rejected = tuning.apply(r.cfg, msg.get("config") or {})
+            self.on_message({"type": "config", "from": r.rid, "config": applied,
+                             "rejected": rejected,
+                             "restart": tuning.needs_restart(applied),
+                             "save_error": None})
+            return
         if t == "drive":
             if "left" in msg and "right" in msg:
                 r.left, r.right = _clamp(float(msg["left"])), _clamp(float(msg["right"]))
