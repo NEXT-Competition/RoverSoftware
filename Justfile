@@ -112,6 +112,102 @@ uninstall:
     ssh {{target}} "sudo apt-get remove -y {{service}} || sudo dpkg -r {{service}}"
 
 
+# ───────────────────── vision model (Sony IMX500 / AI Camera) ─────────────────
+# The network runs INSIDE the camera, so getting our model there is a two-machine
+# job and neither half can do the other's:
+#
+#   this machine          the Pi
+#   ────────────          ──────
+#   best.pt                                    Ultralytics + MCT + imxconv-pt
+#     -> packerOut.zip  ──scp──>  network.rpk  imx500-package (apt-only, ARM)
+#
+# `imx500-package` ships in the Pi's `imx500-tools` apt package and is not on
+# PyPI, which is the entire reason `just model-install` exists rather than the
+# export just producing an .rpk directly. Full story: docs/MODEL_CONVERSION.md.
+
+imx_out    := "build/imx500-yolo"
+imx_data   := "/var/lib/roversoftware"
+imx_net    := imx_data + "/network.rpk"
+
+# imx500-tools brings the packager, imx500-all the sensor firmware, picamera2
+# the capture path.
+#
+# One-time per robot: install the AI Camera stack.
+model-bootstrap:
+    ssh -t {{target}} "sudo apt-get install -y imx500-tools imx500-all python3-picamera2"
+    @echo "==> AI Camera stack installed on {{host}}"
+
+# Stages the Label Studio export, then converts. Runs HERE, not on the Pi.
+# Extra args pass through to the exporter (--imgsz 480, --conf, ...).
+#
+# Convert best.pt -> packerOut.zip. Needs `uv sync --group convert` first.
+model-export *ARGS:
+    uv run tools/prepare_yolo_dataset.py --src model/data --out build/dataset
+    uv run tools/imx500_export_yolo.py --model model/best.pt --data build/dataset/data.yaml {{ARGS}}
+
+# Worth running after every export: a badly-calibrated model exports and loads
+# fine and simply sees less well, with nothing anywhere reporting an error.
+#
+# Measure what INT8 quantization cost, against the float checkpoint.
+model-validate *ARGS:
+    uv run tools/imx500_validate.py --report {{imx_out}}/validation.json {{ARGS}}
+
+# Build the .rpk ON THE PI from packerOut.zip, and install it.
+model-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f "{{imx_out}}/packerOut.zip" ]; then
+        echo "no {{imx_out}}/packerOut.zip — run: just model-export" >&2
+        exit 1
+    fi
+    echo "==> copying packerOut.zip + labels.txt to {{host}}"
+    scp "{{imx_out}}/packerOut.zip" "{{imx_out}}/labels.txt" {{target}}:/tmp/
+    ssh {{target}} bash -euo pipefail -s <<'REMOTE'
+        if ! command -v imx500-package >/dev/null; then
+            echo "imx500-package not found. Run: just model-bootstrap" >&2
+            exit 1
+        fi
+        rm -rf /tmp/imx500-network && mkdir -p /tmp/imx500-network
+        imx500-package -i /tmp/packerOut.zip -o /tmp/imx500-network
+        # The packager names its output itself; take whatever .rpk appeared
+        # rather than assuming, so a tool rename does not silently install
+        # nothing.
+        rpk=$(find /tmp/imx500-network -name '*.rpk' | head -1)
+        if [ -z "$rpk" ]; then
+            echo "imx500-package produced no .rpk" >&2
+            exit 1
+        fi
+        sudo mkdir -p /var/lib/roversoftware
+        sudo cp "$rpk" /var/lib/roversoftware/network.rpk
+        sudo cp /tmp/labels.txt /var/lib/roversoftware/labels.txt
+        sudo chmod 644 /var/lib/roversoftware/network.rpk /var/lib/roversoftware/labels.txt
+        ls -l /var/lib/roversoftware/network.rpk /var/lib/roversoftware/labels.txt
+    REMOTE
+    # NOT `@echo` — this is a shebang recipe, so the body is a plain script and
+    # just's silent-prefix would be executed as a command named "@echo".
+    cat <<MSG
+
+    ==> installed {{imx_net}} on {{host}}
+        Now point the rover at it — just config — and set:
+          RS_VISION_BACKEND=imx500
+          RS_VISION_IMX500_MODEL={{imx_net}}
+          RS_VISION_IMX500_LABELS={{imx_data}}/labels.txt
+          RS_VISION_HFOV=66
+        Then: just model-selftest
+    MSG
+
+# Export here, build + install on the Pi, in one go.
+model-deploy: model-export model-install
+
+# Does the sensor actually see anything? Runs the SAME decode the rover uses.
+model-selftest *ARGS:
+    ssh -t {{target}} "cd {{app_dir}} && python3 tools/detector_selftest.py --backend imx500 {{ARGS}}"
+
+# What is currently installed on the Pi.
+model-status:
+    ssh {{target}} "ls -l {{imx_net}} {{imx_data}}/labels.txt 2>/dev/null || echo 'no network installed — just model-deploy'; echo; cat {{imx_data}}/labels.txt 2>/dev/null || true"
+
+
 # ───────────────────────── base station (dashboard) ─────────────────────────
 # Target the base-station Pi with bs_host=..., e.g. just bs_host=base.local deploy-basestation
 
