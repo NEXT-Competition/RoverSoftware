@@ -1,172 +1,161 @@
-# Converting an Edge Impulse model for the Sony IMX500
+# Running our own model on the Sony IMX500
 
-Turns the Edge Impulse `.lite` export in `model/` into a network the Raspberry Pi
-AI Camera runs **on the sensor**, so the Pi spends no CPU on inference.
+The Raspberry Pi AI Camera runs its network **inside the sensor**, so the Pi
+spends no CPU on inference. This is how our trained model gets in there.
 
 ```
 uv sync --group convert
-uv run tools/imx500_convert.py --images path/to/frames/
+uv run tools/imx500_export_yolo.py --model model/best.pt --data path/to/data.yaml
 ```
 
-Everything below explains what that does, what was verified, and the one thing
-that still has to happen before `object_align` can use the result.
-
----
-
-## Why it is not a one-liner
-
-The IMX500 toolchain does not accept `.tflite`. `imxconv-pt` takes an ONNX file
-that **MCT** — Sony's Model Compression Toolkit — has already quantized against
-the IMX500 target platform, and MCT wants a *float* model to quantize. So the
-`.lite` has to be walked backwards into a framework model first:
-
-```
-.lite  ->  float PyTorch  ->  MCT PTQ (IMX500 TPC)  ->  ONNX+MCTQ  ->  packerOut.zip  ->  network.rpk
-        ^                  ^                          ^              ^                  ^
-   tflite_to_torch.py   imx500_convert.py         (exporter)     imxconv-pt      imx500-package
-                                                                                   (on the Pi)
-```
-
-The conventional first hop is `tf2onnx` + `onnx2torch`, which pins a TensorFlow
-version and leaves a NHWC↔NCHW transpose soup for MCT to fold. This network is
-small and plain enough — `CONV_2D` ×15, `DEPTHWISE_CONV_2D` ×6, `ADD` ×3,
-`SOFTMAX` ×1, nothing else — that `tools/tflite_to_torch.py` reads the flatbuffer
-directly and emits real `nn.Conv2d`s instead. No TensorFlow anywhere, and a
-cleaner graph for the converter.
-
-## Which export to convert
-
-Two Edge Impulse exports of the same network are in `model/`. **Use the float32
-one**, which is the default:
-
-| | float32 | int8 quantized |
-|---|---|---|
-| rebuild fidelity | exact to float32 epsilon (3.5e-08 mean) | exact to ½ a quantization step |
-| weights | as trained | Edge Impulse's rounding baked in |
-| activations | intact | **saturates at 4 layers** — clipped, unrecoverable |
-| quantizations applied | 1 (IMX500's) | 2 (Edge Impulse's, then IMX500's) |
-
-Converting the int8 export works and is verified, but it stacks a second
-rounding on a model that has already lost information. The int8 export clips a
-few dozen activations to the ends of its int8 range in `block_1_project`,
-`block_2_project`, `block_3_project` and `block_4_add`; dequantization returns
-the clipped values, not the originals.
-
-## Calibration data matters more than anything else here
-
-MCT sets activation ranges by running real inputs through the float model. Pass
-`--images` a directory of frames the rover actually sees:
-
-```
-uv run tools/imx500_convert.py --images ~/rover-frames/ --num-samples 128
-```
-
-Without it the script falls back to synthetic low-frequency images and says so,
-in the console and in `conversion_report.json`. That fallback is deliberately not
-white noise — natural images are dominated by low spatial frequencies, and i.i.d.
-noise drives the first 3×3 conv far harder than any real frame, inflating the
-calibrated range and wasting int8 codes downstream. It is still a guess. This
-network is unusually forgiving because every conv is fused with RELU6 and clamped
-into [0, 6], but the head convs before the softmax are not bounded.
-
-## What comes out
-
-```
-build/imx500/
-  model.onnx                   quantized, MCTQ quantizer nodes, mct_quantizers domain
-  conversion_report.json       inputs used + every fidelity number below
-  converted/
-    packerOut.zip              <- the portable artifact; copy this to the Pi
-    model_MemoryReport.json    sensor memory budget
-    dnnParams.xml              final tensor layouts/scales
-```
-
-Sensor budget for this network: **1.34 MB of 8 MB, 17% utilization,
-`"Fit In Chip": true`.**
-
-## Finishing on the Pi
-
-`imx500-package` ships in the Pi's `imx500-tools` apt package, not on PyPI, so it
-cannot run on a dev laptop. Copy `packerOut.zip` over and:
+Then on the Pi:
 
 ```
 sudo apt install imx500-tools
-imx500-package -i packerOut.zip -o network/
-# -> network/network.rpk
+imx500-package -i packerOut.zip -o network/     # -> network/network.rpk
 ```
 
-Point `RS_VISION_IMX500_MODEL` at the `.rpk` and set `RS_VISION_BACKEND=imx500`.
+```
+RS_VISION_BACKEND=imx500
+RS_VISION_IMX500_MODEL=/path/to/network/network.rpk
+RS_VISION_IMX500_LABELS=/path/to/labels.txt     # custom exports need this
+RS_VISION_HFOV=66                               # the AI Camera's real FOV
+```
+
+`imx500-package` is only in the Pi's `imx500-tools` apt package, never on PyPI,
+which is why the last hop can't happen on a laptop. `packerOut.zip` is the
+portable artifact.
 
 ---
 
-## ⚠️ The decoder does not understand this network yet
+## Two converters, and which one you want
 
-**The conversion is complete and verified, but `object_align` cannot use the
-`.rpk` as-is.** This is a real gap, not a caveat.
+| script | input | use it for |
+|---|---|---|
+| **`tools/imx500_export_yolo.py`** | Ultralytics `.pt` (`best.pt`) | **the live path** — our YOLO11n detector |
+| `tools/imx500_convert.py` | Edge Impulse `.lite` | an Edge Impulse export, if we ever go back to one |
 
-`robot/sensors/imx500.py::Decoder.parse()` handles exactly two output layouts,
-both from picamera2's demo:
+The `.lite` converter came first, for an Edge Impulse export that turned out to
+be a FOMO classification grid rather than a detector. It works and is verified
+(see the bottom of this file), but it is not the path the rover is on.
 
-1. `postprocess == "nanodet"` → NMS on the Pi
-2. everything else → `outputs[0], outputs[1], outputs[2]` as parallel
-   **boxes, scores, classes** tensors, i.e. an SSD/YOLO-style `_pp` network whose
-   post-processing is baked into the `.rpk`
+## What the YOLO export actually does
 
-This network is **FOMO**, and emits neither. It has a *single* output: a
-`30×30×4` softmax heatmap — a per-cell class probability grid at input stride 8.
-`outputs[1]` and `outputs[2]` do not exist, so `parse()` will fail rather than
-mis-decode, which at least fails loudly.
+`YOLO.export(format="imx")` does the hard part, and `imx500_export_yolo.py`
+wraps it rather than reimplementing it:
 
-Making it usable needs a FOMO decode path: threshold the heatmap, take connected
-peaks per class as centroids, and emit fixed cell-sized boxes. Two things worth
-knowing before doing that:
+1. Rebinds the `Detect` head so the DFL box decode happens **inside** the graph
+   and sets `xyxy=True`, so boxes come out as corners rather than centre/size.
+2. Quantizes with MCT against the IMX500 target platform (TPC 4.0, INT8).
+3. Wraps the result in edge-mdt-cl's `multiclass_nms_with_indices`, so **NMS runs
+   on the sensor**. The Pi receives finished detections, not raw anchors.
+4. Runs `imxconv-pt` to produce `packerOut.zip`, plus `labels.txt`.
 
-- `to_detection()` currently asserts size is always available, justified by "the
-  IMX500 model zoo is real bounding-box detectors". That comment stops being
-  true for a FOMO network — centroids have no extent, so `size` would have to go
-  back to `None` and the FOMO degradation path in `detector.py` applies again.
-- `requirements.txt` already advises exporting a **YOLO-style
-  (`object_detection`) model, not FOMO**, precisely because FOMO gives no object
-  size and so `object_align` can only turn to face a target, never approach it.
-  Re-exporting from Edge Impulse as a bounding-box detector would sidestep the
-  decoder work entirely and give better autonomy — and this same converter
-  handles it, as long as it stays within the supported operator set.
+Reproducing that by hand would mean re-deriving head surgery that changes between
+YOLO versions — not worth it.
+
+### The two patches, and why they're safe
+
+Ultralytics `assert LINUX` before exporting. That is a support policy, not a
+technical limit: everything behind it (`imxconv-pt`, its bundled JVM `sdspconv`
+backend, MCT) is pure Python plus a platform-independent jar, and `torch2imx`
+even has an explicit Windows branch for the binary name. The whole toolchain was
+verified end to end on macOS/arm64 before the wrapper existed. Set
+`RS_IMX_REQUIRE_LINUX=1` to restore the assert.
+
+The second patch stubs `check_font`, which downloads a font for plotting labels
+and blows up on recent macOS because matplotlib's `_get_macos_fonts()` hits
+`KeyError('_items')`. Nothing to do with the export. Both patches are no-ops on
+Linux.
+
+### Calibration is the thing that decides accuracy
+
+`--data` takes the dataset YAML the model was trained on. MCT sets every
+activation range by running those images through the float model, so this is the
+single biggest lever on how well the quantized network performs.
+
+Without it the script falls back to `coco8.yaml` — eight generic COCO images —
+prints a loud warning, and records `"calibration_is_placeholder": true` in
+`export_report.json`. That is enough to prove the pipeline runs and **not** enough
+to trust the accuracy of the result.
+
+## What the sensor sends back
+
+Four tensors, because NMS already ran on-sensor:
+
+| tensor | shape | on-wire | meaning |
+|---|---|---|---|
+| boxes | `(max_det, 4)` | int16 × 1/32 | `(x_min, y_min, x_max, y_max)` in **network input pixels**, not normalized |
+| scores | `(max_det,)` | uint8 × 1/256 | descending |
+| labels | `(max_det,)` | int16 × 1 | class index |
+| n_valid | `(1,)` | int16 × 1 | real detections; everything after is zero padding |
+
+`robot/sensors/imx500.py::unpack_edgemdt_nms()` decodes this, and
+`Decoder.parse()` tries it **first** — it is recognized from the tensors
+themselves, whereas the two model-zoo layouts are selected by intrinsics that a
+custom `.rpk` doesn't carry.
+
+Two details in there are load-bearing:
+
+- **`n_valid` is honoured.** Ignore it and every frame decodes 300 zero-padded
+  boxes at the origin; `select="centermost"` then locks onto the padding forever.
+- **Tensors are identified by shape, not position.** The ONNX graph declares them
+  `boxes, scores, labels, n_valid`; the converter's own `dnnParams.xml` lists them
+  in the *opposite* order. Which one picamera2 follows is only observable on a Pi.
+  Shape settles the two unambiguous ones — boxes is the only 2-D tensor, `n_valid`
+  the only single-element one — and where those landed reveals whether the whole
+  list is forward or reversed, which fixes scores vs labels too. Both orders are
+  covered by tests.
+
+If no boxes appear on the rover, `Decoder.describe_layout(metadata)` reports which
+decode path a real frame actually took.
+
+## object_align gets its size back
+
+The Edge Impulse FOMO caveat in `requirements.txt` — centroids only, so the rover
+can turn to face a target but never approach it — **does not apply here**. This is
+a real bounding-box detector, so `to_detection()` reports a true `size` and
+approach/standoff work. Calibrate `RS_VISION_STANDOFF_SIZE` with
+`tools/detector_selftest.py` rather than guessing.
+
+Set `RS_VISION_HFOV=66`. The 50° default is the *post-crop* figure for the Edge
+Impulse backend; the IMX500 path maps boxes back to the full frame, so it needs
+the camera's real FOV or the steering derivative is scaled wrong.
+
+## Sensor memory is tight at 640
+
+Our YOLO11n at `imgsz=640` uses **7.12 MB of the 8 MB on-chip budget (90%)**. It
+fits, but there is not much room. If a future model doesn't fit, the first lever
+is `--imgsz 480` or `320`; the exporter prints the memory report and says
+`Fit In Chip` on every run.
+
+For comparison, the FOMO network was 1.34 MB (17%).
 
 ---
 
-## Verification
+## Verifying the `.lite` converter (`tools/imx500_convert.py`)
 
-`tests/test_tflite_to_torch.py` (11 tests) proves the rebuild is the same network
-rather than merely a similar-scoring one. Comparing only the final softmax would
-hide a transposed kernel or an off-by-one pad inside an end-to-end average, so it
-goes layer by layer:
+Kept for reference; this is the Edge Impulse path, not the live one.
+
+The IMX500 toolchain does not accept `.tflite` — `imxconv-pt` wants ONNX that MCT
+has already quantized, and MCT wants a *float* model. The usual bridge is
+`tf2onnx` + `onnx2torch`, which pins a TensorFlow version and leaves a NHWC/NCHW
+transpose soup. The Edge Impulse graph was small enough (`CONV_2D` ×15,
+`DEPTHWISE_CONV_2D` ×6, `ADD` ×3, `SOFTMAX` ×1) that `tools/tflite_to_torch.py`
+reads the flatbuffer directly and emits real `nn.Conv2d`s. No TensorFlow anywhere.
+
+`tests/test_tflite_to_torch.py` verifies it layer by layer rather than end to end,
+because comparing only the final output hides a transposed kernel or an off-by-one
+SAME pad inside an average:
 
 - **float32 export, every intermediate tensor** — matches to float32 epsilon
-  (< 1e-4 relative). Nothing is quantized, so a structural error cannot hide.
-- **int8 export, every layer fed the reference's own inputs** — matches to
-  ≤ ½ a quantization step, the rounding floor, excluding only elements where the
-  `.lite` itself saturated. The test also asserts those are < 0.1% of all
-  elements, so the exclusion can't quietly widen into a blanket exemption.
+  (3.5e-08 mean). Nothing is quantized, so nothing structural can hide.
+- **int8 export, each layer fed the reference's own inputs** — matches to ≤ ½ a
+  quantization step, the rounding floor, excluding only the few dozen elements
+  where the `.lite` itself saturated int8. The test bounds those at 0.1% so the
+  exclusion can't quietly widen.
 - **first conv exact** — it reads the graph input, so no upstream drift can
   explain a failure away.
-- **both exports agree on [0, 1] input** — the float export carries no input
-  scale, so the preprocessing contract is an assumption; feeding both models the
-  same [0, 1] image and getting the same detections is what justifies it.
-- SAME-padding asymmetry (240→120 stride-2 pads `(0, 1)`, not `(1, 1)`), and
-  unsupported operators raising rather than being skipped.
-
-End-to-end fidelity of the shipped network, on synthetic calibration:
-
-| comparison | mean abs err | argmax agreement |
-|---|---|---|
-| float rebuild vs float `.lite` | 3.5e-08 | 100% |
-| IMX500-quantized vs float `.lite` | 0.0018 | 99.89% |
-| IMX500-quantized vs deployed int8 `.lite` | 0.0021 | 99.57% |
-| float `.lite` vs deployed int8 `.lite` | 0.0028 | 99.60% |
-
-The last row is the useful control: the IMX500 network is as close to the
-currently-deployed int8 model as the float source itself is, so essentially all
-the remaining difference is Edge Impulse's original quantization, not ours.
 
 ## The torch pin is load-bearing
 
@@ -175,21 +164,16 @@ the remaining difference is Edge Impulse's original quantization, not ours.
 `mct_quantizers` emits its MCTQ quantizer nodes from `symbolic()` methods on
 `torch.autograd.Function` — a hook only the **legacy TorchScript** ONNX exporter
 calls. torch 2.9 flipped `torch.onnx.export` to `dynamo=True` by default, and the
-dynamo exporter never consults those symbolics, so the export either errors out
-or silently produces an ONNX file with no quantization nodes in it, which
-`imxconv-pt` then rejects.
+dynamo exporter never consults those symbolics, so the export either errors out or
+silently produces an ONNX file with no quantization nodes, which `imxconv-pt` then
+rejects.
 
-`torch` is in the `convert` group and not in `[project.dependencies]` on purpose:
-it is a build-machine-only dependency, nothing on the robot imports it, and the
-Pi just loads the finished `.rpk` through picamera2. Plain `uv sync` stays lean.
+`torch` and `ultralytics` live in the `convert` group, not
+`[project.dependencies]`: they are build-machine-only, nothing on the robot
+imports them, and the Pi just loads the finished `.rpk` through picamera2. Plain
+`uv sync` stays lean.
 
-## Options
-
-```
---model PATH        source .lite (default: the float32 export)
---images DIR        calibration frames — strongly recommended
---num-samples N     how many to use (default 64)
---tpc-version V     IMX500 target platform: 1.0 | 1.0_lut | 4.0 | 4.1 | 5.0 (default 4.0)
---nhwc-output       append a permute so output is NHWC like the .lite, not ONNX-native NCHW
---skip-converter    stop after the ONNX export
-```
+**Licensing note:** Ultralytics is AGPL-3.0, and a model trained from
+`yolo11n.pt` inherits that. It is a build-time tool here — no Ultralytics code
+ships to the robot or runs on it — but if this rover is ever distributed, that is
+worth a deliberate decision rather than a default.
