@@ -34,6 +34,16 @@ pygame>=2.5          # PS4 controller input, cross-platform
 #    pyproject.toml either: picamera2 is a system package on Bookworm.
 #    Verify with:  tools/detector_selftest.py --backend imx500
 #
+#    To run OUR trained model instead of a zoo one, build a .rpk from the
+#    Ultralytics checkpoint — see docs/MODEL_CONVERSION.md:
+#      uv sync --group convert
+#      uv run tools/imx500_export_yolo.py --data path/to/data.yaml
+#    That runs on a dev machine, not the Pi; only the final `imx500-package`
+#    step needs the Pi's imx500-tools. The export runs NMS on the sensor, and
+#    Decoder.parse() detects its four-tensor layout without needing intrinsics.
+#    Set RS_VISION_IMX500_LABELS to the labels.txt it writes — a custom .rpk
+#    does not embed class names, and without it boxes come back labelled "0".
+#
 # 2) Edge Impulse object detection. Linux-only (it shells out to a compiled .eim
 # binary), so it stays out of pyproject.toml the same way fusion_hat and the
 # BNO055 stack do — adding it there would break `uv sync` on a Mac.

@@ -179,11 +179,19 @@ class VisionConfig:
     # imx500-all` drops the Sony model zoo in /usr/share/imx500-models/; this
     # default is its general-purpose COCO detector. Unlike the .eim, this is data
     # the sensor loads, NOT a binary the Pi runs — no chmod +x needed.
+    #
+    # To run OUR trained model instead of a zoo one, build a .rpk from the
+    # Ultralytics checkpoint (see docs/MODEL_CONVERSION.md):
+    #   uv run tools/imx500_export_yolo.py --data path/to/data.yaml
+    # then set RS_VISION_IMX500_MODEL to the resulting network.rpk. That export
+    # runs NMS on the sensor and emits a four-tensor layout the decoder detects
+    # on its own — no intrinsics required, unlike the zoo networks.
     imx500_model: str = ("/usr/share/imx500-models/"
                          "imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")
     # Class-name file, one per line. Empty = use the labels embedded in the .rpk,
-    # which is right for every model-zoo network; only a custom export packaged
-    # without them needs this.
+    # which is right for every model-zoo network. A CUSTOM export needs this: our
+    # exporter writes labels.txt next to packerOut.zip, and without it every box
+    # comes back labelled "0"/"1"/"2" — which also breaks target_label matching.
     imx500_labels: str = ""
     # NMS overlap threshold and cap on boxes per frame. Only the nanodet
     # postprocess path uses the IoU (the `_pp` networks do NMS on-sensor); the
