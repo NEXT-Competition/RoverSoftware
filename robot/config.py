@@ -288,7 +288,15 @@ class RobotConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     fpv: FPVConfig = field(default_factory=FPVConfig)
     shooter: ShooterConfig = field(default_factory=ShooterConfig)
-    loop_hz: float = 5.0  # Control loop rate
+    # Control loop rate. This is the rate the motors are actually updated at, so
+    # it sets both the floor on teleop latency (a command waits up to 1/loop_hz
+    # before anything looks at it) and the granularity of the slew limiter, which
+    # is what interpolates between the base station's ~15 Hz drive frames. At
+    # 5 Hz the outputs moved in 200 ms stair-steps and slew_rate=4.0 allowed a
+    # 0.8 jump per tick, i.e. no real limiting: choppy AND laggy. At 50 Hz the
+    # step is 0.08 and motion is continuous. docs/ARCHITECTURE.md has always
+    # specified 50 Hz.
+    loop_hz: float = 50.0
     start_mode: str = "teleop"  # teleop | object_align | waypoint | shooter_align
     # Which sensor answers "which way am I facing" (see sensors/pose.py):
     #   auto - IMU when calibrated, else the GPS track angle (recommended)

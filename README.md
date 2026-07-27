@@ -152,7 +152,7 @@ never invents robots, so anything you see is real telemetry from the radio.
 
 In the browser:
 - **Sidebar** lists every robot with mode, battery, link status, and live track speeds. Click one to **select** it.
-- **Gamepad** (left stick = throttle, right stick = steer) drives the *selected* robot. Buttons e-stop / clear / switch mode.
+- **Gamepad** (R2 = forward, L2 = reverse, right stick = steer) drives the *selected* robot. Buttons e-stop / clear / switch mode.
 - **Map** shows each robot as a heading arrow with a position trail, over **satellite imagery** (Esri World Imagery by default — no API key) so you navigate by visible terrain rather than street names.
 - **Route**: toggle *Add waypoints*, click the map to drop points, **Send route** — the robot switches to waypoint mode and drives it.
 

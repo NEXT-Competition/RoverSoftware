@@ -17,9 +17,10 @@
 // number. A local copy is how a lowered --drive-hz silently failed to reach the
 // touch UI and left the link oversubscribed.
 //
-// Deadzone (0.08) and the throttle = -Y / steer = X convention mirror the
-// server gamepad reader (basestation/controller_input.py:27-36,90-91) so touch
-// and physical gamepad feel identical.
+// Deadzone (0.08) and the signed throttle / steer convention mirror the server
+// gamepad reader (basestation/controller_input.py:29-42,133-136) so touch and
+// physical gamepad feel identical. Both hand this sender a throttle already in
+// -1..1 — the touch pad from its Y offset, the gamepad from R2 minus L2.
 
 import { driveHz, selected, send } from "./ws.ts";
 
