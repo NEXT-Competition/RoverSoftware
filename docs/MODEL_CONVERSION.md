@@ -4,29 +4,56 @@ The Raspberry Pi AI Camera runs its network **inside the sensor**, so the Pi
 spends no CPU on inference. This is how our trained model gets in there.
 
 ```
-uv sync --group convert
-uv run tools/prepare_yolo_dataset.py --src model/data --out build/dataset
-uv run tools/imx500_export_yolo.py  --model model/best.pt --data build/dataset/data.yaml
-uv run tools/imx500_validate.py                      # did quantization cost anything?
+uv sync --group convert          # once, on this machine
+just model-bootstrap             # once per robot: AI Camera stack on the Pi
+just model-deploy                # export here, build the .rpk on the Pi, install it
+just model-selftest              # does the sensor actually see anything?
 ```
 
-Then on the Pi:
-
-```
-sudo apt install imx500-tools
-imx500-package -i packerOut.zip -o network/     # -> network/network.rpk
-```
+Then `just config` and set:
 
 ```
 RS_VISION_BACKEND=imx500
-RS_VISION_IMX500_MODEL=/path/to/network/network.rpk
-RS_VISION_IMX500_LABELS=/path/to/labels.txt     # custom exports need this
+RS_VISION_IMX500_MODEL=/var/lib/roversoftware/network.rpk
+RS_VISION_IMX500_LABELS=/var/lib/roversoftware/labels.txt
 RS_VISION_HFOV=66                               # the AI Camera's real FOV
 ```
 
-`imx500-package` is only in the Pi's `imx500-tools` apt package, never on PyPI,
-which is why the last hop can't happen on a laptop. `packerOut.zip` is the
-portable artifact.
+### Why it takes two machines
+
+**There is no `.rpk` on your laptop, and there cannot be.** `imx500-package` ships
+only in the Pi's `imx500-tools` apt package — it is not on PyPI and not available
+for macOS. `packerOut.zip` is the portable artifact; the `.rpk` is built from it
+on the Pi.
+
+```
+this machine                         the Pi
+────────────                         ──────
+best.pt                              Ultralytics + MCT + imxconv-pt
+  -> packerOut.zip   ──scp──>        imx500-package -> network.rpk
+```
+
+`just model-deploy` does both halves. The individual steps, if you want them:
+
+| recipe | where | does |
+|---|---|---|
+| `just model-bootstrap` | Pi | installs `imx500-tools`, `imx500-all`, `python3-picamera2` |
+| `just model-export` | here | stages the dataset, converts `best.pt` -> `packerOut.zip` |
+| `just model-validate` | here | measures what quantization cost |
+| `just model-install` | both | scp's the zip, packages the `.rpk` on the Pi, installs it |
+| `just model-selftest` | Pi | runs the rover's own decode against the live sensor |
+| `just model-status` | Pi | what is currently installed |
+
+All of them honour `ROBOT_HOST` / `just host=rover2.local ...` like the rest of
+the Justfile. Or do it by hand:
+
+```
+uv run tools/prepare_yolo_dataset.py --src model/data --out build/dataset
+uv run tools/imx500_export_yolo.py  --model model/best.pt --data build/dataset/data.yaml
+uv run tools/imx500_validate.py
+scp build/imx500-yolo/packerOut.zip pi@rover1.local:/tmp/
+ssh pi@rover1.local 'imx500-package -i /tmp/packerOut.zip -o /tmp/net'
+```
 
 ---
 
