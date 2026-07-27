@@ -21,6 +21,29 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# Offline model-conversion toolchain (tools/imx500_convert.py). Kept OUT of
+# [project.dependencies] on purpose: torch is a ~100MB build-machine-only
+# dependency and nothing on the robot imports it — the Pi loads the finished
+# .rpk through picamera2. `uv sync` stays lean; run the converter with
+# `uv sync --group convert` first.
+#
+# edge-mdt[pt] IS in the runtime deps above but only ships the converter
+# binaries (imxconv-pt / uni-pytorch); MCT's PyTorch quantization backend needs
+# torch itself, which the [pt] extra does not pull in.
+convert = [
+    # UPPER BOUND IS LOad-BEARING, do not relax it to "latest torch".
+    # mct_quantizers emits its MCTQ quantizer nodes from `symbolic()` methods on
+    # torch.autograd.Function — a hook only the legacy TorchScript ONNX exporter
+    # calls. torch 2.9 flipped torch.onnx.export to dynamo=True by default, and
+    # the dynamo exporter does not consult those symbolics, so the export either
+    # errors out or silently produces an ONNX file with no quantization nodes in
+    # it — which imxconv-pt then rejects. Staying on <2.9 keeps the legacy path.
+    "torch>=2.4,<2.9",
+    "torchvision<0.23",     # edge-mdt-cl hard-requires it alongside torch
+    "tflite>=2.10",       # flatbuffer schema bindings — reads the .lite graph
+    "ai-edge-litert>=1.0",  # reference interpreter, for parity checks only
+    "pillow>=10.0",         # representative-dataset image loading
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
