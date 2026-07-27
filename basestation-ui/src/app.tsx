@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
-import { selected } from "./net/ws.ts";
+import { activeSiteId, selectSite, selected, sites } from "./net/ws.ts";
+import { mapFlipped, toggleMapFlip } from "./state/mapMode.ts";
 import { MapView } from "./components/MapView.tsx";
 import { ConnectionPill } from "./components/ConnectionPill.tsx";
 import { ControllerStatus } from "./components/ControllerStatus.tsx";
@@ -13,6 +14,9 @@ import { DrivePad } from "./components/DrivePad.tsx";
 import { EstopBar } from "./components/EstopBar.tsx";
 
 function TopBar() {
+  const flipped = mapFlipped.value;
+  const siteList = sites.value;
+  const activeId = activeSiteId.value;
   return (
     <header class="topbar panel">
       <div class="brand">
@@ -22,6 +26,25 @@ function TopBar() {
           <small>base station</small>
         </span>
       </div>
+      {Object.keys(siteList).length > 0 && (
+        <select
+          class="btn ghost"
+          value={activeId ?? ""}
+          onChange={(e) => selectSite((e.target as HTMLSelectElement).value)}
+          title="Switch test site — moves the map and (in sim) the fleet"
+        >
+          {Object.entries(siteList).map(([id, site]) => (
+            <option key={id} value={id}>{site.name}</option>
+          ))}
+        </select>
+      )}
+      <button
+        class={`btn ghost${flipped ? " active" : ""}`}
+        onClick={toggleMapFlip}
+        title="Flip the field view 180°"
+      >
+        ⟲ Flip view
+      </button>
       <ConnectionPill />
     </header>
   );

@@ -25,6 +25,7 @@ import uvicorn
 
 from basestation.app import build_app
 from basestation.fleet import FleetManager
+from basestation.sites import SITES, DEFAULT_SITE
 
 # Aerial/satellite imagery is the useful basemap for driving a rover: you steer
 # by the terrain you can actually see (grass, gravel, tree lines), not by street
@@ -58,9 +59,11 @@ def main():
                    help="run the built-in simulator with fake robots instead of a radio")
     p.add_argument("--robots", type=int, default=int(_env("RS_SIM_ROBOTS", 3)),
                    help="number of simulated robots (with --sim)")
-    p.add_argument("--origin", default=_env("RS_SIM_ORIGIN", "38.8331773,-77.3232135"),
-                   help="simulator origin 'lat,lon' (with --sim); defaults to the field at "
-                        "4609 Rapidan River Rd, Fairfax, VA 22030")
+    _default_origin = SITES[DEFAULT_SITE]["origin"]
+    p.add_argument("--origin", default=_env("RS_SIM_ORIGIN", f"{_default_origin[0]},{_default_origin[1]}"),
+                   help=f"simulator origin 'lat,lon' (with --sim); defaults to {SITES[DEFAULT_SITE]['name']}. "
+                        "Overriding this only sets the starting spot — pick a site from the dashboard's "
+                        "site selector to also load its boundary/rotation/zoom.")
     p.add_argument("--host", default=_env("RS_WEB_HOST", "127.0.0.1"))
     p.add_argument("--web-port", type=int, default=int(_env("RS_WEB_PORT", 8000)))
     p.add_argument("--no-controller", action="store_true", default=_envbool("RS_NO_CONTROLLER"),
@@ -101,7 +104,8 @@ def main():
     if args.sim:
         from basestation.simulator import SimulatedFleet
         lat, lon = (float(x) for x in args.origin.split(","))
-        link = SimulatedFleet(on_msg, n_robots=args.robots, origin=(lat, lon))
+        link = SimulatedFleet(on_msg, n_robots=args.robots, origin=(lat, lon),
+                               boundary=SITES[DEFAULT_SITE]["boundary"])
         print(f"[base] SIMULATOR: {args.robots} fake robots @ {lat},{lon}")
     elif args.port:
         from robot.comms.xbee_link import XBeeLink
@@ -128,7 +132,8 @@ def main():
     app = build_app(fleet, link, controller,
                     {"tiles": args.tiles, "drive_hz": args.drive_hz, "ui_hz": args.ui_hz,
                      "tiles_mbtiles": args.tiles_mbtiles, "tiles_upstream": args.tiles_upstream,
-                     "tiles_offline": args.tiles_offline, "video_hz": args.video_hz},
+                     "tiles_offline": args.tiles_offline, "video_hz": args.video_hz,
+                     "sites": SITES, "active_site": DEFAULT_SITE},
                     video_rx=video_rx)
     print(f"[base] dashboard -> http://{args.host}:{args.web_port}")
     uvicorn.run(app, host=args.host, port=args.web_port, log_level="warning")

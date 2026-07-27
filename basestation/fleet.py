@@ -110,6 +110,13 @@ class FleetManager:
             if robot_id in self._robots:
                 self._selected = robot_id
 
+    def clear_trails(self) -> None:
+        """Wipe breadcrumb history for every robot — needed after a site switch,
+        else the trail draws a straight line from the old site to the new one."""
+        with self._lock:
+            for st in self._robots.values():
+                st.trail = []
+
     def snapshot(self, now: float) -> dict:
         with self._lock:
             robots = [

@@ -71,6 +71,15 @@ export interface ControllerStatus {
   name: string | null;
 }
 
+/** A named test site the map/simulator can be locked to (basestation/sites.py::SITES). */
+export interface Site {
+  name: string;
+  origin: LatLon;
+  boundary: LatLon[] | null; // null = no fence (e.g. an open plaza)
+  rotation_deg: number;
+  zoom: number;
+}
+
 /** The single message type the bridge pushes at ui_hz (default 30 Hz). */
 export interface FleetMessage {
   type: "fleet";
@@ -82,6 +91,9 @@ export interface FleetMessage {
   tiles_attribution: string | null; // basemap credit line, derived from the source URL
   video?: string[]; // robot_ids with a live FPV feed right now
   drive_hz?: number; // server's radio airtime budget; the touch joystick obeys it
+  boundary?: LatLon[] | null; // active site's fence, if it has one
+  sites?: Record<string, Site>; // every site the dashboard can switch to
+  active_site?: string | null; // key into `sites`
 }
 
 // ---- Outbound actions (browser -> bridge). ----
@@ -95,6 +107,7 @@ export type Action =
   | { action: "drive"; robot_id: string; throttle: number; steer: number }
   | { action: "arm_shooter"; robot_id: string }
   | { action: "disarm_shooter"; robot_id: string }
-  | { action: "fire"; robot_id: string };
+  | { action: "fire"; robot_id: string }
+  | { action: "select_site"; site_id: string };
 
 export type ConnState = "connecting" | "live" | "reconnecting";
