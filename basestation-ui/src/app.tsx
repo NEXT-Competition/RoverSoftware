@@ -10,7 +10,6 @@ import { ModeControls } from "./components/ModeControls.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
 import { ShooterControls } from "./components/ShooterControls.tsx";
 import { Telemetry } from "./components/Telemetry.tsx";
-import { DrivePad } from "./components/DrivePad.tsx";
 import { EstopBar } from "./components/EstopBar.tsx";
 
 function TopBar() {
@@ -69,31 +68,44 @@ function ControlSection() {
   );
 }
 
-export function App() {
+function FleetRail() {
   // Portrait bottom-sheet collapse (ignored by the landscape layout).
   const [collapsed, setCollapsed] = useState(false);
+  return (
+    <aside class={`rail rail-left panel${collapsed ? " collapsed" : ""}`}>
+      <div class="drawer-handle" onClick={() => setCollapsed((c) => !c)} />
+      <div class="rail-body">
+        <FleetPanel />
+        <FPV />
+      </div>
+    </aside>
+  );
+}
 
+function ControlRail() {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <aside class={`rail rail-right panel${collapsed ? " collapsed" : ""}`}>
+      <div class="drawer-handle" onClick={() => setCollapsed((c) => !c)} />
+      <div class="rail-body">
+        <ControlSection />
+        <div class="rail-section" style="border:none">
+          <ControllerStatus />
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+export function App() {
   return (
     <>
       <MapView />
       <div class="hud">
         <TopBar />
-
-        <aside class={`rail panel${collapsed ? " collapsed" : ""}`}>
-          <div class="drawer-handle" onClick={() => setCollapsed((c) => !c)} />
-          <div class="rail-body">
-            <FleetPanel />
-            <FPV />
-            <ControlSection />
-            <div class="rail-section" style="border:none">
-              <ControllerStatus />
-            </div>
-          </div>
-        </aside>
-
-        <div class="dock">
-          <DrivePad />
-        </div>
+        <FleetRail />
+        <ControlRail />
+        <div class="map-hole" />
       </div>
 
       <EstopBar />

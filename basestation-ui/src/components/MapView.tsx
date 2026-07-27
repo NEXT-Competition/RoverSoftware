@@ -77,8 +77,10 @@ function correctedLatLng(
   angleDeg: number,
 ): L.LatLng {
   const wrapRect = wrapEl.getBoundingClientRect();
-  const cx = wrapRect.width / 2;
-  const cy = wrapRect.height / 2;
+  // mapEl's own left/top (set in the rotation effect) is the actual pivot —
+  // usually the visible panel gap's center, not the wrap's raw center.
+  const cx = mapEl.offsetLeft;
+  const cy = mapEl.offsetTop;
   const dx = ev.clientX - wrapRect.left - cx;
   const dy = ev.clientY - wrapRect.top - cy;
   const rad = (-angleDeg * Math.PI) / 180;
@@ -92,6 +94,7 @@ function correctedLatLng(
 interface MarkerEntry {
   marker: L.Marker;
   trail: L.Polyline;
+  iconKey: string;
 }
 
 export function MapView() {
@@ -163,12 +166,35 @@ export function MapView() {
     };
   }, []);
 
-  // ---- rotation: applied on mount and whenever the flip mode changes ----
+  // ---- rotation: applied on mount, whenever the flip mode changes, and
+  // whenever the visible gap between panels resizes ----
   useEffect(() => {
     const mapEl = elRef.current!;
-    // translate(-50%,-50%) centers the oversized div on its own box (see
-    // theme.css .map) before rotation is applied around that center.
-    mapEl.style.transform = `translate(-50%, -50%) rotate(${rotationDeg}deg)`;
+    const wrapEl = wrapRef.current!;
+    // The HUD grid has a top bar but no matching bottom bar, so the visible
+    // "hole" between panels isn't centered on the viewport — it sits lower.
+    // Anchor the map's rotation on that hole's actual center (measured via
+    // the invisible .map-hole grid cell) instead of the viewport's 50/50,
+    // so the field stays centered in the visible gap at any rotation angle.
+    const holeEl = document.querySelector<HTMLElement>(".map-hole");
+    const position = () => {
+      const wrapRect = wrapEl.getBoundingClientRect();
+      let cx = wrapRect.width / 2;
+      let cy = wrapRect.height / 2;
+      if (holeEl) {
+        const holeRect = holeEl.getBoundingClientRect();
+        cx = holeRect.left - wrapRect.left + holeRect.width / 2;
+        cy = holeRect.top - wrapRect.top + holeRect.height / 2;
+      }
+      mapEl.style.left = `${cx}px`;
+      mapEl.style.top = `${cy}px`;
+      mapEl.style.transform = `translate(-50%, -50%) rotate(${rotationDeg}deg)`;
+    };
+    position();
+    if (!holeEl) return;
+    const ro = new ResizeObserver(position);
+    ro.observe(holeEl);
+    return () => ro.disconnect();
   }, [rotationDeg]);
 
   // ---- site view: re-center/re-zoom (and re-lock the zoom range) whenever
@@ -211,16 +237,25 @@ export function MapView() {
       seen.add(r.robot_id);
       const isSel = r.robot_id === sel;
       let entry = markers[r.robot_id];
+      const iconKey = `${r.online}|${isSel}|${r.heading ?? 0}|${rotationDeg}`;
       if (!entry) {
         entry = {
           marker: L.marker([r.lat, r.lon], { icon: robotIcon(r, isSel, rotationDeg) }).addTo(map),
           trail: L.polyline([], { color: "#4c9eff", weight: 2, opacity: 0.55 }).addTo(map),
+          iconKey,
         };
         entry.marker.on("click", () => selectRobot(r.robot_id));
         markers[r.robot_id] = entry;
       }
       entry.marker.setLatLng([r.lat, r.lon]);
-      entry.marker.setIcon(robotIcon(r, isSel, rotationDeg));
+      // setIcon tears down and rebuilds the marker's DOM node (and its click
+      // listener) — at 30Hz telemetry that was happening ~27x/sec, so a real
+      // click could land mid-swap and get silently dropped. Only rebuild when
+      // something the rendered icon actually depends on has changed.
+      if (entry.iconKey !== iconKey) {
+        entry.marker.setIcon(robotIcon(r, isSel, rotationDeg));
+        entry.iconKey = iconKey;
+      }
       if (r.trail && r.trail.length) entry.trail.setLatLngs(r.trail as L.LatLngExpression[]);
     }
 
