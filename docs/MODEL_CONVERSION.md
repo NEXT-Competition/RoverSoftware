@@ -5,7 +5,9 @@ spends no CPU on inference. This is how our trained model gets in there.
 
 ```
 uv sync --group convert
-uv run tools/imx500_export_yolo.py --model model/best.pt --data path/to/data.yaml
+uv run tools/prepare_yolo_dataset.py --src model/data --out build/dataset
+uv run tools/imx500_export_yolo.py  --model model/best.pt --data build/dataset/data.yaml
+uv run tools/imx500_validate.py                      # did quantization cost anything?
 ```
 
 Then on the Pi:
@@ -32,7 +34,9 @@ portable artifact.
 
 | script | input | use it for |
 |---|---|---|
+| `tools/prepare_yolo_dataset.py` | Label Studio export | staging `model/data` into something Ultralytics reads |
 | **`tools/imx500_export_yolo.py`** | Ultralytics `.pt` (`best.pt`) | **the live path** — our YOLO11n detector |
+| `tools/imx500_validate.py` | the exported ONNX | measuring what quantization cost |
 | `tools/imx500_convert.py` | Edge Impulse `.lite` | an Edge Impulse export, if we ever go back to one |
 
 The `.lite` converter came first, for an Edge Impulse export that turned out to
@@ -70,14 +74,37 @@ Linux.
 
 ### Calibration is the thing that decides accuracy
 
-`--data` takes the dataset YAML the model was trained on. MCT sets every
-activation range by running those images through the float model, so this is the
-single biggest lever on how well the quantized network performs.
+`--data` takes the dataset YAML. MCT sets every activation range by running those
+images through the float model, so this is the single biggest lever on how well
+the quantized network performs.
 
 Without it the script falls back to `coco8.yaml` — eight generic COCO images —
 prints a loud warning, and records `"calibration_is_placeholder": true` in
 `export_report.json`. That is enough to prove the pipeline runs and **not** enough
-to trust the accuracy of the result.
+to trust the accuracy of the result. Calibrating on the real 648 images takes
+~10 minutes instead of ~2.5; that is the whole cost.
+
+### Staging the dataset
+
+`model/data` is a Label Studio export, which looks like an Ultralytics dataset
+and is not one. It has no `data.yaml`, and — the part that bites — the image and
+label filenames do not pair:
+
+```
+images/00BCF467-...-CDA3A7094BF5.jpg.6tfj6d12.ingestion-5759d4ffb8-8lvsf.jpg
+labels/00BCF467-...-CDA3A7094BF5.txt
+```
+
+Ultralytics finds a label by swapping `/images/` for `/labels/` and changing the
+extension, so the stems must match exactly. Left alone, **every image is silently
+treated as having no objects** — the export still succeeds and nothing warns.
+`tools/prepare_yolo_dataset.py` stages a directory of symlinks whose stems match
+and writes the yaml. It refuses to stage an export where the stem rule does not
+fit, rather than producing a quietly-empty dataset.
+
+The generated yaml points *both* splits at every image, because the purpose is
+calibration and more data is strictly better. That makes it wrong for scoring, so
+the file says so in a comment; `--val-split 0.2` gives a real disjoint split.
 
 ## What the sensor sends back
 
@@ -109,6 +136,32 @@ Two details in there are load-bearing:
 
 If no boxes appear on the rover, `Decoder.describe_layout(metadata)` reports which
 decode path a real frame actually took.
+
+## What quantization actually cost
+
+`tools/imx500_validate.py` runs the **real exported graph** — MCTQ quantizer
+nodes, on-sensor NMS and all — under onnxruntime and compares it against the
+float checkpoint on the same images. Calibrated on the 648-image dataset, over 40
+images at `conf=0.25`:
+
+| | |
+|---|---|
+| float detections | 176 |
+| quantized detections | 175 |
+| matched at IoU ≥ 0.5 (one-to-one) | 151 — **85.8%** of float |
+| mean IoU of matches | **0.910** |
+| label agreement | **100%** |
+
+Read that carefully: detection *counts* agree to within one, boxes that match do
+so tightly, and no match ever changes class. The ~14% unmatched are detections
+sitting near the 0.25 confidence threshold that quantization nudged across it,
+not boxes landing in the wrong place — which is what a mean IoU of 0.91 tells you.
+
+Worth re-running after every export, because the failure it catches is silent: a
+model calibrated on the wrong images still exports, still packs, still loads, and
+simply sees less well. The tool also re-checks the output contract the decoder
+depends on and **fails the run** if a future Ultralytics release reorders or
+reformats those tensors — better here than on the rover.
 
 ## object_align gets its size back
 
