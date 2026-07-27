@@ -12,3 +12,11 @@ wheels/
 # Stray lockfile from running npm at the repo root; the UI's real one lives in
 # basestation-ui/ and is tracked. Anchored so it can't match that one.
 /package-lock.json
+
+# Agent scratch space. The worktrees are live git checkouts; staging them turns
+# each one into a gitlink pointing at a commit no clone can resolve.
+/.claude/worktrees/
+/.claude/settings.local.json
+
+# Knowledge-graph tool output: caches and generated reports, regenerable.
+/graphify-out/
