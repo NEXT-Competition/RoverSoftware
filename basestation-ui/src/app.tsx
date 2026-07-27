@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { activeSiteId, selectSite, selected, sites } from "./net/ws.ts";
 import { mapFlipped, toggleMapFlip } from "./state/mapMode.ts";
 import { MapView } from "./components/MapView.tsx";
@@ -16,35 +16,49 @@ function TopBar() {
   const flipped = mapFlipped.value;
   const siteList = sites.value;
   const activeId = activeSiteId.value;
+  // Flip view only makes sense for a fixed, rotated frame matched against a
+  // real boundary — free-pan sites (no boundary to hold the view against,
+  // e.g. GMU plaza) already let the user look at it from any angle.
+  const locked = (activeId ? siteList[activeId]?.locked : undefined) ?? true;
+  // A free-pan site can't un-flip itself (the button below is disabled), so
+  // don't let a flip carried over from a locked site strand the view rotated.
+  useEffect(() => {
+    if (!locked && mapFlipped.value) mapFlipped.value = false;
+  }, [locked]);
   return (
     <header class="topbar panel">
-      <div class="brand">
-        <img src="/icon.svg" alt="" />
-        <span class="name">
-          RoverSoftware
-          <small>base station</small>
-        </span>
+      <div class="topbar-row">
+        <div class="brand">
+          <img src="/icon.svg" alt="" />
+          <span class="name">
+            RoverSoftware
+            <small>base station</small>
+          </span>
+        </div>
+        {Object.keys(siteList).length > 0 && (
+          <select
+            class="btn ghost"
+            value={activeId ?? ""}
+            onChange={(e) => selectSite((e.target as HTMLSelectElement).value)}
+            title="Switch test site — moves the map and (in sim) the fleet"
+          >
+            {Object.entries(siteList).map(([id, site]) => (
+              <option key={id} value={id}>{site.name}</option>
+            ))}
+          </select>
+        )}
       </div>
-      {Object.keys(siteList).length > 0 && (
-        <select
-          class="btn ghost"
-          value={activeId ?? ""}
-          onChange={(e) => selectSite((e.target as HTMLSelectElement).value)}
-          title="Switch test site — moves the map and (in sim) the fleet"
+      <div class="topbar-row">
+        <button
+          class={`btn ghost${flipped ? " active" : ""}`}
+          onClick={toggleMapFlip}
+          disabled={!locked}
+          title={locked ? "Flip the field view 180°" : "Free pan/zoom sites don't lock to one orientation"}
         >
-          {Object.entries(siteList).map(([id, site]) => (
-            <option key={id} value={id}>{site.name}</option>
-          ))}
-        </select>
-      )}
-      <button
-        class={`btn ghost${flipped ? " active" : ""}`}
-        onClick={toggleMapFlip}
-        title="Flip the field view 180°"
-      >
-        ⟲ Flip view
-      </button>
-      <ConnectionPill />
+          ⟲ Flip view
+        </button>
+        <ConnectionPill />
+      </div>
     </header>
   );
 }

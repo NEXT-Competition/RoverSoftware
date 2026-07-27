@@ -16,6 +16,7 @@ SITES = {
         "boundary": FIELD_BOUNDARY,
         "rotation_deg": 33,
         "zoom": 19.5,
+        "locked": True,
     },
     "gmu_plaza": {
         "name": "GMU Engineering Plaza",
@@ -23,6 +24,10 @@ SITES = {
         "boundary": None,
         "rotation_deg": 0,
         "zoom": 19.5,
+        # No measured boundary here (open pavement, not a fenced field), so
+        # unlike the soccer field this view stays free to pan/zoom instead of
+        # being locked to one fixed frame.
+        "locked": False,
     },
 }
 

@@ -78,6 +78,7 @@ export interface Site {
   boundary: LatLon[] | null; // null = no fence (e.g. an open plaza)
   rotation_deg: number;
   zoom: number;
+  locked: boolean; // false = free pan/zoom instead of the fixed rotated frame
 }
 
 /** The single message type the bridge pushes at ui_hz (default 30 Hz). */

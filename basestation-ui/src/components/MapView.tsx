@@ -43,6 +43,9 @@ const DEFAULT_ZOOM = 19.5;
 // so its corners still cover the screen once rotated and clipped. Generous on
 // purpose — the cost is a few off-screen tiles, not correctness.
 const OVERSIZE_PCT = 250;
+// Extra upward nudge past the panel gap's true center — trimmed in by hand
+// against the live layout, purely a look-and-feel call.
+const MAP_VERTICAL_NUDGE_PX = 60;
 
 function robotIcon(r: Robot, isSel: boolean, rotationDeg: number): L.DivIcon {
   const cls = "robot-icon" + (r.online ? "" : " offline") + (isSel ? " sel" : "");
@@ -110,6 +113,7 @@ export function MapView() {
   const boundaryLayerRef = useRef<L.Polygon | null>(null);
   const routeModeRef = useRef(false);
   const rotationRef = useRef(DEFAULT_ROTATION_DEG);
+  const zoomControlRef = useRef<L.Control.Zoom | null>(null);
 
   // Read signals so this component re-renders (and the sync effects run) on change.
   const robotList = robots.value;
@@ -124,6 +128,7 @@ export function MapView() {
   const activeSite = activeSiteId.value ? sites.value[activeSiteId.value] : undefined;
   const siteCenter = activeSite?.origin ?? DEFAULT_CENTER;
   const siteZoom = activeSite?.zoom ?? DEFAULT_ZOOM;
+  const locked = activeSite?.locked ?? true;
   const rotationDeg = (activeSite?.rotation_deg ?? DEFAULT_ROTATION_DEG) + (flipped ? 180 : 0);
   routeModeRef.current = rMode;
   rotationRef.current = rotationDeg;
@@ -166,6 +171,26 @@ export function MapView() {
     };
   }, []);
 
+  // ---- interactions: locked sites (a fixed, rotated frame matched against a
+  // real measured boundary) stay pan/zoom-locked; sites with no boundary to
+  // match against (e.g. the open GMU plaza) get free pan/zoom instead ----
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const toggle = (h: L.Handler) => (locked ? h.disable() : h.enable());
+    toggle(map.dragging);
+    toggle(map.touchZoom);
+    toggle(map.scrollWheelZoom);
+    toggle(map.doubleClickZoom);
+    toggle(map.boxZoom);
+    if (locked) {
+      zoomControlRef.current?.remove();
+    } else {
+      if (!zoomControlRef.current) zoomControlRef.current = L.control.zoom();
+      zoomControlRef.current.addTo(map);
+    }
+  }, [locked]);
+
   // ---- rotation: applied on mount, whenever the flip mode changes, and
   // whenever the visible gap between panels resizes ----
   useEffect(() => {
@@ -184,7 +209,7 @@ export function MapView() {
       if (holeEl) {
         const holeRect = holeEl.getBoundingClientRect();
         cx = holeRect.left - wrapRect.left + holeRect.width / 2;
-        cy = holeRect.top - wrapRect.top + holeRect.height / 2;
+        cy = holeRect.top - wrapRect.top + holeRect.height / 2 - MAP_VERTICAL_NUDGE_PX;
       }
       mapEl.style.left = `${cx}px`;
       mapEl.style.top = `${cy}px`;
@@ -197,16 +222,20 @@ export function MapView() {
     return () => ro.disconnect();
   }, [rotationDeg]);
 
-  // ---- site view: re-center/re-zoom (and re-lock the zoom range) whenever
-  // the active site changes. Keyed on the actual lat/lon/zoom values, not the
-  // site object, since `sites` is replaced wholesale on every snapshot. ----
+  // ---- site view: re-center/re-zoom whenever the active site changes.
+  // Keyed on the actual lat/lon/zoom values, not the site object, since
+  // `sites` is replaced wholesale on every snapshot — and on `locked`, since
+  // that's what decides whether the zoom range gets pinned back down. ----
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    map.setMinZoom(siteZoom);
-    map.setMaxZoom(siteZoom);
+    // Locked sites pin the zoom range to one fixed level; unlocked sites (no
+    // measured boundary to hold the view against) keep the map's full 15-20
+    // range so the user can freely zoom in/out.
+    map.setMinZoom(locked ? siteZoom : 15);
+    map.setMaxZoom(locked ? siteZoom : 20);
     map.setView(siteCenter, siteZoom);
-  }, [siteCenter[0], siteCenter[1], siteZoom]);
+  }, [siteCenter[0], siteCenter[1], siteZoom, locked]);
 
   // ---- tile source (offline /tiles arrives with the first fleet message) ----
   useEffect(() => {
