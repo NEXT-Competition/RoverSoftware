@@ -18,6 +18,7 @@ import time
 from typing import Callable, Dict, List, Tuple
 
 from robot.control.waypoint import bearing_deg, haversine_m
+from .field import point_in_polygon
 
 V_MAX = 3.0          # m/s at full throttle
 YAW_MAX = 60.0       # deg/s at full turn-in-place
@@ -57,7 +58,7 @@ class _SimRobot:
         forward = 0.5 * max(0.2, 1.0 - abs(steer))
         self.set_arcade(forward, steer)
 
-    def step(self, dt: float) -> None:
+    def step(self, dt: float, boundary=None) -> None:
         if self.estop:
             self.left = self.right = 0.0
         elif self.mode == "waypoint":
@@ -69,8 +70,14 @@ class _SimRobot:
 
         north = v * math.cos(math.radians(self.heading)) * dt
         east = v * math.sin(math.radians(self.heading)) * dt
-        self.lat += north / M_PER_DEG_LAT
-        self.lon += east / (M_PER_DEG_LAT * math.cos(math.radians(self.lat)))
+        new_lat = self.lat + north / M_PER_DEG_LAT
+        new_lon = self.lon + east / (M_PER_DEG_LAT * math.cos(math.radians(self.lat)))
+        # ponytail: hard stop at the fence rather than sliding along it —
+        # upgrade to a proper wall-slide if robots need to hug the boundary.
+        # boundary is None for sites with no measured fence (e.g. open plazas),
+        # so those robots just roam freely.
+        if boundary is None or point_in_polygon(new_lat, new_lon, boundary):
+            self.lat, self.lon = new_lat, new_lon
         self.battery = max(0.0, self.battery - abs(v) * dt * 0.02)
 
     def telemetry(self) -> dict:
@@ -87,17 +94,33 @@ class SimulatedFleet:
     """Duck-typed stand-in for XBeeLink."""
 
     def __init__(self, on_message: Callable[[dict], None], n_robots: int = 3,
-                 origin: Tuple[float, float] = (37.7749, -122.4194), hz: float = 10.0):
+                 origin: Tuple[float, float] = (38.8331773, -77.3232135), hz: float = 10.0,
+                 boundary=None):
         self.on_message = on_message
         self.hz = hz
         self._lock = threading.Lock()
         self._running = False
         self._thread = None
-        lat0, lon0 = origin
+        self._n_robots = max(1, n_robots)
+        self.boundary = boundary
         self.robots: Dict[str, _SimRobot] = {}
-        for i in range(max(1, n_robots)):
+        self._spawn(origin)
+
+    def _spawn(self, origin: Tuple[float, float]) -> None:
+        lat0, lon0 = origin
+        self.robots = {}
+        # Small spread (~15m/robot) so the default fleet spawns inside any
+        # measured boundary regardless of where on the site `origin` sits.
+        for i in range(self._n_robots):
             rid = f"rover{i + 1}"
-            self.robots[rid] = _SimRobot(rid, lat0 + i * 0.0004, lon0 + i * 0.0004, heading=(i * 45) % 360)
+            self.robots[rid] = _SimRobot(rid, lat0 + i * 0.00012, lon0 + i * 0.00012, heading=(i * 45) % 360)
+
+    def set_site(self, origin: Tuple[float, float], boundary) -> None:
+        """Move the whole fleet to a new site: respawn at its origin and swap
+        the fence it's checked against (None disables the fence entirely)."""
+        with self._lock:
+            self.boundary = boundary
+            self._spawn(origin)
 
     def start(self) -> None:
         self._running = True
@@ -113,7 +136,7 @@ class SimulatedFleet:
             last = now
             with self._lock:
                 for r in self.robots.values():
-                    r.step(dt)
+                    r.step(dt, self.boundary)
                     self.on_message(r.telemetry())
             time.sleep(period)
 
