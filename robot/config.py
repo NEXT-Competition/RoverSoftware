@@ -107,7 +107,9 @@ class IMUConfig:
     # Rotation applied to the sensor's raw yaw to align it with the robot's
     # forward axis and true North (0 = North, CW positive). Tune during bring-up.
     heading_offset_deg: float = 0.0
-    invert: bool = False  # flip yaw sign to CW-positive if the board is mounted mirrored
+    invert: bool = (
+        False  # flip yaw sign to CW-positive if the board is mounted mirrored
+    )
     # Minimum fused-orientation calibration level (0-3) before we trust the
     # heading. Below this, heading() returns None and the fusion falls back to GPS.
     min_calib: int = 1
@@ -179,8 +181,9 @@ class VisionConfig:
     # imx500-all` drops the Sony model zoo in /usr/share/imx500-models/; this
     # default is its general-purpose COCO detector. Unlike the .eim, this is data
     # the sensor loads, NOT a binary the Pi runs — no chmod +x needed.
-    imx500_model: str = ("/usr/share/imx500-models/"
-                         "imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk")
+    imx500_model: str = (
+        "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk"
+    )
     # Class-name file, one per line. Empty = use the labels embedded in the .rpk,
     # which is right for every model-zoo network; only a custom export packaged
     # without them needs this.
@@ -228,9 +231,9 @@ class FPVConfig:
     # and a shared WiFi/LAN (the XBee radio can't carry video), so it's opt-in
     # rather than something every robot fires into the void on boot.
     enabled: bool = False
-    base_host: str = "base-station.local"  # where the base station receives UDP
+    base_host: str = "Yojans-MacBook-Pro.local"  # where the base station receives UDP
     base_port: int = 5005
-    fps: int = 15           # cap on frames sent per second
+    fps: int = 15  # cap on frames sent per second
     jpeg_quality: int = 60  # 1-100; lower = smaller packets, less bandwidth
 
 
@@ -279,6 +282,7 @@ class PIDConfig:
     values the controllers used to hardcode, so behaviour is unchanged until
     someone turns a knob.
     """
+
     kp: float = 0.0
     ki: float = 0.0
     kd: float = 0.0
