@@ -43,6 +43,7 @@ convert = [
     "tflite>=2.10",       # flatbuffer schema bindings — reads the .lite graph
     "ai-edge-litert>=1.0",  # reference interpreter, for parity checks only
     "pillow>=10.0",         # representative-dataset image loading
+    "ultralytics>=8.3",
 ]
 
 [tool.pytest.ini_options]
