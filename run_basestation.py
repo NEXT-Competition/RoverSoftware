@@ -58,8 +58,9 @@ def main():
                    help="run the built-in simulator with fake robots instead of a radio")
     p.add_argument("--robots", type=int, default=int(_env("RS_SIM_ROBOTS", 3)),
                    help="number of simulated robots (with --sim)")
-    p.add_argument("--origin", default=_env("RS_SIM_ORIGIN", "37.7749,-122.4194"),
-                   help="simulator origin 'lat,lon' (with --sim)")
+    p.add_argument("--origin", default=_env("RS_SIM_ORIGIN", "38.8331773,-77.3232135"),
+                   help="simulator origin 'lat,lon' (with --sim); defaults to the field at "
+                        "4609 Rapidan River Rd, Fairfax, VA 22030")
     p.add_argument("--host", default=_env("RS_WEB_HOST", "127.0.0.1"))
     p.add_argument("--web-port", type=int, default=int(_env("RS_WEB_PORT", 8000)))
     p.add_argument("--no-controller", action="store_true", default=_envbool("RS_NO_CONTROLLER"),

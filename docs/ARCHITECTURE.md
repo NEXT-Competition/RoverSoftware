@@ -674,7 +674,7 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `57600` | Radio (or use `RS_SIM=1`). |
 | `RS_WEB_HOST` / `RS_WEB_PORT` | `127.0.0.1` / `8000` | Dashboard bind. |
-| `RS_SIM` / `RS_SIM_ROBOTS` / `RS_SIM_ORIGIN` | `0` / `3` / SF | Simulator. |
+| `RS_SIM` / `RS_SIM_ROBOTS` / `RS_SIM_ORIGIN` | `0` / `3` / the Fairfax field | Simulator. |
 | `RS_NO_CONTROLLER` | `0` | Touch-only (no gamepad). |
 | `RS_DRIVE_HZ` / `RS_UI_HZ` | `30` / `30` | Command send / UI refresh rates. |
 | `RS_TILES` | OSM URL | Tile URL the browser loads (`/tiles/{z}/{x}/{y}.png` for offline). |
