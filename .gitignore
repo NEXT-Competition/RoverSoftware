@@ -9,6 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
+# Model exports (Edge Impulse .lite/.eim, converted .onnx/.rpk). Binaries that
+# are re-exported and re-converted rather than edited — same reasoning as the
+# .eim note in requirements.txt. tools/imx500_convert.py reads from here, and
+# tests/test_tflite_to_torch.py skips itself when the files are absent.
+model/
+
 # Stray lockfile from running npm at the repo root; the UI's real one lives in
 # basestation-ui/ and is tracked. Anchored so it can't match that one.
 /package-lock.json
