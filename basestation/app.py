@@ -45,6 +45,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     tiles_attribution = (attribution_for(web_cfg.get("tiles_upstream"))
                          or attribution_for(web_cfg.get("tiles")))
 
+    # Which named site (basestation/sites.py::SITES) the map + simulator are
+    # currently locked to. Mutable so "select_site" can move it at runtime;
+    # read fresh into every broadcast snapshot below.
+    active_site_id = web_cfg.get("active_site")
+
     def dispatch(robot_id, msg: dict) -> None:
         if robot_id:
             link.send({**msg, "to": robot_id})
@@ -110,6 +115,17 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # sources of truth for when it's safe to shoot, and the base station
             # is the one that can be out of date or disconnected.
             dispatch(rid, {"type": action})
+        elif action == "select_site":
+            nonlocal active_site_id
+            site_id = data.get("site_id")
+            sites = web_cfg.get("sites") or {}
+            site = sites.get(site_id)
+            # Only the simulator can actually move (a real radio link can't
+            # teleport robots to a new GPS origin) — silently ignore otherwise.
+            if site and hasattr(link, "set_site"):
+                link.set_site(tuple(site["origin"]), site["boundary"])
+                fleet.clear_trails()
+                active_site_id = site_id
 
     async def broadcast_loop() -> None:
         ui_period = 1.0 / float(web_cfg.get("ui_hz", 30))
@@ -120,6 +136,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                     "connected": getattr(controller, "connected", False) if controller else False,
                     "name": getattr(controller, "name", None) if controller else None,
                 }
+                sites = web_cfg.get("sites") or {}
+                active_site = sites.get(active_site_id)
+                snap["boundary"] = active_site["boundary"] if active_site else None
+                snap["sites"] = sites
+                snap["active_site"] = active_site_id
                 snap["tiles"] = web_cfg.get("tiles")
                 snap["tiles_maxzoom"] = tile_store.maxzoom
                 snap["tiles_attribution"] = tiles_attribution

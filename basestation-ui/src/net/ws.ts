@@ -10,7 +10,9 @@ import type {
   ConnState,
   ControllerStatus,
   FleetMessage,
+  LatLon,
   Robot,
+  Site,
 } from "./types.ts";
 
 export const conn = signal<ConnState>("connecting");
@@ -28,6 +30,12 @@ export const videoRobots = signal<string[]>([]);
  * one radio budget; see net/drive.ts. Null until the first snapshot arrives.
  */
 export const driveHz = signal<number | null>(null);
+/** Active site's fence outline, or empty when it has none (basestation/sites.py). */
+export const boundary = signal<LatLon[]>([]);
+/** Every site the dashboard can switch to, keyed by id. */
+export const sites = signal<Record<string, Site>>({});
+/** Which key in `sites` the map + simulator are currently locked to. */
+export const activeSiteId = signal<string | null>(null);
 
 // Locally-owned selection so a tap feels instant; seeded from the server the
 // first time it tells us who's selected (matches the old app.js behaviour).
@@ -84,6 +92,9 @@ export function connect(): void {
       tilesAttribution.value = msg.tiles_attribution ?? null;
       videoRobots.value = msg.video ?? [];
       driveHz.value = typeof msg.drive_hz === "number" && msg.drive_hz > 0 ? msg.drive_hz : null;
+      boundary.value = msg.boundary ?? [];
+      if (msg.sites) sites.value = msg.sites;
+      if (msg.active_site !== undefined) activeSiteId.value = msg.active_site;
       if (selected.value == null) selected.value = msg.selected;
     });
   };
@@ -100,4 +111,9 @@ export function send(action: Action): void {
 export function selectRobot(id: string): void {
   selected.value = id;
   send({ action: "select", robot_id: id });
+}
+
+/** Move the map + (if running) the simulated fleet to a different site. */
+export function selectSite(id: string): void {
+  send({ action: "select_site", site_id: id });
 }

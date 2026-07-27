@@ -81,10 +81,25 @@ body {
   height: 100dvh;
 }
 
-.map {
+/* Wrapper stays unrotated and clips; .map is the oversized div Leaflet
+   mounts into, centered and rotated (see MapView.tsx) so its corners still
+   cover the wrapper once turned. */
+.map-wrap {
   position: absolute;
   inset: 0;
+  overflow: hidden;
   background: #0a0d12;
+}
+
+.map {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center center;
+  /* translate(-50%,-50%) uses the element's OWN box (unlike % margins, which
+     are quirkily based on the container's width for both axes) — this is
+     what actually centers an oversized div regardless of aspect ratio. The
+     rotation is appended to this same string at runtime in MapView.tsx. */
 }
 
 /* The overlay is transparent to pointers; individual panels re-enable them.
