@@ -28,6 +28,15 @@ model/*.pt
 # basestation-ui/ and is tracked. Anchored so it can't match that one.
 /package-lock.json
 
+# uv's lockfile. Untracked on purpose (fcf2878): it is a 5k-line generated file
+# that every branch rewrites, git cannot merge it meaningfully, and a
+# conflict-markered resolution gets committed silently — `uv run` then dies with
+# a TOML parse error for everyone. The trade is that `uv sync` re-resolves
+# instead of reproducing exact pins; pyproject.toml holds the constraints that
+# actually matter. Re-track it (and resolve conflicts by regenerating, never by
+# hand-editing) if you ever need byte-identical envs across machines.
+/uv.lock
+
 # Agent scratch space. The worktrees are live git checkouts; staging them turns
 # each one into a gitlink pointing at a commit no clone can resolve.
 /.claude/worktrees/

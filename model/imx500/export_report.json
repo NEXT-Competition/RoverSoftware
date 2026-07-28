@@ -1,0 +1,35 @@
+{
+  "source_model": "model/best.pt",
+  "task": "detect",
+  "classes": [
+    "ball",
+    "blue bucket",
+    "orange bucket"
+  ],
+  "imgsz": 640,
+  "calibration_data": "build/dataset/data.yaml",
+  "calibration_is_placeholder": false,
+  "nms": {
+    "on_sensor": true,
+    "conf": 0.001,
+    "iou": 0.7,
+    "max_det": 300
+  },
+  "output_layout": "edge-mdt NMS: boxes(max_det,4) xyxy in input pixels, scores, labels, n_valid",
+  "memory": {
+    "Memory Usage": "7.12MB",
+    "Total Memory Available On Chip": "8.00MB",
+    "Memory Utilization": "90%",
+    "Fit In Chip": true
+  },
+  "artifacts": [
+    "packerOut.zip",
+    "labels.txt",
+    "dnnParams.xml",
+    "model_imx_MemoryReport.json"
+  ],
+  "patches_applied": [
+    "exporter.LINUX",
+    "check_font"
+  ]
+}

@@ -33,12 +33,15 @@ service  := "roversoftware-robot"
 # copy in /usr/local would just shadow the apt one.
 adafruit_pkgs := "adafruit-blinka adafruit-circuitpython-bno08x adafruit-circuitpython-gps adafruit-circuitpython-busdevice adafruit-circuitpython-register"
 
-# Apt packages the rover needs beyond the .deb's own Depends. All three are the
-# Sony IMX500 AI Camera stack, and none is on PyPI:
+# Apt packages the rover needs beyond the .deb's own Depends. None is on PyPI in
+# a form that works here — picamera2 and OpenCV are system packages on Bookworm:
 #   imx500-all       sensor firmware + Sony's model zoo (/usr/share/imx500-models)
 #   imx500-tools     imx500-package, the ARM-only .rpk builder `just model-install` runs
 #   python3-picamera2  the capture path the imx500 vision backend imports
-apt_pkgs := "imx500-all imx500-tools python3-picamera2"
+#   python3-opencv   cv2, which the edge_impulse backend imports at load time —
+#                    its wheel pulls no deps, so without this it fails with
+#                    "No module named 'cv2'", which reads as "not installed"
+apt_pkgs := "imx500-all imx500-tools python3-picamera2 python3-opencv"
 
 # Base-station host (override: just bs_host=base.local deploy-basestation)
 bs_host    := env_var_or_default("BASE_HOST", "base-station.local")
@@ -212,28 +215,13 @@ model-install:
         exit 1
     fi
     echo "==> copying packerOut.zip + labels.txt to {{host}}"
-    scp "{{imx_out}}/packerOut.zip" "{{imx_out}}/labels.txt" {{target}}:/tmp/
-    ssh {{target}} bash -euo pipefail -s <<'REMOTE'
-        if ! command -v imx500-package >/dev/null; then
-            echo "imx500-package not found. Run: just model-bootstrap" >&2
-            exit 1
-        fi
-        rm -rf /tmp/imx500-network && mkdir -p /tmp/imx500-network
-        imx500-package -i /tmp/packerOut.zip -o /tmp/imx500-network
-        # The packager names its output itself; take whatever .rpk appeared
-        # rather than assuming, so a tool rename does not silently install
-        # nothing.
-        rpk=$(find /tmp/imx500-network -name '*.rpk' | head -1)
-        if [ -z "$rpk" ]; then
-            echo "imx500-package produced no .rpk" >&2
-            exit 1
-        fi
-        sudo mkdir -p /var/lib/roversoftware
-        sudo cp "$rpk" /var/lib/roversoftware/network.rpk
-        sudo cp /tmp/labels.txt /var/lib/roversoftware/labels.txt
-        sudo chmod 644 /var/lib/roversoftware/network.rpk /var/lib/roversoftware/labels.txt
-        ls -l /var/lib/roversoftware/network.rpk /var/lib/roversoftware/labels.txt
-    REMOTE
+    scp "{{imx_out}}/packerOut.zip" "{{imx_out}}/labels.txt" \
+        packaging/imx500-package.sh {{target}}:/tmp/
+    # -t so the sudo inside the script has a terminal to prompt at. This used to
+    # be a heredoc piped into `ssh ... bash -s`, which cannot work: the heredoc
+    # IS the remote stdin, so sudo has nowhere to read a password from and the
+    # run dies at the install step — after the slow packaging has already run.
+    ssh -t {{target}} "bash /tmp/imx500-package.sh {{imx_data}}"
     # NOT `@echo` — this is a shebang recipe, so the body is a plain script and
     # just's silent-prefix would be executed as a command named "@echo".
     cat <<MSG
@@ -250,9 +238,32 @@ model-install:
 # Export here, build + install on the Pi, in one go.
 model-deploy: model-export model-install
 
+# Pull the built network + labels OFF the Pi into the repo, so the .deb can ship
+# them and a fresh rover gets a working detector straight from `just install`.
+#
+# This round trip exists because the .rpk cannot be built here: `imx500-package`
+# is ARM-only and ships in the Pi's imx500-tools apt package, so `just
+# model-install` has to run first. Once the files are committed, other rovers
+# never repeat any of it.
+#
+# One scp with both paths quoted => one connection, one password prompt.
+model-fetch:
+    mkdir -p model/imx500
+    scp "{{target}}:{{imx_net}} {{imx_data}}/labels.txt" model/imx500/
+    @ls -lh model/imx500/network.rpk model/imx500/labels.txt
+    @echo "==> fetched from {{host}}. Commit these, then 'just install' ships them."
+
 # Does the sensor actually see anything? Runs the SAME decode the rover uses.
+#
+# Sources robot.env first, so this tests the network the SERVICE runs. systemd
+# hands that file to the service via EnvironmentFile, which an ssh command shell
+# knows nothing about — without this the tool falls back to the config.py
+# defaults (the COCO zoo .rpk, no labels) and cheerfully reports a working
+# detector that is not the one you deployed.
 model-selftest *ARGS:
-    ssh -t {{target}} "cd {{app_dir}} && python3 tools/detector_selftest.py --backend imx500 {{ARGS}}"
+    ssh -t {{target}} "cd {{app_dir}} && set -a; \
+        [ -f /etc/roversoftware/robot.env ] && . /etc/roversoftware/robot.env; \
+        set +a; python3 tools/detector_selftest.py --backend imx500 {{ARGS}}"
 
 # What is currently installed on the Pi.
 model-status:
