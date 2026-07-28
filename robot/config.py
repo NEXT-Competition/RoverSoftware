@@ -463,11 +463,28 @@ class NavConfig:
     # Straight-line throttle used only to acquire an initial heading when none
     # is available. Must exceed GPSConfig.min_move_mps or no course ever fixes.
     acquire_speed: float = 0.4
-    pivot_threshold_deg: float = 25.0  # heading error above this => pivot in place
-    # Gains for the fast, standstill-valid IMU heading: a bit of proportional
-    # bite plus a touch of integral to kill steady-state bias.
+    # Heading error above this pivots in place — but only on an absolute (IMU)
+    # heading. On a GPS course it becomes an arcing turn at acquire_speed,
+    # because a pivot in place freezes the track angle. See waypoint.py.
+    pivot_threshold_deg: float = 25.0
+    # Gains for the fast, standstill-valid IMU heading. Error is in DEGREES, so
+    # these are small on purpose: kp=0.02 saturates out_limit at 30° of error,
+    # which leaves the whole 0-25° trim band proportional instead of bang-bang.
     heading_pid: PIDConfig = field(
-        default_factory=lambda: PIDConfig(kp=0.4, ki=0.02, kd=0.08, out_limit=0.7)
+        default_factory=lambda: PIDConfig(
+            kp=0.02, ki=0.002, kd=0.008, out_limit=0.6, i_limit=50.0
+        )
+    )
+    # Gains used instead whenever the heading is the GPS track angle rather than
+    # an IMU attitude (heading_source="gps", or "auto" with the IMU absent or
+    # still calibrating). Deliberately slower: this loop closes around a ~1 Hz
+    # course over ground, so it gets about half the authority, heavier damping,
+    # and no integral at all (a course has no steady-state bias worth trimming,
+    # and integrating a once-a-second error only winds up).
+    gps_heading_pid: PIDConfig = field(
+        default_factory=lambda: PIDConfig(
+            kp=0.008, ki=0.0, kd=0.006, out_limit=0.4, i_limit=50.0
+        )
     )
 
 

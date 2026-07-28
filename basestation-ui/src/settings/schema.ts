@@ -76,16 +76,22 @@ function t(path: string, label: string, extra: Partial<Field> = {}): Field {
   return { path, label, kind: "text", ...extra };
 }
 
-/** The five gains of one PID loop, for a named prefix. */
-function pid(prefix: string, iLimitMax = 5): Field[] {
+/** The five gains of one PID loop, for a named prefix.
+ *
+ * `gainStep` exists because the loops disagree on units: object align sees a
+ * normalized [-1, 1] error, the heading loops see DEGREES, so their useful
+ * gains are two orders of magnitude smaller and a 0.01 step can't even reach
+ * them.
+ */
+function pid(prefix: string, iLimitMax = 5, gainStep = 0.01): Field[] {
   return [
-    f(`${prefix}.kp`, "Kp", 0, 5, 0.01, {
+    f(`${prefix}.kp`, "Kp", 0, 5, gainStep, {
       help: "Proportional: how hard it corrects for the error it sees right now.",
     }),
-    f(`${prefix}.ki`, "Ki", 0, 5, 0.005, {
+    f(`${prefix}.ki`, "Ki", 0, 5, gainStep / 2, {
       help: "Integral: removes steady-state bias, but winds up if you overdo it.",
     }),
-    f(`${prefix}.kd`, "Kd", 0, 5, 0.005, {
+    f(`${prefix}.kd`, "Kd", 0, 5, gainStep / 2, {
       help: "Derivative: damping. Fed from the IMU yaw-rate, not a noisy difference.",
     }),
     f(`${prefix}.out_limit`, "Output limit", 0, 1, 0.01, {
@@ -216,19 +222,30 @@ export const ROBOT_GROUPS: Group[] = [
     title: "Waypoint navigation",
     blurb:
       "Point-then-go along a route: pivot onto the bearing, then cruise while " +
-      "the heading loop trims.",
+      "the heading loop trims. There are two heading loops — the fast one runs " +
+      "on the IMU's absolute heading, the slow one on the GPS course over " +
+      "ground, which only refreshes at the fix rate and only while moving.",
     fields: [
       f("nav.arrive_radius_m", "Arrive radius", 0.2, 50, 0.1, { unit: "m" }),
       f("nav.cruise_speed", "Cruise speed", 0, 1, 0.01),
       f("nav.acquire_speed", "Acquire speed", 0, 1, 0.01, {
-        help: "Straight-line throttle used to fix a GPS course when no heading is known. Must exceed the GPS min-move speed.",
+        help: "Straight-line throttle used to fix a GPS course when no heading is known, and the arc speed for GPS-heading turns. Must exceed the GPS min-move speed.",
       }),
       f("nav.pivot_threshold_deg", "Pivot threshold", 1, 180, 1, {
         unit: "°",
-        help: "Heading error above this pivots in place.",
+        help: "Heading error above this pivots in place — on an IMU heading. On a GPS course it arcs at the acquire speed instead, because a pivot freezes the track angle.",
       }),
-      ...pid("nav.heading_pid", 180),
+      ...pid("nav.heading_pid", 180, 0.002),
     ],
+  },
+  {
+    title: "Waypoint heading (GPS only)",
+    blurb:
+      "Used instead of the gains above whenever heading comes from the GPS " +
+      "track angle — heading source 'gps', or 'auto' with no calibrated IMU. " +
+      "Keep these well below the IMU gains: this loop closes around a ~1 Hz " +
+      "sensor, so pushing it hard just makes the rover weave.",
+    fields: pid("nav.gps_heading_pid", 180, 0.002),
   },
   {
     title: "Vision",
