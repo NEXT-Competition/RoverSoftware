@@ -463,6 +463,14 @@ class Robot:
         self._queue(self._result_frame(
             "put_layout", result.ok, result.errors, result.warnings,
             rev=self._layout_rev, save_error=error, restart_required=result.ok))
+        if result.ok:
+            # Echo the stored document back, the same reason _set_config echoes
+            # the values it applied rather than the ones it was asked for: the
+            # validator clamps, so what was saved is not necessarily what was
+            # sent, and the editor must show the truth. Without this the page
+            # would fall back to its last cached copy — which is the version
+            # that was just replaced.
+            self._send_doc("layout", doc, self._layout_rev)
 
     def _apply_routines(self, doc: dict, save: bool) -> None:
         """Validate routines and install them. These DO take effect now.
@@ -491,6 +499,8 @@ class Robot:
         self._queue(self._result_frame(
             "put_routines", result.ok, result.errors, result.warnings,
             rev=self._routine_rev, save_error=error))
+        if result.ok:
+            self._send_doc("routines", doc, self._routine_rev)
 
     def _load_routines(self) -> None:
         doc = routine_store.load()

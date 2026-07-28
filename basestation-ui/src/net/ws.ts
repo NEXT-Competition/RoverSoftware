@@ -14,6 +14,7 @@ import type {
   GamepadState,
   Robot,
   RobotConfigEntry,
+  RobotDocuments,
   SettingsMessage,
   SettingValue,
 } from "./types.ts";
@@ -45,6 +46,10 @@ export const baseSettings = signal<Record<string, SettingValue>>({});
 export const settingsResult = signal<SettingsMessage["settings_result"]>(null);
 /** Each robot's tunable config, as the bridge has it cached. */
 export const robotConfigs = signal<Record<string, RobotConfigEntry>>({});
+/** Each robot's hardware layout, routines and field descriptors. Same cold
+ *  channel as the configs, and for the same reason: kilobytes that change when
+ *  someone presses Save, not thirty times a second. */
+export const robotDocuments = signal<Record<string, RobotDocuments>>({});
 /** Raw gamepad sample. Only streams while a client is watching. */
 export const gamepad = signal<GamepadState | null>(null);
 /** True once the first settings frame has landed (before that, a blank form
@@ -98,6 +103,7 @@ export function connect(): void {
         baseSettings.value = msg.settings ?? {};
         settingsResult.value = msg.settings_result ?? null;
         robotConfigs.value = msg.configs ?? {};
+        robotDocuments.value = msg.documents ?? {};
         if (msg.gamepad) gamepad.value = msg.gamepad;
         settingsReady.value = true;
       });

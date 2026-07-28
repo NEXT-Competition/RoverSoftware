@@ -471,6 +471,11 @@ body {
   font-size: 14px;
   padding: 0 10px;
 }
+/* An odd number of modes leaves the last one alone in its row looking like a
+   rendering bug. Let it span instead. */
+.mode-grid .btn:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 
 /* ---------- Telemetry ---------- */
 
@@ -1441,4 +1446,396 @@ body {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Document editors: Hardware and Routines.
+
+   These edit a whole document locally and send it on Save, unlike the tuning
+   page's per-field commit, so the controls are plainer — there is no round trip
+   to reflect and nothing to badge as "clamped by the robot". What they do need
+   is density: a six-actuator layout or a ten-state routine has to stay readable
+   on a 360 px rail as well as a landscape tablet.
+--------------------------------------------------------------------------- */
+
+.doc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-block: 10px;
+  min-width: 0;
+}
+
+.doc-field.row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.doc-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.doc-unit,
+.doc-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.doc-hint.full {
+  flex-basis: 100%;
+}
+
+.doc-field.invalid .field-input {
+  border-color: var(--danger);
+}
+
+.doc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0 14px;
+}
+
+.doc-grid.tight {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* --- actuators and mechanisms --- */
+
+.actuator-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.actuator-card,
+.mech-card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 12px 14px;
+}
+
+.mech-card {
+  margin-block: 12px;
+}
+
+.actuator-head,
+.mech-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.actuator-head .doc-field,
+.mech-head .doc-field {
+  flex: 1 1 160px;
+}
+
+.preset-editor {
+  margin-top: 12px;
+}
+
+.preset-row {
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+.preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preset-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.preset-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.jog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.btn.jog {
+  touch-action: none; /* a pointer drag off the button must still release it */
+}
+
+/* --- routines --- */
+
+.run-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.run-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-event {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.routine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.routine-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.routine-graph-pane {
+  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
+}
+
+/* The graph is a nicety, not the interface — the cards are. Below a tablet it
+   costs more width than it earns, so it goes rather than squeezing them. */
+@media (max-width: 780px) {
+  .routine-graph-pane {
+    display: none;
+  }
+}
+
+.routine-states {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.state-card {
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 12px 14px;
+}
+
+.state-card.live {
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.state-card.terminal {
+  border-left-color: var(--ok);
+}
+
+.state-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.state-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  max-width: 190px;
+}
+
+.pill.live {
+  color: var(--accent);
+}
+
+.state-drive {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+  padding: 8px 0;
+  border-block: 1px solid var(--hairline);
+}
+
+.slot {
+  margin-top: 10px;
+}
+
+.slot-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.action-row,
+.transition-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+.transition-row.invalid {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.transition-order {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  min-width: 14px;
+}
+
+.transition-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.transition-arrow {
+  color: var(--muted);
+}
+
+.arg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.field-input.tiny,
+.field-select.tiny {
+  font-size: 12px;
+  padding: 5px 8px;
+  max-width: 150px;
+}
+
+.btn.subtle {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.banner.small {
+  font-size: 11px;
+  padding: 5px 9px;
+}
+
+/* --- the graph --- */
+
+.routine-graph {
+  width: 190px;
+  height: auto;
+  max-height: 70vh;
+  color: var(--muted);
+}
+
+.rg-edge line,
+.rg-edge path {
+  stroke: var(--hairline-strong);
+  stroke-width: 1.5;
+}
+
+.rg-edge.back path {
+  stroke-dasharray: 3 3;
+}
+
+.rg-label {
+  fill: var(--faint);
+  font-size: 8px;
+  font-family: var(--font-mono);
+}
+
+.rg-node rect {
+  fill: var(--panel-2);
+  stroke: var(--hairline-strong);
+}
+
+.rg-node text {
+  fill: var(--text);
+  font-size: 10px;
+  text-anchor: middle;
+  font-family: var(--font-mono);
+}
+
+.rg-node {
+  cursor: pointer;
+}
+
+.rg-node.start rect {
+  stroke: var(--accent-deep);
+}
+
+.rg-node.terminal rect {
+  stroke: var(--ok);
+}
+
+.rg-node.live rect {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.rg-node.live text {
+  fill: #fff;
 }

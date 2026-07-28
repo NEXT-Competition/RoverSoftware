@@ -6,14 +6,15 @@ const MODES: { key: Mode; label: string }[] = [
   { key: "object_align", label: "Object align" },
   { key: "shooter_align", label: "Shooter" },
   { key: "waypoint", label: "Waypoint" },
+  { key: "routine", label: "Routine" },
 ];
 
 export function ModeControls() {
   const rid = selected.value;
   const current = selectedRobot.value?.mode;
-  // A 2x2 grid rather than a wrapping row: with four modes of unequal name
-  // length, flex-wrap left "Object align" on two lines and "Waypoint" alone on
-  // a third. Equal cells also make the active mode easier to spot at a glance.
+  // A grid rather than a wrapping row: with mode names of unequal length,
+  // flex-wrap left "Object align" on two lines and "Waypoint" alone on a third.
+  // Equal cells also make the active mode easier to spot at a glance.
   return (
     <div class="mode-grid">
       {MODES.map((m) => (

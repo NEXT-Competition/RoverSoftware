@@ -333,6 +333,10 @@ class SimulatedFleet:
                 # constructors to protect; it still SAYS a restart is needed, so
                 # the dashboard shows the same banner it will in the field.
                 "restart_required": result.ok})
+            if result.ok:
+                # Echo the stored document, as the rover does — the validator
+                # clamps, so what was saved is not always what was sent.
+                self._emit(r, layout.to_doc(r.cfg), "layout", rev=r.layout_rev)
             return
         result = routine_schema.parse(doc, r.cfg.routines, SIM_CONTROLLERS)
         if result.ok:
@@ -344,6 +348,8 @@ class SimulatedFleet:
             "type": "routines_result", "from": r.rid, "ok": result.ok,
             "errors": result.errors, "warnings": result.warnings,
             "rev": r.routines_rev, "save_error": None})
+        if result.ok:
+            self._emit(r, r.routine_doc, "routines", rev=r.routines_rev)
 
     def _apply(self, r: _SimRobot, msg: dict) -> None:
         t = msg.get("type")
