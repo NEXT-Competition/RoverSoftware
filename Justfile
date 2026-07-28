@@ -4,17 +4,41 @@
 #     just host=rover2.local sync
 #     ROBOT_HOST=rover2.local just sync
 #
-# Assumes standard Raspberry Pi OS, where the default user has passwordless
-# sudo (so `sudo rsync` / `sudo systemctl` over SSH work without a prompt).
+# Recipes that run sudo on the Pi use `ssh -t`: without a TTY sudo cannot prompt
+# and dies with "a terminal is required to read the password". `-t` costs nothing
+# when the account already has passwordless sudo.
+#
+# The `sync*` recipes are the exception — `rsync --rsync-path="sudo rsync"` has
+# nowhere to prompt, so those DO require passwordless sudo on the Pi:
+#     echo "pi ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/010_pi-nopasswd
+# Set up an SSH key too (`ssh-copy-id pi@rover1.local`) or every recipe below
+# asks for the login password once per ssh/scp.
 
 host    := env_var_or_default("ROBOT_HOST", "rover1.local")
 user    := env_var_or_default("ROBOT_USER", "pi")
 version := "0.1.0"
 
-target  := user + "@" + host
-app_dir := "/opt/roversoftware"
-deb     := "dist/roversoftware-robot_" + version + "_all.deb"
-service := "roversoftware-robot"
+target   := user + "@" + host
+app_dir  := "/opt/roversoftware"
+deb_name := "roversoftware-robot_" + version + "_all.deb"
+deb      := "dist/" + deb_name
+service  := "roversoftware-robot"
+
+# CircuitPython/Adafruit stack the sensor drivers import. Blinka supplies the
+# board/busio/digitalio modules the BNO085 needs; the rest are the drivers
+# themselves. Installed with sudo on purpose: the service runs as root, and a
+# plain `pip install --user` lands in ~pi and is invisible to it.
+#
+# pyserial is deliberately absent: the .deb Depends on python3-serial, and a pip
+# copy in /usr/local would just shadow the apt one.
+adafruit_pkgs := "adafruit-blinka adafruit-circuitpython-bno08x adafruit-circuitpython-gps adafruit-circuitpython-busdevice adafruit-circuitpython-register"
+
+# Apt packages the rover needs beyond the .deb's own Depends. All three are the
+# Sony IMX500 AI Camera stack, and none is on PyPI:
+#   imx500-all       sensor firmware + Sony's model zoo (/usr/share/imx500-models)
+#   imx500-tools     imx500-package, the ARM-only .rpk builder `just model-install` runs
+#   python3-picamera2  the capture path the imx500 vision backend imports
+apt_pkgs := "imx500-all imx500-tools python3-picamera2"
 
 # Base-station host (override: just bs_host=base.local deploy-basestation)
 bs_host    := env_var_or_default("BASE_HOST", "base-station.local")
@@ -40,9 +64,10 @@ run *ARGS:
 test *ARGS:
     uv run pytest {{ARGS}}
 
-# One-time Pi setup: install SunFounder Fusion HAT drivers + the fusion_hat
-# Python library, and the BNO085 IMU driver. This may enable I2C and require a
-# reboot afterwards. Run this ONCE per robot before the first `just deploy`.
+# One-time Pi setup: the Adafruit sensor libraries, the header UART for the GPS
+# (see `just uart`), and the SunFounder Fusion HAT drivers + fusion_hat Python
+# library. Edits the boot config and enables I2C, so REBOOT afterwards. Run this
+# ONCE per robot before the first `just deploy`.
 #
 # BNO085 note: unlike the BNO055 it replaces, the BNO08x speaks SHTP and does NOT
 # abuse I2C clock stretching, so it wants the Pi's normal 100 kHz bus. If
@@ -52,23 +77,52 @@ test *ARGS:
 # reports as fast as they arrive, and the driver's start-up wedges. Strap PS0/PS1
 # for I2C mode. Verify the sensor with python3 tools/imu_selftest.py (one-shot
 # PASS/FAIL), then calibrate with tools/imu_monitor.py.
-bootstrap:
+bootstrap: adafruit uart
     ssh -t {{target}} "curl -sSL https://raw.githubusercontent.com/sunfounder/fusion-hat/v1/install.sh | sudo bash"
-    ssh -t {{target}} "pip install --break-system-packages adafruit-circuitpython-bno08x || pip install adafruit-circuitpython-bno08x"
-    @echo "==> Fusion HAT + BNO085 driver installed on {{host}}. Remove any dtparam=i2c_arm_baudrate line from config.txt, then: just reboot"
+    @echo "==> Fusion HAT + Adafruit drivers installed and UART enabled on {{host}}. Remove any dtparam=i2c_arm_baudrate line from config.txt, then: just reboot"
+
+# Free the header UART for the GPS: enable_uart=1 + dtoverlay=disable-bt in
+# config.txt, and the serial console off cmdline.txt. Needs a reboot afterwards.
+#
+# Without this /dev/ttyAMA0 belongs to the Bluetooth modem and the header gets
+# the clock-dependent mini-UART, which mangles NMEA — the GPS then looks like it
+# simply never gets a fix. packaging/enable-uart.sh has the full story; it backs
+# up both boot files and is safe to re-run.
+uart:
+    scp packaging/enable-uart.sh {{target}}:/tmp/
+    ssh -t {{target}} "sudo bash /tmp/enable-uart.sh"
 
 # Reboot the Pi (handy after bootstrap enables I2C).
 reboot:
-    ssh {{target}} "sudo reboot" || true
+    ssh -t {{target}} "sudo reboot" || true
 
 # Build the robot .deb (needs dpkg-deb; on macOS: brew install dpkg).
 build:
     VERSION={{version}} ./packaging/build-deb.sh robot
 
-# Full install on the Pi: copy the .deb and install it (sets up the service).
-install: build
+# Install the Adafruit/CircuitPython sensor libraries on the Pi. Idempotent, so
+# it is safe to re-run; `just install` does it for you.
+#
+# --break-system-packages is required on Bookworm and later (PEP 668 marks the
+# OS Python as externally managed); the fallback covers older Pi OS where the
+# flag does not exist.
+adafruit:
+    ssh -t {{target}} "sudo pip install --break-system-packages --upgrade {{adafruit_pkgs}} \
+        || sudo pip install --upgrade {{adafruit_pkgs}}"
+    @echo "==> Adafruit libraries installed on {{host}}"
+
+# Install the apt-side dependencies on the Pi (the AI Camera stack — see
+# apt_pkgs above). Idempotent; `just install` does it for you. Budget for the
+# FIRST run: imx500-all is a ~400 MB download of firmware and models.
+apt-deps:
+    ssh -t {{target}} "sudo apt-get update && sudo apt-get install -y {{apt_pkgs}}"
+    @echo "==> apt dependencies installed on {{host}}"
+
+# Full install on the Pi: system + sensor libraries, then copy the .deb and
+# install it (which sets up and starts the service).
+install: build apt-deps adafruit
     scp {{deb}} {{target}}:/tmp/
-    ssh {{target}} "sudo apt-get install -y /tmp/$(basename {{deb}}) || sudo dpkg -i /tmp/$(basename {{deb}})"
+    ssh -t {{target}} "sudo apt-get install -y /tmp/{{deb_name}} || sudo dpkg -i /tmp/{{deb_name}}"
 
 # Alias for a first-time / clean deployment.
 deploy: install
@@ -87,11 +141,11 @@ sync:
 
 # Service controls.
 restart:
-    ssh {{target}} "sudo systemctl restart {{service}}"
+    ssh -t {{target}} "sudo systemctl restart {{service}}"
 start:
-    ssh {{target}} "sudo systemctl start {{service}}"
+    ssh -t {{target}} "sudo systemctl start {{service}}"
 stop:
-    ssh {{target}} "sudo systemctl stop {{service}}"
+    ssh -t {{target}} "sudo systemctl stop {{service}}"
 status:
     ssh {{target}} "systemctl status {{service}} --no-pager"
 
@@ -109,7 +163,7 @@ shell:
 
 # Remove the package from the Pi.
 uninstall:
-    ssh {{target}} "sudo apt-get remove -y {{service}} || sudo dpkg -r {{service}}"
+    ssh -t {{target}} "sudo apt-get remove -y {{service}} || sudo dpkg -r {{service}}"
 
 
 # ───────────────────── vision model (Sony IMX500 / AI Camera) ─────────────────
@@ -129,13 +183,10 @@ imx_out    := "build/imx500-yolo"
 imx_data   := "/var/lib/roversoftware"
 imx_net    := imx_data + "/network.rpk"
 
-# imx500-tools brings the packager, imx500-all the sensor firmware, picamera2
-# the capture path.
-#
-# One-time per robot: install the AI Camera stack.
-model-bootstrap:
-    ssh -t {{target}} "sudo apt-get install -y imx500-tools imx500-all python3-picamera2"
-    @echo "==> AI Camera stack installed on {{host}}"
+# Install the AI Camera stack. Kept as its own name because the model recipes
+# below point at it, but it is just `just apt-deps` — the package list lives in
+# apt_pkgs at the top, and `just install` already runs it.
+model-bootstrap: apt-deps
 
 # Stages the Label Studio export, then converts. Runs HERE, not on the Pi.
 # Extra args pass through to the exporter (--imgsz 480, --conf, ...).
@@ -231,7 +282,7 @@ sync-basestation:
         --exclude '__pycache__' --exclude '*.pyc' \
         basestation robot run_basestation.py \
         {{bs_target}}:{{bs_app}}/
-    ssh {{bs_target}} "sudo systemctl restart {{bs_service}}"
+    ssh -t {{bs_target}} "sudo systemctl restart {{bs_service}}"
     @echo "==> synced bridge to {{bs_host}} and restarted {{bs_service}}"
 
 # ── Deno touch UI ──
@@ -250,12 +301,12 @@ sync-ui: build-ui
         --rsync-path="sudo rsync" \
         basestation-ui/dist basestation-ui/server basestation-ui/deno.json \
         {{bs_target}}:{{bs_app}}/ui/
-    ssh {{bs_target}} "sudo systemctl restart {{bs_ui_service}}"
+    ssh -t {{bs_target}} "sudo systemctl restart {{bs_ui_service}}"
     @echo "==> synced touch UI to {{bs_host}} and restarted {{bs_ui_service}}"
 
 # Touch-UI service controls.
 bs-ui-restart:
-    ssh {{bs_target}} "sudo systemctl restart {{bs_ui_service}}"
+    ssh -t {{bs_target}} "sudo systemctl restart {{bs_ui_service}}"
 bs-ui-status:
     ssh {{bs_target}} "systemctl status {{bs_ui_service}} --no-pager"
 bs-ui-logs:
@@ -263,7 +314,7 @@ bs-ui-logs:
 
 # Base-station service controls.
 bs-restart:
-    ssh {{bs_target}} "sudo systemctl restart {{bs_service}}"
+    ssh -t {{bs_target}} "sudo systemctl restart {{bs_service}}"
 bs-status:
     ssh {{bs_target}} "systemctl status {{bs_service}} --no-pager"
 bs-logs:
@@ -290,5 +341,5 @@ bs-fetch-tiles *ARGS:
 # Copy the built dist/tiles.mbtiles to the Pi and restart the dashboard.
 bs-push-tiles:
     scp dist/tiles.mbtiles {{bs_target}}:/tmp/tiles.mbtiles
-    ssh {{bs_target}} "sudo mkdir -p /var/lib/roversoftware && sudo mv /tmp/tiles.mbtiles /var/lib/roversoftware/tiles.mbtiles && sudo systemctl restart {{bs_service}}"
+    ssh -t {{bs_target}} "sudo mkdir -p /var/lib/roversoftware && sudo mv /tmp/tiles.mbtiles /var/lib/roversoftware/tiles.mbtiles && sudo systemctl restart {{bs_service}}"
     @echo "==> pushed offline tiles to {{bs_host}}; reload the kiosk: just bs-reload"
