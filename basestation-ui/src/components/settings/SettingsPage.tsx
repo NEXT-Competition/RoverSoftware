@@ -55,7 +55,9 @@ export function SettingsPage() {
       </header>
 
       <div class="settings-body">
-        <div class="settings-col">
+        {/* The Routines tab is a canvas, not a form, so it opts out of the
+            reading measure the other tabs want. */}
+        <div class={`settings-col${active === "routines" ? " wide" : ""}`}>
           {active === "robot" && <RobotSettings />}
           {active === "hardware" && <HardwarePage />}
           {active === "routines" && <RoutinesPage />}

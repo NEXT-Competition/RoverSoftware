@@ -8,6 +8,8 @@ delegate whose search timers never reset, or one left running after the mode
 changed.
 """
 
+import json
+
 import pytest
 
 from robot.config import MechanismConfig, MotorConfig, RobotConfig, RoutineConfig
@@ -398,6 +400,32 @@ def test_an_estop_stops_a_routine_and_its_mechanisms(rover):
 
     assert (cmd.left, cmd.right) == (0.0, 0.0)
     assert rover.mechanisms["intake"].motors["roller"].throttle == 0.0
+
+
+def test_editor_positions_survive_the_round_trip(rover):
+    """The dashboard keeps its node positions in the document itself, so the
+    diagram a teammate opens is the one you drew. That works because the robot
+    stores and echoes the RAW document rather than a re-serialization — which
+    makes it a property worth pinning down rather than an accident."""
+    doc = json.loads(json.dumps(DOC))
+    doc["routines"][0]["states"][0]["x"] = 120
+    doc["routines"][0]["states"][0]["y"] = -40
+    put(rover, doc)
+
+    echoed = [f for f in rover.sent if f["type"] == "routines"]
+    assert echoed, "the robot should echo back what it stored"
+    rebuilt = json.loads("".join(f["part"] for f in sorted(echoed, key=lambda f: f["seq"])))
+    assert rebuilt["routines"][0]["states"][0]["x"] == 120
+    assert rebuilt["routines"][0]["states"][0]["y"] == -40
+
+
+def test_a_position_is_never_interpreted_by_the_engine(rover):
+    """Garbage in an editor-only key must not reach the state machine."""
+    doc = json.loads(json.dumps(DOC))
+    doc["routines"][0]["states"][0]["x"] = "banana"
+    put(rover, doc)
+    result = [f for f in rover.sent if f["type"] == "routines_result"][-1]
+    assert result["ok"] is True
 
 
 def test_routines_survive_a_restart(rover, tmp_path):

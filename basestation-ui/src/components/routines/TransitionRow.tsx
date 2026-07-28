@@ -9,10 +9,12 @@ import { CONDITIONS, CONDITION_BY_KEY } from "../../routines/vocab.ts";
 import { ArgFields } from "./ArgFields.tsx";
 
 export function TransitionRow(
-  { transition, states, index, onChange, onRemove }: {
+  { transition, states, index, highlighted = false, onChange, onRemove }: {
     transition: TransitionSpec;
     states: string[];
     index: number;
+    /** True when this is the wire selected on the canvas. */
+    highlighted?: boolean;
     onChange: (next: TransitionSpec) => void;
     onRemove: () => void;
   },
@@ -33,7 +35,9 @@ export function TransitionRow(
   };
 
   return (
-    <div class={`transition-row${missing ? " invalid" : ""}`}>
+    <div
+      class={`transition-row${missing ? " invalid" : ""}${highlighted ? " chosen" : ""}`}
+    >
       <span class="transition-order" title="Checked in this order; first match wins">
         {index + 1}
       </span>

@@ -13,7 +13,6 @@ import { refreshLayout } from "../../state/hardware.ts";
 import { configTarget, targetRobot } from "../../state/settings.ts";
 import {
   addRoutine,
-  addState,
   current,
   discardRoutines,
   duplicateRoutine,
@@ -29,11 +28,13 @@ import {
   routinesResult,
   runRoutine,
   saveRoutines,
+  selectedEdge,
+  selectedState,
   setRoutineField,
   stopRoutine,
 } from "../../state/routines.ts";
-import { GraphPreview } from "./GraphPreview.tsx";
-import { StateCard } from "./StateCard.tsx";
+import { Inspector } from "./Inspector.tsx";
+import { RoutineCanvas } from "./RoutineCanvas.tsx";
 
 function RunBar() {
   const robot = selectedRobot.value;
@@ -111,12 +112,18 @@ export function RoutinesPage() {
     if (result?.ok && routinesDirty.value) routinesAccepted();
   }, [documents?.routines_rev]);
 
+  // Switching routine or robot must drop the selection: a node id from the old
+  // one would leave the inspector showing a state that isn't on the canvas.
+  useEffect(() => {
+    selectedState.value = null;
+    selectedEdge.value = null;
+  }, [routine?.id, rid]);
+
   if (!rid) {
     return <p class="hint pad">No robot selected — pick one on the driving view first.</p>;
   }
 
   const all = routines.value.routines;
-  const states = routine?.states.map((s) => s.id) ?? [];
   const live = liveState.value;
   const byState = new Map<string, string[]>();
   const general: string[] = [];
@@ -234,7 +241,9 @@ export function RoutinesPage() {
                     onChange={(e) =>
                       setRoutineField("start", (e.target as HTMLSelectElement).value)}
                   >
-                    {states.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {(routine?.states ?? []).map((s) => (
+                      <option key={s.id} value={s.id}>{s.id}</option>
+                    ))}
                   </select>
                 </label>
                 <label class="arg">
@@ -287,25 +296,15 @@ export function RoutinesPage() {
             </section>
 
             <div class="routine-body">
-              <aside class="routine-graph-pane">
-                <GraphPreview routine={routine} live={live} />
-              </aside>
-
-              <div class="routine-states">
-                {routine.states.map((state) => (
-                  <StateCard
-                    key={state.id}
-                    state={state}
-                    states={states}
-                    isStart={state.id === routine.start}
-                    isLive={state.id === live}
-                    problems={byState.get(state.id) ?? []}
-                  />
-                ))}
-                <button type="button" class="btn ghost small" onClick={addState}>
-                  + State
-                </button>
+              <div class="routine-canvas-pane">
+                <RoutineCanvas
+                  routine={routine}
+                  live={live}
+                  problemStates={new Set(byState.keys())}
+                />
               </div>
+
+              <Inspector routine={routine} live={live} problems={byState} />
             </div>
           </>
         )}

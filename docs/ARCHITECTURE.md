@@ -943,9 +943,17 @@ answers; a layout is a document, half of which is a robot with one drive motor,
 so the whole thing is edited locally and sent in one go. The draft is kept until
 the robot answers, so a refused edit isn't silently lost, and the robot echoes
 the *stored* copy back — the validator clamps, so what was saved is not
-necessarily what was sent. The Routines tab shows the live state highlighted from
-telemetry, in the state card and in a small read-only SVG graph, which is what
-makes it a debugger rather than only an editor.
+necessarily what was sent. The Routines tab is a **node graph**: states are boxes you
+drag, transitions are wires you draw by dragging from a box's right edge onto
+another, and selecting either puts its detail in an inspector beside the canvas.
+The split is deliberate — a graph is good at structure and useless at arguments,
+since you cannot pick "hold for 0.4 s" or "preset: in" off a box. Node positions
+live in the routine document itself, so the diagram a teammate opens is the one
+you drew rather than whatever an auto-layout produces on their screen; the robot
+preserves those keys without interpreting them. A routine that has never been
+opened in the editor gets a layered left-to-right layout from the start state.
+The live state is highlighted from telemetry as it runs, which is what makes this
+a debugger rather than only an editor.
 
 ---
 

@@ -216,15 +216,17 @@ for the rest — so field tuning survives the next power cycle.
   together. A **Test** control jogs one mechanism from the bench, refused unless
   the robot is in teleop with no e-stop latched. A layout is saved whole and
   takes effect on the next start, because actuators are built at start-up.
-- **Routines** — program the robot without Python. A routine is a state machine:
-  each state says what drives (stop, a fixed throttle, or *delegate to* object
-  align / shooter align / waypoint), what happens when it is entered, held and
-  left, and what makes it move on — after a delay, when lined up, once the route
-  finishes, after N shots, or when you press a button. Saved routines run **on
-  the robot**, so they survive losing the radio, and the live state is
-  highlighted in the editor as it runs. Transitions are checked in order, one per
-  tick, and a condition can be required to hold continuously before it counts —
-  the same reason the launcher waits half a second before firing.
+- **Routines** — program the robot without Python, by drawing it. A routine is a
+  state machine on a canvas: drag boxes to arrange them, drag from a box's right
+  edge onto another to wire them together, tap a wire to say when it fires. Each
+  state says what drives (stop, a fixed throttle, or *delegate to* object align /
+  shooter align / waypoint), what happens when it is entered, held and left, and
+  what makes it move on — after a delay, when lined up, once the route finishes,
+  after N shots, or when you press a button. Saved routines run **on the robot**,
+  so they survive losing the radio, and the box the robot is actually in lights
+  up as it runs. Transitions are checked in order, one per tick, and a condition
+  can be required to hold continuously before it counts — the same reason the
+  launcher waits half a second before firing.
 - **Controller** — remap the gamepad by *pressing the control you want*, with a
   live view of every axis and button and the throttle/steer the current mapping
   produces. Also dead zone, trigger rest value, throttle/steer authority and
@@ -460,11 +462,11 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   steered chassis reuses object align and waypoint unchanged. (One honest caveat:
   a steered chassis cannot pivot in place, and those modes ask it to — see
   `min_pivot_throttle` in `docs/ARCHITECTURE.md` §4.4.)
-- **Program it without code** — ✅ done: the Routines tab is a state-machine
-  editor. A state says what drives — including *delegating* to object align,
-  shooter align or waypoint, which is how the FSM composes the autonomy that
-  already exists — what it does to the mechanisms, and what makes it move on.
-  Routines run on the robot, so they survive losing the radio.
+- **Program it without code** — ✅ done: the Routines tab is a node-graph editor
+  for state machines. A state says what drives — including *delegating* to object
+  align, shooter align or waypoint, which is how the FSM composes the autonomy
+  that already exists — what it does to the mechanisms, and what makes it move
+  on. Routines run on the robot, so they survive losing the radio.
 - **Voice → multi-robot planning** — a local LLM turns a high-level spoken order
   into a plan; a dispatcher agent slices it into per-vehicle chunks and sends
   them as `mode`/`route`/task messages over XBee, one manageable step at a time.

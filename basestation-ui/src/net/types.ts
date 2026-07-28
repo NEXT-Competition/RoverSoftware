@@ -211,6 +211,12 @@ export interface RoutineStateSpec {
   on_tick?: ActionSpec[];
   on_exit?: ActionSpec[];
   transitions?: TransitionSpec[];
+  /** Where this node sits on the editor's canvas. Editor-only: the robot never
+   *  interprets these, it just preserves them (robot/routine/schema.py), so the
+   *  diagram a teammate opens is the one you drew. Missing or non-finite values
+   *  mean "lay me out", not "put me at zero". */
+  x?: number;
+  y?: number;
 }
 
 export interface RoutineSpec {

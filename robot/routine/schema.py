@@ -16,6 +16,16 @@ The validation that matters most is not about types. It is:
 
 Compiling happens here too: conditions and actions become closures at load
 time, so the 50 Hz loop evaluates them and never parses them.
+
+--- keys this module ignores are still preserved ---
+Validation reads the keys it knows and leaves the rest alone, and `Robot` stores
+and echoes back the RAW document rather than a re-serialization. That is what
+lets the dashboard keep its node positions (`x`/`y` on each state) in the
+document itself, so the diagram a teammate opens is the one you drew rather than
+whatever an auto-layout produces on their screen. It costs about twenty bytes a
+state against a 16 KB cap. Nothing here interprets those keys, so a hand-edited
+garbage value cannot reach the engine — the editor coerces defensively and falls
+back to laying the graph out itself.
 """
 
 from __future__ import annotations

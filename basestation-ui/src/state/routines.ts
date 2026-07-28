@@ -30,6 +30,14 @@ const draftOwner = signal<string | null>(null);
 /** Which routine the editor is showing. */
 export const editing = signal<string | null>(null);
 
+/** Which node is selected on the canvas, and so which state the inspector edits.
+ *  A node graph can show structure but not detail — you cannot pick a condition's
+ *  arguments off a box — so selection is what connects the two halves. */
+export const selectedState = signal<string | null>(null);
+
+/** A selected edge, so it can be deleted without hunting for it in a list. */
+export const selectedEdge = signal<{ state: string; index: number } | null>(null);
+
 const EMPTY: RoutineDoc = { version: 1, routines: [] };
 
 export const serverRoutines = computed<RoutineDoc | null>(() => {
@@ -182,19 +190,135 @@ export function setRoutineField<K extends keyof RoutineSpec>(
   });
 }
 
+// --- the canvas: node positions ----------------------------------------------
+//
+// Positions live in the document (see net/types.ts), so they travel with the
+// routine to the robot and back. A state without usable coordinates is laid out
+// rather than dropped at the origin — an imported routine, or one written by hand,
+// must not open as a pile of boxes on top of each other.
+
+export const NODE_W = 158;
+export const NODE_H = 58;
+const COL = 300; // horizontal gap between layers — room for a wire's label
+const ROW = 96; // vertical gap between siblings in a layer
+
+function usable(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export interface Placed {
+  state: RoutineStateSpec;
+  x: number;
+  y: number;
+}
+
+/**
+ * Every state with a definite position.
+ *
+ * Stored coordinates win. Anything missing gets a layered left-to-right layout:
+ * BFS depth from the start state sets the column, order within the column sets
+ * the row. That reads the way a sequence is meant to — first thing on the left —
+ * and it is stable, so the same routine always lays out the same way.
+ */
+export const placed = computed<Placed[]>(() => {
+  const routine = current.value;
+  if (!routine) return [];
+
+  const depth = new Map<string, number>([[routine.start, 0]]);
+  const queue = [routine.start];
+  while (queue.length) {
+    const id = queue.shift()!;
+    const state = routine.states.find((s) => s.id === id);
+    for (const transition of state?.transitions ?? []) {
+      if (!depth.has(transition.to)) {
+        depth.set(transition.to, (depth.get(id) ?? 0) + 1);
+        queue.push(transition.to);
+      }
+    }
+  }
+  // Unreachable states are still real states someone is mid-way through wiring
+  // up. Park them in a column past the end rather than hiding them.
+  const deepest = Math.max(0, ...depth.values());
+  const perColumn = new Map<number, number>();
+
+  return routine.states.map((state) => {
+    const column = depth.get(state.id) ?? deepest + 1;
+    const row = perColumn.get(column) ?? 0;
+    perColumn.set(column, row + 1);
+    return {
+      state,
+      x: usable(state.x) ? state.x : column * COL,
+      y: usable(state.y) ? state.y : row * ROW,
+    };
+  });
+});
+
+export function setStatePosition(id: string, x: number, y: number): void {
+  editCurrent((routine) => {
+    const state = routine.states.find((s) => s.id === id);
+    if (state) {
+      state.x = Math.round(x);
+      state.y = Math.round(y);
+    }
+  });
+}
+
+/** Throw away stored positions and let the layered layout take over. */
+export function relayout(): void {
+  editCurrent((routine) => {
+    for (const state of routine.states) {
+      delete state.x;
+      delete state.y;
+    }
+  });
+}
+
 // --- editing states ----------------------------------------------------------
 
-export function addState(): void {
+/**
+ * A spot near `x, y` that no node already occupies.
+ *
+ * Two "+ State" clicks both want the middle of the view, and dropping the second
+ * exactly on the first makes it look as though the button did nothing — the new
+ * node is there, perfectly hidden. Cascade instead, the way new windows do.
+ */
+function freeSpotNear(x: number, y: number): { x: number; y: number } {
+  const taken = placed.value;
+  const clear = (px: number, py: number) =>
+    !taken.some((n) => Math.abs(n.x - px) < NODE_W * 0.6 && Math.abs(n.y - py) < NODE_H * 0.8);
+  for (let step = 0; step < 40; step++) {
+    const px = x + step * 26;
+    const py = y + step * 26;
+    if (clear(px, py)) return { x: px, y: py };
+  }
+  return { x, y };
+}
+
+export function addState(at?: { x: number; y: number }): void {
+  const spot = at ? freeSpotNear(at.x, at.y) : null;
   editCurrent((routine) => {
     const id = uniqueId(new Set(routine.states.map((s) => s.id)), "state");
-    routine.states.push({ id, drive: { mode: "stop" }, transitions: [] });
+    const state: RoutineStateSpec = { id, drive: { mode: "stop" }, transitions: [] };
+    if (spot) {
+      state.x = Math.round(spot.x);
+      state.y = Math.round(spot.y);
+    }
+    routine.states.push(state);
+    selectedState.value = id;
   });
 }
 
 export function removeState(id: string): void {
   editCurrent((routine) => {
     routine.states = routine.states.filter((s) => s.id !== id);
+    // Drop the wires that pointed at it too, rather than leaving edges the graph
+    // would draw to nowhere and the robot would refuse on save.
+    for (const state of routine.states) {
+      state.transitions = (state.transitions ?? []).filter((t) => t.to !== id);
+    }
   });
+  if (selectedState.value === id) selectedState.value = null;
+  selectedEdge.value = null;
 }
 
 export function setStateField<K extends keyof RoutineStateSpec>(
@@ -285,6 +409,29 @@ export function addTransition(id: string): void {
   });
 }
 
+/**
+ * Wire two nodes together, from dragging on the canvas.
+ *
+ * Defaults to `after a delay` rather than `immediately`: a transition drawn and
+ * then forgotten should make the robot pause, not tear through every state in
+ * five ticks. Selects the new edge so its condition can be set straight away —
+ * the wire is the gesture, the condition is the point.
+ */
+export function connect(from: string, to: string): void {
+  let index = -1;
+  editCurrent((routine) => {
+    const state = routine.states.find((s) => s.id === from);
+    if (!state || !routine.states.some((s) => s.id === to)) return;
+    const transitions = state.transitions ?? [];
+    // A duplicate wire between the same pair is almost always a mis-drag, and
+    // two identical conditions means the second can never fire.
+    if (transitions.some((t) => t.to === to && t.when === "elapsed")) return;
+    state.transitions = [...transitions, { when: "elapsed", seconds: 1, to }];
+    index = state.transitions.length - 1;
+  });
+  if (index >= 0) selectedEdge.value = { state: from, index };
+}
+
 export function setTransition(
   id: string,
   index: number,
@@ -362,7 +509,11 @@ export const problems = computed<Problem[]>(() => {
   const reachable = new Set([routine.start]);
   const frontier = [routine.start];
   while (frontier.length) {
-    const state = routine.states.find((s) => s.id === frontier.pop());
+    // Pop ONCE, into a variable. Popping inside the find predicate drains the
+    // frontier as it scans, so most states never get visited and perfectly
+    // reachable ones come back flagged.
+    const id = frontier.pop()!;
+    const state = routine.states.find((s) => s.id === id);
     for (const transition of state?.transitions ?? []) {
       if (!reachable.has(transition.to)) {
         reachable.add(transition.to);

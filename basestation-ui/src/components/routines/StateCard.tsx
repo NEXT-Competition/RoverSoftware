@@ -9,7 +9,6 @@ import {
   addAction,
   addTransition,
   removeAction,
-  removeState,
   removeTransition,
   setAction,
   setDrive,
@@ -36,12 +35,15 @@ const SLOTS: { key: Slot; label: string; hint: string }[] = [
 ];
 
 export function StateCard(
-  { state, states, isStart, isLive, problems }: {
+  { state, states, isStart, isLive, problems, highlightTransition = null }: {
     state: RoutineStateSpec;
     states: string[];
     isStart: boolean;
     isLive: boolean;
     problems: string[];
+    /** Index of the transition selected on the canvas, so drawing a wire and
+     *  then setting its condition is one continuous gesture. */
+    highlightTransition?: number | null;
   },
 ) {
   const mode = state.drive?.mode ?? "stop";
@@ -68,16 +70,9 @@ export function StateCard(
             checked={!!state.terminal}
             onChange={(e) =>
               setStateField(state.id, "terminal", (e.target as HTMLInputElement).checked)}
-            title="Reaching this state ends the routine."
+            title="Reaching this state ends the routine. It also loses its output handle on the canvas."
           />
         </label>
-        <button
-          type="button"
-          class="btn ghost small danger"
-          onClick={() => removeState(state.id)}
-        >
-          Remove
-        </button>
       </header>
 
       {problems.length > 0 && (
@@ -206,6 +201,7 @@ export function StateCard(
             transition={transition}
             states={states}
             index={index}
+            highlighted={index === highlightTransition}
             onChange={(next) => setTransition(state.id, index, next)}
             onRemove={() => removeTransition(state.id, index)}
           />

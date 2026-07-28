@@ -19,6 +19,9 @@ export interface ArgSpec {
 export interface VerbSpec {
   key: string;
   label: string;
+  /** A few words, for a wire on the canvas. The full `label` is a phrase written
+   *  to read in a menu; hung on an edge it overruns onto the nodes either side. */
+  chip?: string;
   help?: string;
   args: ArgSpec[];
 }
@@ -36,15 +39,21 @@ export const CONDITIONS: VerbSpec[] = [
     help: "Useful for a pass-through state. The engine takes at most one transition per tick, so a chain of these steps rather than spins.",
     args: [],
   },
-  { key: "target_visible", label: "when the camera sees a target", args: [] },
+  {
+    key: "target_visible",
+    label: "when the camera sees a target",
+    chip: "target seen",
+    args: [],
+  },
   {
     key: "aligned",
     label: "when lined up on the target",
+    chip: "aligned",
     help: "Read straight off the alignment controller, so it means exactly what that mode means by it.",
     args: [],
   },
-  { key: "arrived", label: "when at the standoff distance", args: [] },
-  { key: "route_done", label: "when the route is finished", args: [] },
+  { key: "arrived", label: "when at the standoff distance", chip: "at standoff", args: [] },
+  { key: "route_done", label: "when the route is finished", chip: "route done", args: [] },
   {
     key: "shots",
     label: "after N shots",
@@ -56,11 +65,13 @@ export const CONDITIONS: VerbSpec[] = [
   {
     key: "mech_ready",
     label: "when a mechanism is ready",
+    chip: "ready",
     args: [{ key: "mech", label: "mechanism", kind: "mech" }],
   },
   {
     key: "heading",
     label: "when pointing a direction",
+    chip: "heading",
     args: [
       { key: "of", label: "heading", kind: "number", min: 0, max: 360, step: 1, unit: "°", fallback: 0 },
       { key: "within_deg", label: "within", kind: "number", min: 1, max: 180, step: 1, unit: "°", fallback: 10 },
@@ -69,6 +80,7 @@ export const CONDITIONS: VerbSpec[] = [
   {
     key: "distance_m",
     label: "when near a point",
+    chip: "near point",
     args: [
       { key: "lat", label: "latitude", kind: "number", step: 0.000001, fallback: 0 },
       { key: "lon", label: "longitude", kind: "number", step: 0.000001, fallback: 0 },
@@ -81,7 +93,7 @@ export const CONDITIONS: VerbSpec[] = [
     help: "Fired from the Event button while the routine runs. Cleared whenever a new state is entered, so a press can't satisfy a transition it wasn't meant for.",
     args: [{ key: "name", label: "event name", kind: "text", fallback: "go" }],
   },
-  { key: "never", label: "never (hold here)", args: [] },
+  { key: "never", label: "never (hold here)", chip: "never", args: [] },
 ];
 
 /** Actions. Note that none of them drive — that is the state's `drive` source,
@@ -152,7 +164,7 @@ export function describeCondition(when: string, args: Record<string, unknown>): 
   const spec = CONDITION_BY_KEY[when];
   if (!spec) return when;
   if (when === "elapsed") return `after ${args.seconds ?? "?"}s`;
-  if (when === "shots") return `after ${args.at_least ?? "?"} shots`;
+  if (when === "shots") return `${args.at_least ?? "?"} shots`;
   if (when === "event") return `on “${args.name ?? ""}”`;
-  return spec.label;
+  return spec.chip ?? spec.label;
 }
