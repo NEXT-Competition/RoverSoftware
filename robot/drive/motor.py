@@ -92,6 +92,19 @@ class ESCMotor:
         cmd *= self.cfg.max_forward if cmd > 0 else self.cfg.max_reverse
         self.servo.angle(self.cfg.neutral_angle + cmd * throw)
 
+    def set_angle(self, degrees: float) -> None:
+        """Command an absolute angle, clamped to [min_angle, max_angle].
+
+        Bypasses the throttle mapping entirely. Pulse mechanisms (the launcher
+        and anything shaped like it) author their geometry in degrees — "swing
+        to 30, hold, swing back to -30" — and turning that into a throttle only
+        to have it mapped back into an angle would lose the endpoints to the
+        symmetric throw. `set_throttle` remains the right call for anything
+        that spins; this is for things that travel between two positions.
+        """
+        lo, hi = min(self.cfg.min_angle, self.cfg.max_angle), max(self.cfg.min_angle, self.cfg.max_angle)
+        self.servo.angle(_clamp(degrees, lo, hi))
+
     def arm(self, seconds: float) -> None:
         """Hold neutral so the ESC recognizes the signal and arms."""
         self.servo.angle(self.cfg.neutral_angle)

@@ -42,9 +42,17 @@ def rover(monkeypatch, tmp_path):
 
 
 def deliver(bot, msg):
-    """Hand the robot a message as the radio reader thread would."""
+    """Hand the robot a message as the radio reader thread would, then let the
+    reply reach the radio.
+
+    Multi-frame replies are queued and drained a couple of frames per control
+    tick (Robot._queue), so a test that only drained the inbox would see an
+    empty radio. Spinning the outbox here is what run() does over the next few
+    ticks, compressed into one call."""
     bot._inbox.put(msg)
     bot._drain_inbox()
+    while bot._outbox:
+        bot._drain_outbox()
 
 
 # --- the config conversation ------------------------------------------------

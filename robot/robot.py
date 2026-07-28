@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import os
 import queue
 import signal
@@ -18,8 +19,9 @@ from .control.pid import PID
 from .control.shooter_align import ShooterAlignController
 from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
+from .drive.drivetrain import build_drivetrain
+from .drive.mechanism import Mechanism, build_mechanism
 from .drive.shooter import Shooter
-from .drive.tank_drive import TankDrive
 from .sensors.bno085 import IMU
 from .sensors.camera import Camera
 from .sensors.detector import MockDetector, ObjectDetector
@@ -31,6 +33,12 @@ from .sensors.pose import PoseEstimator
 # Log a warning if a control tick's work (excluding the sleep) exceeds this. A
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
 SLOW_TICK_S = 0.1
+
+# Frames drained from the outbox per control tick. At 50 Hz this is 100 frames
+# a second of headroom, which empties a ~10-frame config snapshot in 100 ms
+# while never handing the radio more than it can write inside one tick. See
+# Robot._queue for why bursting is the failure mode worth designing against.
+OUTBOX_PER_TICK = 2
 
 
 def _pid(cfg: PIDConfig) -> PID:
@@ -51,7 +59,10 @@ def _retune(pid: PID, cfg: PIDConfig) -> None:
 class Robot:
     def __init__(self, config: RobotConfig, controllers: Optional[Dict[str, Controller]] = None):
         self.cfg = config
-        self.drive = TankDrive(config.drive)
+        # Whichever drivetrain this robot's layout describes. Tank on a stock
+        # build; the command interface is identical either way, which is why
+        # nothing below the controllers had to change.
+        self.drive = build_drivetrain(config.drive)
 
         # Servo-actuated launcher for shooter_align. Off unless the build has
         # one: constructing it drives its PWM channel to the rest angle, which
@@ -60,6 +71,22 @@ class Robot:
         self.shooter: Optional[Shooter] = (
             Shooter(config.shooter) if config.shooter.enabled else None
         )
+
+        # Everything else that moves: intakes, arms, extra launchers. Built from
+        # the layout, empty on a stock build. The built-in shooter is registered
+        # alongside them under its reserved name so a routine can address every
+        # mechanism the same way, while keeping its own ShooterConfig, its own
+        # RS_SHOOTER_* vars and its own firing policy.
+        self.mechanisms: Dict[str, Mechanism] = {
+            name: build_mechanism(mech)
+            for name, mech in config.mechanisms.items() if mech.enabled
+        }
+        # Edge state for the e-stop hook in run(); see _apply_estop.
+        self._estop_latched = False
+        # Multi-frame replies (a config snapshot, a layout, a routine set) are
+        # drained a couple of frames per tick rather than burst at the radio.
+        # See _queue.
+        self._outbox: "collections.deque[dict]" = collections.deque()
 
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
@@ -212,6 +239,33 @@ class Robot:
                     c.set_detection_provider(self.detector.detection)
                     c.set_rate_provider(self.pose_estimator.heading_rate)
 
+    def _all_mechanisms(self) -> Dict[str, Mechanism]:
+        """Layout mechanisms plus the built-in launcher, keyed by name."""
+        if self.shooter is None:
+            return self.mechanisms
+        return {**self.mechanisms, "shooter": self.shooter}
+
+    def _apply_estop(self) -> None:
+        """Make mechanisms safe the moment the e-stop latches.
+
+        ControlManager broadcasts on_estop() to *controllers* and then forces
+        stopped() out of update(), which covers the drivetrain completely. It
+        does not cover mechanisms, because mechanisms are not controllers — and
+        an intake left at full power would keep spinning through an e-stop,
+        which is precisely the situation the button exists for.
+
+        Edge-detected here rather than added to ControlManager: the manager is
+        about who drives, and it owns no actuators. Detecting the edge (rather
+        than stopping every tick) leaves an operator free to jog a mechanism
+        while the robot is safely stopped, which is what bring-up looks like.
+        """
+        if self.manager.estop and not self._estop_latched:
+            self._estop_latched = True
+            for mech in self._all_mechanisms().values():
+                mech.stop()
+        elif not self.manager.estop:
+            self._estop_latched = False
+
     def _drain_inbox(self) -> None:
         while True:
             try:
@@ -243,7 +297,26 @@ class Robot:
     def _send_config(self) -> None:
         """Answer get_config, split into radio-sized frames (see tuning.chunks)."""
         for part in tuning.chunks(tuning.snapshot(self.cfg)):
-            self.link.send(self._config_frame(part))
+            self._queue(self._config_frame(part))
+
+    def _queue(self, msg: dict) -> None:
+        """Hand a frame to the paced outbox instead of the radio directly.
+
+        XBeeLink.send drops the frame and flushes when the radio isn't draining
+        within its 0.2 s write timeout, so firing a whole multi-frame reply
+        inside one tick is exactly the shape that vanishes under congestion —
+        leaving the settings page permanently blank. The outbox spreads them
+        over ticks instead. Telemetry still goes direct: it is one small frame,
+        it is the thing an operator most needs to be current, and delaying it
+        behind a config dump is the wrong trade.
+        """
+        self._outbox.append(msg)
+
+    def _drain_outbox(self) -> None:
+        for _ in range(OUTBOX_PER_TICK):
+            if not self._outbox:
+                return
+            self.link.send(self._outbox.popleft())
 
     def _set_config(self, msg: dict) -> None:
         applied, rejected = tuning.apply(self.cfg, msg.get("config") or {})
@@ -257,14 +330,14 @@ class Robot:
             error = tuning.save_overrides(applied)
             if error:
                 print(f"[Robot] config applied but NOT saved: {error}")
-        restart = tuning.needs_restart(applied)
+        restart = tuning.needs_restart(applied, tuning.by_path_for(self.cfg))
         if applied:
             print(f"[Robot] config: {len(applied)} applied"
                   + (f", {len(rejected)} rejected" if rejected else "")
                   + (f", {len(restart)} need a restart" if restart else ""))
         for path, why in rejected.items():
             print(f"[Robot] config rejected {path}: {why}")
-        self.link.send(self._config_frame(
+        self._queue(self._config_frame(
             applied, rejected=rejected, restart=restart, save_error=error))
 
     def _push_live_config(self) -> None:
@@ -351,6 +424,11 @@ class Robot:
         active = self.manager.active
         if isinstance(active, ShooterAlignController) and self.shooter is not None:
             t["shooter"] = active.status()
+        # Layout mechanisms (not the built-in launcher, which reports above via
+        # the controller that owns its firing policy). Only when the build has
+        # any, and only a summary — the radio is 57600 baud and shared.
+        if self.mechanisms:
+            t["mech"] = {name: m.status() for name, m in self.mechanisms.items()}
         return t
 
     def start(self) -> None:
@@ -391,14 +469,16 @@ class Robot:
                 last = now
 
                 self._drain_inbox()
+                self._apply_estop()
                 t1 = time.monotonic()
                 cmd = self.manager.update(dt)
                 # Unconditional, and deliberately outside the controller: a mode
                 # switch or an e-stop mid-shot stops update() from being called,
                 # and the servo must still retract instead of stalling against
-                # its stop. See robot/drive/shooter.py.
-                if self.shooter is not None:
-                    self.shooter.update()
+                # its stop. See robot/drive/shooter.py. The same argument applies
+                # to every mechanism, so they are all ticked here.
+                for mech in self._all_mechanisms().values():
+                    mech.update()
                 t2 = time.monotonic()
                 self.drive.drive(cmd.left, cmd.right)
                 t3 = time.monotonic()
@@ -406,6 +486,7 @@ class Robot:
                 if self.cfg.telemetry_hz > 0 and (now - self._last_telem) >= 1.0 / self.cfg.telemetry_hz:
                     self._last_telem = now
                     self.link.send(self._telemetry(cmd))
+                self._drain_outbox()
                 t4 = time.monotonic()
 
                 # Watchdog: a healthy tick is ~a few ms. If one blocks (I2C/servo
@@ -429,10 +510,11 @@ class Robot:
     def shutdown(self) -> None:
         print("\n[Robot] shutting down; stopping motors")
         self.drive.stop()
-        # Park the launcher at rest before anything else winds down: leaving it
-        # at the fire angle stalls the servo and leaves the mechanism cocked.
-        if self.shooter is not None:
-            self.shooter.stop()
+        # Park every mechanism at rest before anything else winds down: leaving
+        # a launcher at the fire angle stalls the servo and leaves the mechanism
+        # cocked, and leaving an intake powered is worse.
+        for mech in self._all_mechanisms().values():
+            mech.stop()
         # Stop the frame consumers, then the camera they read from. The detector
         # owns a subprocess, so stopping it early also halts inference promptly.
         if self.fpv is not None:

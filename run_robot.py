@@ -38,7 +38,7 @@ servo is mocked, and every shot still prints:
 import argparse
 import os
 
-from robot import tuning
+from robot import layout, tuning
 from robot.config import RobotConfig
 from robot.robot import Robot
 
@@ -189,11 +189,35 @@ def main():
     cfg.shooter.require_arm = os.environ.get("RS_SHOOTER_REQUIRE_ARM", "1").strip().lower() in ("1", "true", "yes", "on")
     cfg.shooter.require_arrived = os.environ.get("RS_SHOOTER_REQUIRE_ARRIVED", "1").strip().lower() in ("1", "true", "yes", "on")
 
+    # The hardware layout, if this build has been given one from the dashboard.
+    # Applied BEFORE tuning because it decides which tuning paths even exist: a
+    # layout names the actuators, and `drive.<name>.deadband` is only a real
+    # parameter once <name> is a real actuator. No layout file leaves the
+    # compiled-in two-motor tank drive exactly as it was.
+    doc = layout.load()
+    if doc is not None:
+        result = layout.apply(cfg, doc)
+        for warning in result.warnings:
+            print(f"[Robot] layout: {warning}")
+        if result.ok:
+            print(f"[Robot] layout: {cfg.drive.kind} drive, "
+                  f"{len(cfg.drive.actuators)} drive actuator(s), "
+                  f"{len(cfg.mechanisms)} mechanism(s) from {layout.layout_path()}")
+        else:
+            # Keep driving on the compiled-in layout rather than refusing to
+            # boot. A rover that won't start is worse than one on last-known-good
+            # wiring, and the errors go out with the next get_layout.
+            for error in result.errors:
+                print(f"[Robot] layout REJECTED: {error}")
+            print("[Robot] layout: falling back to the built-in tank layout")
+
     # Values tuned from the base station's settings page, saved on this robot.
     # Applied LAST, on purpose: they are the operator's most recent deliberate
     # decision, and the paths they can touch (gains, speeds, limits) are
     # disjoint from the wiring flags above — no CLI flag names a PID gain.
-    overrides = tuning.load_overrides()
+    # Filtered against THIS robot's parameter surface, so a value saved for an
+    # actuator the layout no longer has is dropped rather than reported.
+    overrides = tuning.load_overrides(known=tuning.by_path_for(cfg))
     if overrides:
         applied, rejected = tuning.apply(cfg, overrides)
         print(f"[Robot] tuning: {len(applied)} saved values from {tuning.overrides_path()}")
