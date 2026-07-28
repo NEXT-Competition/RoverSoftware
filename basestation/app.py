@@ -25,14 +25,22 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from typing import Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
+from robot.comms.doc_transfer import split
+
 from .fleet import FleetManager
 from .settings import SettingsStore
 from .tiles import TileStore, attribution_for, content_type
+
+# Document fragments handed to the radio per broadcast cycle (30 Hz by default,
+# so ~60 frames a second of headroom). Sized to empty a layout in well under a
+# second without ever giving the link more than it can write.
+DOC_FRAMES_PER_CYCLE = 2
 
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None,
@@ -67,6 +75,28 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     def dispatch(robot_id, msg: dict) -> None:
         if robot_id:
             link.send({**msg, "to": robot_id})
+
+    # Outbound document fragments, paced rather than dispatched in a loop. The
+    # robot's own outbox does this in the other direction and for the same
+    # reason: XBeeLink drops a frame the radio isn't draining, so a 10-fragment
+    # layout fired at once is the shape that arrives incomplete.
+    _doc_queue: "deque[tuple]" = deque()
+    _txid = {"n": 0}
+
+    def send_document(robot_id, action: str, doc: dict, save: bool) -> None:
+        if not robot_id:
+            return
+        _txid["n"] += 1
+        mtype = "put_layout" if action == "set_layout" else "put_routines"
+        for frame in split(doc, mtype, txid=f"B{_txid['n']}", save=save):
+            _doc_queue.append((robot_id, frame))
+
+    async def drain_documents() -> None:
+        for _ in range(DOC_FRAMES_PER_CYCLE):
+            if not _doc_queue:
+                return
+            robot_id, frame = _doc_queue.popleft()
+            dispatch(robot_id, frame)
 
     # ---- gamepad -> currently selected robot ----
     # Rate-limit drive frames so we don't flood a slow XBee link (at 9600 baud a
@@ -166,6 +196,26 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             if isinstance(values, dict) and values:
                 dispatch(rid, {"type": "set_config", "config": values,
                                "save": bool(data.get("save", True))})
+        # ---- documents (hardware layout, FSM routines) ----
+        elif action in ("get_layout", "get_routines", "get_fields"):
+            # Explicit, never polled — same rule as get_config. These are
+            # kilobytes on a radio shared with telemetry, and the editors ask
+            # once when they open.
+            dispatch(rid, {"type": action})
+        elif action in ("set_layout", "set_routines"):
+            doc = data.get("doc")
+            if isinstance(doc, dict):
+                send_document(rid, action, doc, bool(data.get("save", True)))
+        elif action in ("select_routine", "routine_cmd", "routine_event"):
+            # Pass-through: the robot owns every rule about what a routine may
+            # do. Duplicating any of it here would give two sources of truth,
+            # and the base station is the one that can be disconnected.
+            dispatch(rid, {k: v for k, v in data.items() if k != "action"}
+                     | {"type": action})
+        elif action == "jog":
+            dispatch(rid, {"type": "jog", "mech": data.get("mech"),
+                           "actuator": data.get("actuator"),
+                           "power": float(data.get("power", 0))})
         elif action == "set_settings":
             # Base-station settings and gamepad mapping: applied locally, no
             # radio involved. The result (clamped values, what needs a restart)
@@ -181,6 +231,10 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             "settings": settings.snapshot(),
             "settings_result": _settings_result["v"],
             "configs": fleet.configs(),
+            # Layouts, routines and the field descriptors for whatever actuators
+            # the operator declared. Cold channel with the configs, for the same
+            # reason: kilobytes that change on Save, not thirty times a second.
+            "documents": fleet.documents(),
             # Live gamepad axes/buttons, so the mapping editor can offer
             # "press the button you want" instead of asking for an index.
             "gamepad": controller.state() if controller is not None else None,
@@ -219,8 +273,13 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                 for ws in list(clients):
                     await send_to(ws, snap)
 
-                # Cold channel: only when something changed.
-                revs = fleet.config_revs()
+                # Outbound document fragments, a couple per cycle.
+                await drain_documents()
+
+                # Cold channel: only when something changed. Every revision
+                # counter, so a saved layout or routine pushes the editors an
+                # update the same way a config edit already does.
+                revs = fleet.doc_revs()
                 if revs != seen_revs:
                     seen_revs = revs
                     _settings_dirty["v"] = True

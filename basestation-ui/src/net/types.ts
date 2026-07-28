@@ -8,6 +8,7 @@ export type Mode =
   | "object_align"
   | "shooter_align"
   | "waypoint"
+  | "routine"
   | (string & {});
 
 export type LatLon = [number, number];
@@ -32,6 +33,28 @@ export interface ShooterStatus {
   shots: number; // rounds fired this session
   ready: boolean; // on target and dwelling toward a shot
   cool: number; // seconds left on the cooldown, 0 when clear
+}
+
+/** One layout mechanism's live state (robot/drive/mechanism.py::status).
+ *  Absent on a build whose layout declares no mechanisms. */
+export interface MechStatus {
+  kind: "power" | "pulse" | (string & {});
+  values?: Record<string, number>; // power: actuator -> throttle
+  state?: string; // pulse: rest | active | recovering
+  count?: number; // pulse: activations so far
+  ready?: boolean;
+  cool?: number;
+}
+
+/** Which state the FSM is in, present only while `routine` is the active mode
+ *  (robot/routine/engine.py::status). Non-sticky, like ShooterStatus. */
+export interface RoutineStatus {
+  id: string | null;
+  state: string | null; // the live state's id; null once the routine has ended
+  t?: number; // seconds in that state
+  drive?: string | null; // the delegate driving, or stop/hold/manual
+  done?: boolean;
+  why?: string | null; // why it ended
 }
 
 /** GPS fix health (gps.py::GPS.telemetry). Optional fields are absent until
@@ -61,6 +84,8 @@ export interface Robot {
   imu_calib: number | null; // BNO085 fused-orientation calibration level, 0-3
   gps: GpsStatus | null; // null when the robot has GPS disabled
   shooter?: ShooterStatus | null; // absent unless shooter_align is active
+  mech?: Record<string, MechStatus> | null; // absent unless the layout has any
+  routine?: RoutineStatus | null; // absent unless `routine` is active
   online: boolean;
   age: number | null; // seconds since last telemetry, or null
   trail: LatLon[]; // breadcrumb of past positions
@@ -96,6 +121,158 @@ export interface RobotConfigEntry {
   } | null;
 }
 
+// ---- Documents: the hardware layout and the FSM routines. ----
+// Structure, not scalars — see robot/layout.py for why these live apart from
+// the tunable config, and why a layout needs a restart while routines do not.
+
+/** One motor or servo (robot/config.py::MotorConfig). */
+export interface ActuatorSpec {
+  name: string; // unique; also its tuning path, drive.<name>.* / mech.<m>.<name>.*
+  label?: string;
+  kind: "esc" | "servo";
+  channel: number; // Fusion HAT PWM channel, 0-15, unique across the robot
+  inverted?: boolean;
+  neutral_angle?: number;
+  max_angle?: number;
+  min_angle?: number;
+  deadband?: number;
+  max_forward?: number;
+  max_reverse?: number;
+}
+
+export type DriveKind = "tank" | "servo_steer" | "single" | "none";
+
+/** Which actuators play which role, for the drivetrain kind in use. */
+export interface DriveRoles {
+  left: string[]; // tank
+  right: string[]; // tank
+  throttle: string[]; // servo_steer | single
+  steer: string; // servo_steer
+}
+
+export interface DrivetrainSpec {
+  kind: DriveKind;
+  actuators: ActuatorSpec[];
+  roles: DriveRoles;
+  arm_seconds?: number;
+  slew_rate?: number;
+  steer_gain?: number;
+  /** A steered chassis cannot pivot; this creeps so the steering has authority
+   *  when a controller asks for arcade(0, steer). 0 disables it. */
+  min_pivot_throttle?: number;
+}
+
+export interface MechanismSpec {
+  name: string;
+  label?: string;
+  kind: "power" | "pulse";
+  enabled?: boolean;
+  actuators: ActuatorSpec[];
+  presets?: Record<string, Record<string, number>>; // power
+  auto_stop_seconds?: number; // power
+  rest_angle?: number; // pulse
+  active_angle?: number;
+  active_seconds?: number;
+  recover_seconds?: number;
+  cooldown?: number;
+  max_activations?: number;
+}
+
+export interface LayoutDoc {
+  version: number;
+  drive: DrivetrainSpec;
+  mechanisms: MechanismSpec[];
+}
+
+/** A transition's condition. `when` names the check; the rest are its arguments
+ *  (robot/routine/conditions.py). `for_seconds` requires it to hold that long
+ *  CONTINUOUSLY — the launcher's dwell rule, generalized. */
+export interface TransitionSpec {
+  when: string;
+  to: string;
+  for_seconds?: number;
+  [arg: string]: unknown;
+}
+
+/** Something a state does. Never the drivetrain — that is `drive`'s job, so
+ *  exactly one thing commands the motors (robot/routine/actions.py). */
+export interface ActionSpec {
+  do: string;
+  [arg: string]: unknown;
+}
+
+export interface RoutineStateSpec {
+  id: string;
+  /** stop | hold | manual | the name of a controller to delegate driving to. */
+  drive?: { mode: string; throttle?: number; steer?: number };
+  timeout?: number; // omitted = inherit routines.state_timeout_default
+  terminal?: boolean;
+  on_enter?: ActionSpec[];
+  on_tick?: ActionSpec[];
+  on_exit?: ActionSpec[];
+  transitions?: TransitionSpec[];
+  /** Where this node sits on the editor's canvas. Editor-only: the robot never
+   *  interprets these, it just preserves them (robot/routine/schema.py), so the
+   *  diagram a teammate opens is the one you drew. Missing or non-finite values
+   *  mean "lay me out", not "put me at zero". */
+  x?: number;
+  y?: number;
+}
+
+export interface RoutineSpec {
+  id: string;
+  name?: string;
+  start: string;
+  states: RoutineStateSpec[];
+  on_end?: "stop" | "restart";
+  on_estop?: "abort" | "hold";
+  timeout?: number;
+}
+
+export interface RoutineDoc {
+  version: number;
+  routines: RoutineSpec[];
+}
+
+/** A robot's verdict on a document we sent it. */
+export interface DocResult {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  save_error: string | null;
+  restart_required?: boolean;
+}
+
+/** A tunable field the dashboard could not know about in advance, because the
+ *  operator declared the actuator it belongs to (robot/tuning.py::descriptors). */
+export interface FieldDescriptor {
+  path: string;
+  kind: "float" | "int" | "bool" | "enum" | "text";
+  lo: number | null;
+  hi: number | null;
+  choices: string[] | null;
+  live: boolean;
+  label: string;
+  unit: string;
+  step: number | null;
+  help: string;
+  group: string; // "actuator:<name>" | "mech:<name>"
+}
+
+/** Everything the Hardware and Routines tabs read, per robot
+ *  (basestation/fleet.py::documents). Each has its own revision so saving one
+ *  does not push the other back over the radio. */
+export interface RobotDocuments {
+  layout: LayoutDoc | null;
+  layout_rev: number;
+  layout_result: DocResult | null;
+  routines: RoutineDoc | null;
+  routines_rev: number;
+  routines_result: DocResult | null;
+  fields: FieldDescriptor[];
+  fields_rev: number;
+}
+
 /** The cold channel: sent on connect and then only when something changes.
  *  Kept out of the 30 Hz fleet frame because a robot's config is ~2.4 KB. */
 export interface SettingsMessage {
@@ -110,6 +287,7 @@ export interface SettingsMessage {
     save_error: string | null;
   } | null;
   configs: Record<string, RobotConfigEntry>; // by robot_id
+  documents: Record<string, RobotDocuments>; // by robot_id
   gamepad: GamepadState | null;
 }
 
@@ -154,6 +332,23 @@ export type Action =
     config: Record<string, SettingValue>;
     save?: boolean;
   }
+  // Documents. Fetched explicitly for the same reason as get_config: they are
+  // kilobytes on a radio shared with telemetry, and the editors ask on open.
+  | { action: "get_layout"; robot_id: string }
+  | { action: "get_routines"; robot_id: string }
+  | { action: "get_fields"; robot_id: string }
+  // Saved whole, not per field. A half-applied state machine is meaningless,
+  // and the transfer is all-or-nothing to match.
+  | { action: "set_layout"; robot_id: string; doc: LayoutDoc; save?: boolean }
+  | { action: "set_routines"; robot_id: string; doc: RoutineDoc; save?: boolean }
+  // Running a routine. Pass-through: the robot owns every rule about what one
+  // may do, and the base station is the half that can be disconnected.
+  | { action: "select_routine"; robot_id: string; id: string }
+  | { action: "routine_cmd"; robot_id: string; cmd: "start" | "stop" | "restart"; id?: string }
+  | { action: "routine_event"; robot_id: string; name: string }
+  // Bench-test one mechanism. Refused by the robot unless it is in teleop with
+  // no e-stop latched, and it expires on its own after 0.4 s.
+  | { action: "jog"; robot_id: string; mech: string; actuator?: string; power: number }
   // Base-station settings + gamepad mapping. Local; no radio involved.
   | { action: "set_settings"; settings: Record<string, SettingValue> }
   // Subscribe this socket to raw gamepad frames (mapping editor only).

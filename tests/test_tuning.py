@@ -135,8 +135,16 @@ def test_live_parameters_are_reachable_from_push_live_config():
     # Prefixes whose owner reads its config dataclass on every use, so there is
     # nothing to push: the motors, the shooter servo, the detector, the FPV
     # streamer, and the loop rates the run loop re-reads each tick.
+    #
+    # `mech.` and `routines.` join them for the same reason, not as an
+    # exemption. A Mechanism reads its MechanismConfig on every command exactly
+    # as the shooter servo does, and RoutineConfig is held by reference by both
+    # the engine (which re-reads state_timeout_default on every tick a state is
+    # inheriting it) and the arm action (which re-reads allow_arm on every
+    # attempt, so turning the gate off stops a routine already running).
     reads_config_directly = (
         "drive.", "shooter.", "vision.", "fpv.", "loop_hz", "telemetry_hz",
+        "mech.", "routines.",
     )
     for param in tuning.PARAMS:
         if not param.live or param.path.startswith(reads_config_directly):

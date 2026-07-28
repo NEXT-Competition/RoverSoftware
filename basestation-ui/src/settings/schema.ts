@@ -13,7 +13,7 @@
 // serial ports, PWM channels, enable flags. Shown and saved, but badged, so
 // nobody spends ten minutes wondering why a new baud rate changed nothing.
 
-import type { SettingValue } from "../net/types.ts";
+import type { FieldDescriptor, SettingValue } from "../net/types.ts";
 
 export type FieldKind = "float" | "int" | "bool" | "enum" | "text";
 
@@ -97,11 +97,16 @@ function pid(prefix: string, iLimitMax = 5): Field[] {
   ];
 }
 
-/** One track's motor calibration. */
-function motor(side: "left" | "right", label: string): Group {
-  const p = `drive.${side}`;
+/** One actuator's calibration, at any dotted prefix.
+ *
+ * The two stock track motors reach this as `drive.left` / `drive.right`, which
+ * is simply what the default layout names them — the general rule is
+ * `drive.<name>` for a drive actuator and `mech.<m>.<name>` for a mechanism's.
+ * A robot running a custom layout describes its own actuators instead (see
+ * `dynamicGroups`), and this is the shape that gets built from those. */
+function motorGroup(p: string, title: string): Group {
   return {
-    title: `${label} motor`,
+    title,
     blurb:
       "Angles are the ESC's servo range. The usable throw is symmetric about " +
       "neutral, so whichever endpoint is closer to neutral sets it.",
@@ -126,7 +131,7 @@ function motor(side: "left" | "right", label: string): Group {
       }),
       i(`${p}.channel`, "PWM channel", 0, 15, {
         live: false,
-        help: "Fusion HAT channel. 0 and 1 are the drive ESCs.",
+        help: "Fusion HAT channel. Unique across the robot — the layout refuses two actuators on one.",
       }),
     ],
   };
@@ -161,6 +166,7 @@ export const ROBOT_GROUPS: Group[] = [
         "object_align",
         "shooter_align",
         "waypoint",
+        "routine",
       ], { live: false }),
     ],
   },
@@ -178,8 +184,8 @@ export const ROBOT_GROUPS: Group[] = [
       }),
     ],
   },
-  motor("left", "Left"),
-  motor("right", "Right"),
+  motorGroup("drive.left", "Left motor"),
+  motorGroup("drive.right", "Right motor"),
   {
     title: "Object align",
     blurb:
@@ -481,6 +487,89 @@ const ALL_FIELDS: Field[] = [
 export const FIELD_BY_PATH: Record<string, Field> = Object.fromEntries(
   ALL_FIELDS.map((field) => [field.path, field]),
 );
+
+// --- fields this file cannot know about ------------------------------------
+//
+// Everything above is a hand-written mirror of a Python list, which works
+// because a stock build's parameters are fixed. A robot running its own layout
+// has parameters named after actuators the operator invented ten seconds ago,
+// so it describes those itself (robot/tuning.py::descriptors) and we build the
+// form from the description. Python stays the authority either way — it clamps
+// whatever we send.
+
+/** Turn a robot's field descriptors into groups, one per actuator/mechanism. */
+export function dynamicGroups(fields: FieldDescriptor[]): Group[] {
+  const byGroup = new Map<string, FieldDescriptor[]>();
+  for (const descriptor of fields) {
+    const key = descriptor.group || "other";
+    const bucket = byGroup.get(key);
+    if (bucket) bucket.push(descriptor);
+    else byGroup.set(key, [descriptor]);
+  }
+  return [...byGroup.entries()].map(([key, described]) => ({
+    title: groupTitle(key),
+    blurb: key.startsWith("actuator:")
+      ? "Angles are the ESC's servo range. The usable throw is symmetric about " +
+        "neutral, so whichever endpoint is closer to neutral sets it."
+      : undefined,
+    fields: described.map(toField),
+  }));
+}
+
+function groupTitle(key: string): string {
+  const [kind, name = ""] = key.split(":");
+  const pretty = name.replace(/_/g, " ");
+  if (kind === "actuator") return `${sentenceCase(pretty)} motor`;
+  if (kind === "mech") return sentenceCase(pretty);
+  return "Other";
+}
+
+function sentenceCase(text: string): string {
+  return text ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+function toField(d: FieldDescriptor): Field {
+  return {
+    path: d.path,
+    label: sentenceCase(d.label || d.path.split(".").pop() || d.path),
+    kind: d.kind,
+    min: d.lo ?? undefined,
+    max: d.hi ?? undefined,
+    step: d.step ?? (d.kind === "int" ? 1 : 0.01),
+    choices: d.choices ?? undefined,
+    help: d.help || undefined,
+    live: d.live,
+    unit: d.unit || undefined,
+  };
+}
+
+/**
+ * The groups to render for a robot, given whatever descriptors it has sent.
+ *
+ * With none — an older robot, or one whose descriptors haven't arrived yet —
+ * this is exactly `ROBOT_GROUPS`, so the page looks and behaves as it always
+ * did. With descriptors, the hand-written `drive.left`/`drive.right` groups are
+ * replaced by the robot's own, in the same position.
+ */
+export function robotGroupsFor(fields: FieldDescriptor[] | undefined): Group[] {
+  if (!fields || fields.length === 0) return ROBOT_GROUPS;
+  const generated = dynamicGroups(fields);
+  const stockMotors = new Set(["Left motor", "Right motor"]);
+  const kept = ROBOT_GROUPS.filter((g) => !stockMotors.has(g.title));
+  const at = kept.findIndex((g) => g.title === "Drive") + 1;
+  return [...kept.slice(0, at), ...generated, ...kept.slice(at)];
+}
+
+/** A field's presentation, static table first, then the robot's descriptors. */
+export function fieldFor(
+  path: string,
+  fields: FieldDescriptor[] | undefined,
+): Field | undefined {
+  const known = FIELD_BY_PATH[path];
+  if (known) return known;
+  const described = fields?.find((d) => d.path === path);
+  return described ? toField(described) : undefined;
+}
 
 /** Format a value the way its field wants to be read. */
 export function formatValue(field: Field, value: SettingValue | undefined): string {

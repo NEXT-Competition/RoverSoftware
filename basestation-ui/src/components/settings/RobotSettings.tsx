@@ -6,11 +6,12 @@
 // full of zeroes that would look like real values.
 
 import { useEffect, useState } from "preact/hooks";
-import { conn, robotConfigs, robots } from "../../net/ws.ts";
-import { ROBOT_GROUPS } from "../../settings/schema.ts";
+import { conn, robotConfigs, robotDocuments, robots } from "../../net/ws.ts";
+import { robotGroupsFor } from "../../settings/schema.ts";
 import {
   configTarget,
   refreshRobotConfig,
+  refreshRobotFields,
   targetRobot,
 } from "../../state/settings.ts";
 import { SettingField } from "./Field.tsx";
@@ -46,17 +47,29 @@ export function RobotSettings() {
   const rejected = entry?.result?.rejected ?? {};
   const restart = new Set(entry?.result?.restart ?? []);
   const saveError = entry?.result?.save_error ?? null;
+  // The groups this robot actually has. A stock build's are the hand-written
+  // ones; a build running its own layout describes its actuators and those
+  // groups are generated from the description. See settings/schema.ts.
+  const documents = rid ? robotDocuments.value[rid] : undefined;
+  const groups = robotGroupsFor(documents?.fields);
   // Only the first group starts open: eleven expanded groups is a wall of
   // sliders, and the ones you want are rarely at the top.
   const [open, setOpen] = useState<Record<string, boolean>>({
-    [ROBOT_GROUPS[0].title]: true,
+    [groups[0].title]: true,
   });
 
   // Ask once per robot when the tab mounts, the target changes, or the socket
   // comes back. Guarded on having no cached config so revisiting the tab
-  // doesn't spend radio airtime re-fetching something we already have.
+  // doesn't spend radio airtime re-fetching something we already have. The
+  // field descriptors ride along on the same trigger: without them a custom
+  // layout's actuators would arrive as values with nothing to render them.
   useEffect(() => {
     if (rid && !entry && conn.value === "live") refreshRobotConfig();
+  }, [rid, conn.value]);
+  useEffect(() => {
+    if (rid && !documents?.fields_rev && conn.value === "live") {
+      refreshRobotFields();
+    }
   }, [rid, conn.value]);
 
   if (!rid) {
@@ -104,7 +117,7 @@ export function RobotSettings() {
             offline or running a build without live tuning.
           </p>
         )
-        : ROBOT_GROUPS.map((group) => (
+        : groups.map((group) => (
           <GroupCard
             key={group.title}
             title={group.title}

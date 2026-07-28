@@ -471,6 +471,11 @@ body {
   font-size: 14px;
   padding: 0 10px;
 }
+/* An odd number of modes leaves the last one alone in its row looking like a
+   rendering bug. Let it span instead. */
+.mode-grid .btn:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 
 /* ---------- Telemetry ---------- */
 
@@ -851,6 +856,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* The graph is the exception to the measure above: a node canvas squeezed into
+   720 px is a canvas you spend the whole time panning. It takes the room. */
+.settings-col.wide {
+  max-width: 1600px;
 }
 
 .settings-bar {
@@ -1442,3 +1453,601 @@ body {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Document editors: Hardware and Routines.
+
+   These edit a whole document locally and send it on Save, unlike the tuning
+   page's per-field commit, so the controls are plainer — there is no round trip
+   to reflect and nothing to badge as "clamped by the robot". What they do need
+   is density: a six-actuator layout or a ten-state routine has to stay readable
+   on a 360 px rail as well as a landscape tablet.
+--------------------------------------------------------------------------- */
+
+.doc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-block: 10px;
+  min-width: 0;
+}
+
+.doc-field.row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.doc-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.doc-unit,
+.doc-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.doc-hint.full {
+  flex-basis: 100%;
+}
+
+.doc-field.invalid .field-input {
+  border-color: var(--danger);
+}
+
+.doc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0 14px;
+}
+
+.doc-grid.tight {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* --- actuators and mechanisms --- */
+
+.actuator-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.actuator-card,
+.mech-card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 12px 14px;
+}
+
+.mech-card {
+  margin-block: 12px;
+}
+
+.actuator-head,
+.mech-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.actuator-head .doc-field,
+.mech-head .doc-field {
+  flex: 1 1 160px;
+}
+
+.preset-editor {
+  margin-top: 12px;
+}
+
+.preset-row {
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+.preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preset-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.preset-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.jog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.btn.jog {
+  touch-action: none; /* a pointer drag off the button must still release it */
+}
+
+/* --- routines --- */
+
+.run-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.run-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-event {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.routine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.routine-body {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  /* An explicit height, because both children size from content — the canvas is
+     absolutely positioned inside its pane and the inspector is often just a
+     one-line hint, so without this the graph collapses to a letterbox. */
+  height: 64vh;
+  min-height: 380px;
+}
+
+/* The canvas is the interface now, so it gets the room. The inspector is fixed
+   width because its contents are forms — they read badly stretched. */
+.routine-canvas-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.inspector {
+  flex: 0 0 380px;
+  min-width: 0;
+  max-height: 72vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.inspector.empty {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+}
+
+.inspector-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.inspector-title {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.inspector-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Portrait and small panels: the graph goes above the inspector rather than
+   fighting it for width. It stays usable — pan and pinch still work — but the
+   forms get the full column, which is what you actually type into. */
+@media (max-width: 900px) {
+  .routine-body {
+    flex-direction: column;
+    height: auto;
+  }
+  .routine-canvas-pane {
+    flex: 0 0 44vh;
+  }
+  .inspector {
+    flex: 1 1 auto;
+    max-height: none;
+  }
+}
+
+/* ---------- the node canvas ---------- */
+
+/* A column: chrome on top, canvas filling the rest. Deliberately NOT a canvas
+   with floating chrome — a toolbar over a canvas puts invisible dead zones
+   exactly where the auto-layout likes to drop nodes. */
+.canvas-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.canvas-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--panel-2);
+  flex: 0 0 auto;
+}
+
+.canvas-tools {
+  display: flex;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.canvas-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--faint);
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 760px) {
+  .canvas-hint {
+    display: none;
+  }
+}
+
+.routine-canvas {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  display: block;
+  /* The browser must not claim the gestures: one-finger drag pans or moves a
+     node, two fingers pinch. Without this, Safari scrolls the page instead. */
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+
+.routine-canvas:active {
+  cursor: grabbing;
+}
+
+.rc-grid circle {
+  fill: var(--hairline-strong);
+}
+
+/* --- wires --- */
+
+.rc-edge {
+  color: var(--muted); /* the arrow marker inherits this */
+  cursor: pointer;
+}
+
+.rc-edge .rc-hit {
+  stroke: transparent;
+  stroke-width: 20; /* a 2px wire is unhittable with a fingertip */
+  fill: none;
+}
+
+.rc-edge .rc-line {
+  stroke: var(--hairline-strong);
+  stroke-width: 1.75;
+  fill: none;
+  transition: stroke 0.12s var(--ease);
+}
+
+.rc-edge:hover .rc-line {
+  stroke: var(--muted);
+}
+
+.rc-edge.on {
+  color: var(--accent);
+}
+
+.rc-edge.on .rc-line {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.rc-edge.dangling .rc-line {
+  stroke: var(--danger);
+  stroke-dasharray: 4 3;
+}
+
+.rc-label-bg {
+  fill: var(--panel-solid);
+  stroke: var(--hairline);
+}
+
+.rc-edge.on .rc-label-bg {
+  stroke: var(--accent);
+}
+
+.rc-label {
+  fill: var(--muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+.rc-edge.on .rc-label {
+  fill: var(--text);
+}
+
+.rc-linking {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  fill: none;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* --- nodes --- */
+
+.rc-node .rc-body {
+  fill: var(--panel-2);
+  stroke: var(--hairline-strong);
+  stroke-width: 1.5;
+  cursor: grab;
+  transition: stroke 0.12s var(--ease);
+}
+
+.rc-node:hover .rc-body {
+  stroke: var(--muted);
+}
+
+.rc-node.selected .rc-body {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.rc-node.start .rc-body {
+  stroke: var(--accent-deep);
+}
+
+.rc-node.terminal .rc-body {
+  stroke: var(--ok);
+}
+
+.rc-node.problem .rc-body {
+  stroke: var(--danger);
+}
+
+/* The live node is filled, not outlined: at a glance across a field you want a
+   block of colour, not a 2px border. */
+.rc-node.live .rc-body {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.rc-node .rc-id {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+.rc-node .rc-sub {
+  fill: var(--faint);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.rc-node.live .rc-id,
+.rc-node.live .rc-sub {
+  fill: #fff;
+}
+
+.rc-badge.start {
+  fill: var(--accent);
+}
+
+.rc-badge.terminal {
+  fill: var(--ok);
+}
+
+.rc-handle {
+  fill: var(--panel-solid);
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  cursor: crosshair;
+  transition: fill 0.12s var(--ease), stroke 0.12s var(--ease);
+}
+
+.rc-node:hover .rc-handle,
+.rc-node.selected .rc-handle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+/* --- canvas chrome --- */
+
+.state-card {
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 12px 14px;
+}
+
+.state-card.live {
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.state-card.terminal {
+  border-left-color: var(--ok);
+}
+
+.state-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.state-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  max-width: 190px;
+}
+
+.pill.live {
+  color: var(--accent);
+}
+
+.state-drive {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+  padding: 8px 0;
+  border-block: 1px solid var(--hairline);
+}
+
+.slot {
+  margin-top: 10px;
+}
+
+.slot-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.action-row,
+.transition-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+.transition-row.chosen {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 6px;
+}
+
+.transition-row.invalid {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.transition-order {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  min-width: 14px;
+}
+
+.transition-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.transition-arrow {
+  color: var(--muted);
+}
+
+.arg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.field-input.tiny,
+.field-select.tiny {
+  font-size: 12px;
+  padding: 5px 8px;
+  max-width: 150px;
+}
+
+.btn.subtle {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.banner.small {
+  font-size: 11px;
+  padding: 5px 9px;
+}
+

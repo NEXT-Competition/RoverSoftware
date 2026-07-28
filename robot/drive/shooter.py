@@ -100,3 +100,16 @@ class Shooter:
         self.servo.angle(self.cfg.rest_angle)
         self._state = "rest"
         self._until = 0.0
+
+    def status(self) -> dict:
+        """Same shape a PulseMechanism reports.
+
+        This class is deliberately NOT a subclass of drive/mechanism.py's
+        PulseMechanism: it keeps its own ShooterConfig so the RS_SHOOTER_* env
+        vars, the `shooter.*` tuning paths and ShooterAlignController's firing
+        policy all stay exactly as they were. It matches the interface instead —
+        the same structural-protocol rule that ShooterLike already uses — so
+        Robot can hold it in the mechanism registry alongside the rest.
+        """
+        return {"kind": "pulse", "state": self._state, "count": self._shots,
+                "ready": self.ready(), "cool": 0.0}

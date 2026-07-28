@@ -31,7 +31,7 @@ export const confirmed = signal<Record<string, number>>({});
 const CONFIRM_MS = 1400;
 
 /** Which settings tab is showing. */
-export type Tab = "robot" | "controller" | "base";
+export type Tab = "robot" | "hardware" | "routines" | "controller" | "base";
 export const tab = signal<Tab>("robot");
 
 /** The robot the settings page is editing. Defaults to the driving selection,
@@ -140,6 +140,14 @@ export function acknowledge(): void {
 export function refreshRobotConfig(): void {
   const rid = targetRobot.value;
   if (rid) send({ action: "get_config", robot_id: rid });
+}
+
+/** Ask for the descriptors of the fields this file cannot know about, because
+ *  the operator declared the actuators they belong to. Same explicit-fetch
+ *  rule as the config, and usually a fraction of the size. */
+export function refreshRobotFields(): void {
+  const rid = targetRobot.value;
+  if (rid) send({ action: "get_fields", robot_id: rid });
 }
 
 /** Subscribe/unsubscribe this socket to raw gamepad frames. */

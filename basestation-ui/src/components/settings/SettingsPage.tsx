@@ -8,12 +8,19 @@
 import { conn } from "../../net/ws.ts";
 import { tab } from "../../state/settings.ts";
 import { showView } from "../../state/view.ts";
+import { HardwarePage } from "../hardware/HardwarePage.tsx";
+import { RoutinesPage } from "../routines/RoutinesPage.tsx";
 import { BaseSettings } from "./BaseSettings.tsx";
 import { ControllerSettings } from "./ControllerSettings.tsx";
 import { RobotSettings } from "./RobotSettings.tsx";
 
+// Hardware and Routines sit behind the gear with the rest of the configuration
+// rather than as their own top-level view: making them one would duplicate the
+// robot picker, the connection pill and the offline banner for no benefit.
 const TABS = [
-  { key: "robot", label: "Robot" },
+  { key: "robot", label: "Tuning" },
+  { key: "hardware", label: "Hardware" },
+  { key: "routines", label: "Routines" },
   { key: "controller", label: "Controller" },
   { key: "base", label: "Base station" },
 ] as const;
@@ -48,8 +55,12 @@ export function SettingsPage() {
       </header>
 
       <div class="settings-body">
-        <div class="settings-col">
+        {/* The Routines tab is a canvas, not a form, so it opts out of the
+            reading measure the other tabs want. */}
+        <div class={`settings-col${active === "routines" ? " wide" : ""}`}>
           {active === "robot" && <RobotSettings />}
+          {active === "hardware" && <HardwarePage />}
+          {active === "routines" && <RoutinesPage />}
           {active === "controller" && <ControllerSettings />}
           {active === "base" && <BaseSettings />}
           <p class="hint pad footnote">

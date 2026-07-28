@@ -23,6 +23,7 @@ the endpoints/clamps; whichever is closer to neutral sets the usable throw.
 """
 
 from dataclasses import dataclass, field
+from typing import Dict, List
 
 
 @dataclass
@@ -39,18 +40,94 @@ class MotorConfig:
     max_forward: float = 1.0  # Safety cap on forward throttle, [0..1]
     max_reverse: float = 1.0  # Safety cap on reverse throttle, [0..1]
 
+    # --- identity, for layouts with more than the two stock track motors ---
+    # Trailing and defaulted on purpose: every existing MotorConfig(channel=N,
+    # inverted=X) construction in the codebase, the tests and the tools keeps
+    # working untouched, and a hand-written tuning.json keeps resolving.
+    #
+    # `name` is how a layout, a mechanism and a tuning path all refer to this
+    # actuator ("left", "intake_roller", "hood"). Unique across the robot; the
+    # layout loader fills it in when a layout is applied.
+    name: str = ""
+    # esc   - bidirectional ESC. Throttle maps onto a SYMMETRIC throw about
+    #         neutral (see the module docstring), and it is held at neutral on
+    #         boot so it arms.
+    # servo - positional servo (steering, a hood, a launcher arm). Same mapping,
+    #         but there is nothing to arm, so it is simply parked at neutral.
+    kind: str = "esc"
+    label: str = ""  # what the dashboard calls it; "" => derived from `name`
+
+
+def _default_drive_actuators() -> "Dict[str, MotorConfig]":
+    # motor1 -> channel 0 (left), motor2 -> channel 1 (right, mounted mirrored)
+    return {
+        "left": MotorConfig(channel=0, inverted=False, name="left", label="Left"),
+        "right": MotorConfig(channel=1, inverted=True, name="right", label="Right"),
+    }
+
+
+@dataclass
+class DriveRoles:
+    """Which actuators do what, for the drivetrain kind in use.
+
+    A role is a LIST because a side can have more than one motor — a six-wheel
+    tank drives three motors per side off the same track speed.
+    """
+    left: List[str] = field(default_factory=lambda: ["left"])    # tank
+    right: List[str] = field(default_factory=lambda: ["right"])  # tank
+    throttle: List[str] = field(default_factory=list)            # servo_steer | single
+    steer: str = ""                                              # servo_steer
+
 
 @dataclass
 class DriveConfig:
-    # motor1 -> channel 0 (left), motor2 -> channel 1 (right, mounted mirrored)
-    left: MotorConfig = field(
-        default_factory=lambda: MotorConfig(channel=0, inverted=False)
-    )
-    right: MotorConfig = field(
-        default_factory=lambda: MotorConfig(channel=1, inverted=True)
-    )
+    """The drivetrain: a named set of actuators plus who plays which role.
+
+    This used to be exactly two fields, `left` and `right`. It is now a store
+    of named actuators so a build can have one drive motor and a steering
+    servo, or three motors a side — but `drive.left` and `drive.right` still
+    resolve, because the default layout names its two actuators `left` and
+    `right` and `__getattr__` below looks names up in the store. That is what
+    keeps every deployed tuning.json, every RS_* override and the whole
+    existing test suite working unchanged.
+    """
+    # tank        - left/right track speeds, any number of motors per side
+    # servo_steer - one or more drive motors plus a steering servo
+    # single      - drive motors only; steering is ignored
+    # none        - no drivetrain at all (a build that is only mechanisms)
+    kind: str = "tank"
+    actuators: Dict[str, MotorConfig] = field(default_factory=_default_drive_actuators)
+    roles: DriveRoles = field(default_factory=DriveRoles)
     arm_seconds: float = 2.0  # Hold neutral this long so the ESCs arm on boot
     slew_rate: float = 4.0  # Max throttle change per second (0 disables limiting)
+    # servo_steer: how much of the steering servo's throw a full-scale steer
+    # command uses. 1.0 = the whole throw.
+    steer_gain: float = 1.0
+    # servo_steer: a steered chassis cannot pivot in place, but the autonomy
+    # controllers ask it to — they express "point, then go" as arcade(0, steer).
+    # Below this much throttle with steering commanded, creep forward at this
+    # value so the steering has authority instead of the robot sitting still
+    # with its wheels turned. 0 disables (and object_align will then stall).
+    min_pivot_throttle: float = 0.15
+
+    def __getattr__(self, name: str) -> MotorConfig:
+        """Resolve an unknown attribute to the actuator of that name.
+
+        LOAD-BEARING, not a convenience. `tuning._resolve` walks a dotted path
+        with plain getattr/setattr, so this is what makes `drive.left.deadband`
+        keep reading AND writing through to the real MotorConfig now that
+        `left` is a dict key rather than a field. Remove it and every rover's
+        saved tuning.json silently stops applying.
+
+        Only called when normal lookup misses, so real fields always win — and
+        `actuators` is read out of __dict__ so a lookup before __init__ has
+        finished (deepcopy, pickle) raises AttributeError instead of recursing.
+        """
+        actuators = self.__dict__.get("actuators")
+        if actuators is not None and name in actuators:
+            return actuators[name]
+        raise AttributeError(
+            f"{type(self).__name__!s} has no attribute or actuator {name!r}")
 
 
 @dataclass
@@ -282,6 +359,68 @@ class ShooterConfig:
 
 
 @dataclass
+class MechanismConfig:
+    """One named non-drivetrain subsystem: an intake, an arm, a second launcher.
+
+    This is `ShooterConfig` generalized. Two shapes cover what a build actually
+    needs:
+
+      power - hold a value. An intake spins at +1 to take a ball in, -1 to spit
+              it out, 0 to stop. Several actuators move together, which is why
+              a preset maps actuator name -> value rather than being a scalar.
+      pulse - a timed cycle: swing to `active_angle`, hold `active_seconds`,
+              return to `rest_angle`, settle for `recover_seconds`. Exactly the
+              launcher's rest -> firing -> retracting machine (drive/shooter.py),
+              and non-blocking for exactly the same reason.
+
+    The built-in launcher is deliberately NOT expressed here — it keeps its own
+    `ShooterConfig` so the RS_SHOOTER_* env vars, the `shooter.*` tuning paths
+    and ShooterAlignController's firing policy stay exactly as they are. The
+    name "shooter" is reserved by layout validation to avoid two things
+    answering to it.
+    """
+    name: str = ""
+    label: str = ""  # what the dashboard calls it; "" => derived from `name`
+    kind: str = "power"  # power | pulse
+    enabled: bool = True
+    actuators: Dict[str, MotorConfig] = field(default_factory=dict)
+
+    # --- power ---
+    # Named states an operator or a routine can ask for by name, e.g.
+    # {"in": {"roller": 1.0, "belt": 0.8}, "out": {"roller": -1.0, "belt": -0.8}}.
+    # Presets are what the FSM editor offers, so a routine reads "intake -> in"
+    # rather than a column of magic numbers.
+    presets: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    auto_stop_seconds: float = 0.0  # 0 = run until told to stop
+
+    # --- pulse ---
+    rest_angle: float = -30.0
+    active_angle: float = 30.0
+    active_seconds: float = 0.35
+    recover_seconds: float = 0.35
+    cooldown: float = 0.0  # minimum seconds between activations
+    max_activations: int = 0  # magazine capacity; 0 = unlimited
+
+
+@dataclass
+class RoutineConfig:
+    """Policy for the UI-authored state machines (see robot/routine/).
+
+    The documents themselves live in routines.json, not here — this is only the
+    handful of knobs that decide what a routine is ALLOWED to do.
+    """
+    # A state that never transitions is a robot that never stops. Any state
+    # without its own timeout inherits this one.
+    state_timeout_default: float = 60.0
+    # Whether a routine may arm the launcher at all. OFF by default, and worth
+    # keeping that way: this is the one action a user-authored program can take
+    # that makes something physically launch. Even with it on, arming is only
+    # accepted inside a state that delegates to shooter_align, and is dropped on
+    # every state exit, mode exit and e-stop.
+    allow_arm: bool = False
+
+
+@dataclass
 class PIDConfig:
     """Gains for one PID loop (robot/control/pid.py).
 
@@ -344,6 +483,10 @@ class RobotConfig:
     shooter: ShooterConfig = field(default_factory=ShooterConfig)
     align: AlignConfig = field(default_factory=AlignConfig)
     nav: NavConfig = field(default_factory=NavConfig)
+    # Extra subsystems declared by the layout (intake, arm, a second launcher).
+    # Empty on a stock build, which is why nothing above changes shape.
+    mechanisms: Dict[str, MechanismConfig] = field(default_factory=dict)
+    routines: RoutineConfig = field(default_factory=RoutineConfig)
     # Control loop rate. This is the rate the motors are actually updated at, so
     # it sets both the floor on teleop latency (a command waits up to 1/loop_hz
     # before anything looks at it) and the granularity of the slew limiter, which
