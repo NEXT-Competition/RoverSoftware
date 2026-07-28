@@ -48,6 +48,28 @@ build_robot() {
     cp "$ROOT/packaging/robot.env" "$build/etc/roversoftware/robot.env"
     cp "$ROOT/packaging/systemd/roversoftware-robot.service" "$build/lib/systemd/system/"
 
+    # The IMX500 network the sensor loads, plus its class names. Shipped to the
+    # exact path RS_VISION_IMX500_MODEL points at, so a fresh rover has a
+    # working detector without anyone running `just model-deploy` first.
+    #
+    # Fetch them off a Pi that has them with `just model-fetch` — the .rpk is
+    # built by imx500-package, which is ARM-only, so it cannot be produced here.
+    # NOT a conffile: dpkg replaces it on upgrade, which is what you want when
+    # the repo copy is the model of record. A locally-installed experiment in
+    # /var/lib is therefore overwritten by the next `just install`.
+    if [ -f "$ROOT/model/imx500/network.rpk" ]; then
+        mkdir -p "$build/var/lib/roversoftware"
+        cp "$ROOT/model/imx500/network.rpk" "$build/var/lib/roversoftware/network.rpk"
+        cp "$ROOT/model/imx500/labels.txt"  "$build/var/lib/roversoftware/labels.txt"
+        chmod 0644 "$build/var/lib/roversoftware/network.rpk" \
+                   "$build/var/lib/roversoftware/labels.txt"
+        echo "==> bundling IMX500 network ($(du -h "$ROOT/model/imx500/network.rpk" | cut -f1))"
+    else
+        echo "note: no model/imx500/network.rpk — the .deb will ship no vision" \
+             "network. Get one onto a Pi with 'just model-deploy', then" \
+             "'just model-fetch'." >&2
+    fi
+
     sed "s/@VERSION@/${VERSION}/" "$ROOT/packaging/debian/control" > "$build/DEBIAN/control"
     cp "$ROOT/packaging/debian/conffiles" "$build/DEBIAN/conffiles"
     for f in postinst prerm postrm; do
