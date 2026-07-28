@@ -174,6 +174,12 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("nav.heading_pid.kd", 0, 5),
     _f("nav.heading_pid.out_limit", 0, 1),
     _f("nav.heading_pid.i_limit", 0, 180),
+    # The slower loop used when heading is the GPS track angle, not the IMU.
+    _f("nav.gps_heading_pid.kp", 0, 5),
+    _f("nav.gps_heading_pid.ki", 0, 5),
+    _f("nav.gps_heading_pid.kd", 0, 5),
+    _f("nav.gps_heading_pid.out_limit", 0, 1),
+    _f("nav.gps_heading_pid.i_limit", 0, 180),
 
     # --- vision ---
     _f("vision.min_confidence", 0, 1),
