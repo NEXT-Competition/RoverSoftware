@@ -13,9 +13,12 @@ walkthrough of the navigation algorithm open
 3. [Repository layout](#3-repository-layout)
 4. [The robot](#4-the-robot)
    - [Configuration](#41-configuration-robotconfigpy)
+   - [Hardware layout](#41b-hardware-layout-robotlayoutpy)
    - [The orchestrator & control loop](#42-the-orchestrator--control-loop-robotpy)
    - [Control layer](#43-control-layer)
    - [Drive layer](#44-drive-layer)
+   - [Mechanisms](#44b-mechanisms-drivemechanismpy)
+   - [Routines: the FSM engine](#44c-routines-the-fsm-engine-robotroutine)
    - [Comms layer](#45-comms-layer)
    - [Sensors](#46-sensors)
 5. [Wire protocol](#5-wire-protocol-xbee)
@@ -88,7 +91,8 @@ messages are addressed with a `to` field.
 
 ```
 robot/                        # runs on the rover Pi (also imported by the base station)
-  config.py                   all tuning: motors, drive, comms, GPS
+  config.py                   all tuning: actuators, drive, mechanisms, comms, GPS
+  layout.py                   the hardware layout document (what this build HAS)
   robot.py                    orchestrator + the 50 Hz control loop
   control/
     controller.py             Controller base class (on_activate/on_message/update)
@@ -100,13 +104,23 @@ robot/                        # runs on the rover Pi (also imported by the base 
     shooter_align.py          object_align + a trigger: align, settle, fire
     detection.py              the Detection contract the controller consumes
     waypoint.py               GPS waypoint navigation — inject a pose provider
+    routine_controller.py     the `routine` mode: runs a UI-authored state machine
+  routine/                    the FSM engine (its documents live in routines.json)
+    schema.py                 parse + validate a document into compiled Routines
+    conditions.py             what a transition may ask about the robot
+    actions.py                what a state may do (never the drivetrain)
+    engine.py                 which state is current, and when that changes
+    store.py                  routines.json
   drive/
     motor.py                  ESCMotor: throttle [-1,1] → servo angle (mock if no HAT)
-    tank_drive.py             left/right + slew-rate limiting
-    shooter.py                servo launcher: non-blocking fire/retract cycle
+    drivetrain.py             tank / servo_steer / single / none + slew limiting
+    tank_drive.py             TankDrive — the name the tools and tests import
+    mechanism.py              intakes, arms, launchers: power and pulse kinds
+    shooter.py                the built-in launcher: non-blocking fire/retract cycle
   comms/
     protocol.py               newline-delimited JSON encode/decode
     xbee_link.py              threaded transparent-mode XBee serial reader
+    doc_transfer.py           split/reassemble a whole document across frames
   sensors/
     gps.py                    Adafruit GPS reader → (lat, lon, track angle)
     bno085.py                 BNO085 IMU → absolute heading + yaw rate
@@ -152,8 +166,10 @@ from environment variables / CLI flags, and hands it to `Robot`.
 
 | Dataclass | Key fields (defaults) | Purpose |
 |---|---|---|
-| `MotorConfig` | `channel`, `inverted`, `neutral_angle`, `max_angle`, `min_angle`, `deadband=0.03`, `max_forward/reverse=1.0` | Per-motor calibration: maps throttle to servo angle. |
-| `DriveConfig` | `left` (ch0), `right` (ch1, `inverted=True`), `arm_seconds=2.0`, `slew_rate=4.0` | Two motors + arming + slew limiting. |
+| `MotorConfig` | `channel`, `inverted`, `neutral_angle`, `max_angle`, `min_angle`, `deadband=0.03`, `max_forward/reverse=1.0`, `name`, `kind="esc"` | One actuator's calibration: maps throttle to servo angle. `name` is how a layout, a mechanism and a tuning path all refer to it. |
+| `DriveConfig` | `kind="tank"`, `actuators` (a dict, `left`→ch0 and `right`→ch1 by default), `roles`, `arm_seconds=2.0`, `slew_rate=4.0`, `steer_gain`, `min_pivot_throttle=0.15` | The drivetrain: any number of named actuators, plus who plays which role. |
+| `MechanismConfig` | `name`, `kind` (`power`\|`pulse`), `actuators`, `presets`, plus the pulse geometry | A non-drivetrain subsystem: an intake, an arm, a second launcher. |
+| `RoutineConfig` | `state_timeout_default=60`, `allow_arm=False` | What a UI-authored state machine is allowed to do. |
 | `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=57600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. Must match the base station and the radios' `BD`. |
 | `ShooterConfig` | `enabled=False`, `channel=2`, `rest_angle=-30`, `fire_angle=30`, `fire_seconds=0.35`, `retract_seconds=0.35`, `dwell=0.5`, `cooldown=2.0`, `require_arm=True`, `require_arrived=True`, `max_shots=0` | Servo launcher geometry + the firing policy for `shooter_align`. Off by default. |
 | `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5`, `update_rate_ms=1000` | Adafruit Ultimate GPS reader settings. |
@@ -190,12 +206,81 @@ make the robot forget where it was pointing. `live=False` marks anything owned
 by a constructor — serial ports, I²C addresses, PWM channels, enable flags — and
 those are stored, badged in the UI, and applied on the next start.
 
+**The parameter surface depends on the layout.** `PARAMS` is what a stock build
+ships with; `params_for(cfg)` is what *this* robot exposes, derived from its own
+actuators and mechanisms. The whole backwards-compatibility story is one line of
+set equality, and it has its own test:
+
+```
+{p.path for p in params_for(RobotConfig())} == {p.path for p in PARAMS}
+```
+
+The default layout names its two actuators `left` and `right`, so the derived
+paths *are* `drive.left.*` and `drive.right.*`. Every deployed `tuning.json`, the
+hand-written `schema.ts` mirror, and the snapshot-key assertions in the test
+suite keep working without knowing any of this happened — held up by
+`DriveConfig.__getattr__`, which resolves an unknown attribute to the actuator of
+that name so `tuning._resolve`'s plain `getattr`/`setattr` still reaches it.
+
+The dashboard cannot mirror an actuator the operator invented ten seconds ago, so
+the robot describes those itself: `descriptors(cfg)` emits field metadata for the
+*derived* parameters only. The ~90 static ones are already in `schema.ts`, and
+restating them would put 2 KB on a shared radio for something the browser has.
+
 Applied values are persisted on the robot (`RS_TUNING_FILE`, default
 `/var/lib/roversoftware/tuning.json`) and re-applied at boot *after* env and CLI:
 they are the operator's most recent deliberate decision, and the paths they can
 reach are disjoint from the wiring flags (no CLI flag names a PID gain). A
 corrupt tuning file is ignored, not fatal — it must leave the robot bootable on
 its compiled-in defaults rather than bricked at the side of a field.
+
+### 4.1b Hardware layout (`robot/layout.py`)
+
+`tuning.py` is the surface for SCALARS — a gain, a limit, a timeout, each at a
+fixed dotted path. That model cannot express "this build has three intake
+motors", because the set of paths itself depends on the answer. So structure
+lives in its own versioned JSON document:
+
+| File | Env | Holds |
+|---|---|---|
+| `layout.json` | `RS_LAYOUT_FILE` | what actuators exist, the drivetrain kind, the mechanisms |
+| `tuning.json` | `RS_TUNING_FILE` | what their numbers currently are |
+| `routines.json` | `RS_ROUTINES_FILE` | the state machines (§4.8) |
+
+Two files rather than one, because they are edited at completely different
+cadences (a layout changes when someone reaches for a screwdriver; a gain changes
+every few minutes on a field), they fail differently (a bad layout stops the
+rover driving, a bad gain makes it drive badly), and they get separate revision
+counters so saving one does not push the other over the radio.
+
+Precedence at boot: **compiled-in defaults -> env/CLI -> `layout.json` ->
+`tuning.json`.** The layout comes before tuning because it decides which tuning
+paths even exist. No layout file leaves the compiled-in two-motor tank drive
+exactly as it was, which is the whole migration story for a deployed rover.
+
+**Validation is code now, not a comment.** Unique actuator names, names that
+don't collide with a `DriveConfig` field (they would be unreachable through
+`__getattr__`), channels in 0-15 claimed exactly once, roles that name real
+actuators, and caps of 16 actuators / 8 mechanisms / 6 KB serialized. A channel
+fight is resolved **drivetrain-first**, then mechanisms in declaration order,
+then the built-in launcher; the loser is reported and its mechanism disabled
+rather than being fatal — a robot that can't drive can't be driven away from
+whatever it is about to hit. Nothing raises: a bad layout leaves the rover on its
+previous wiring, bootable and drivable.
+
+**A layout never hot-swaps.** It is stored, validated, and answered with
+`restart_required`. Actuators are owned by constructors: swapping them mid-loop
+means destroying and rebuilding `Servo` objects while the drivetrain is armed,
+which is how an ESC ends up holding an undefined pulse. That is the same contract
+every `live=false` tuning field already has, and it is why every PWM channel was
+already marked that way.
+
+> The built-in launcher is deliberately *not* expressed as a mechanism. It keeps
+> its own `ShooterConfig` so the `RS_SHOOTER_*` vars, the `shooter.*` tuning
+> paths and `ShooterAlignController`'s firing policy stay exactly as they are;
+> `Robot` registers it in the mechanism registry under the reserved name
+> `shooter`, and layout validation refuses a user mechanism of that name so two
+> things can never answer to it.
 
 ### 4.2 The orchestrator & control loop (`robot/robot.py`)
 
@@ -270,14 +355,44 @@ kd·de/dt`; `reset()` clears the integrator and last-error.
   drift out of sync with fixes to the subtle timing logic) and asks one extra
   question per tick: should we shoot now? See [§6](#6-gps-waypoint-autonomy).
 - **`WaypointController`** — GPS navigation; see [§6](#6-gps-waypoint-autonomy).
+- **`RoutineController`** — the `routine` mode. Runs a state machine an operator
+  drew in the dashboard, delegating each state's driving to one of the
+  controllers above rather than reimplementing it. See §4.4c.
 
 ### 4.4 Drive layer
 
-**`TankDrive` (`tank_drive.py`).** `drive(left, right)` clamps, applies an
-optional **slew-rate limit** (`slew_rate` units/second — caps how fast a track
-speed can change so you don't slam the drivetrain), and forwards to two
-`ESCMotor`s. `arm()` holds neutral for `arm_seconds` so the ESCs recognise the
-signal and arm before commands flow. `stop()` zeros both.
+**`Drivetrain` (`drivetrain.py`).** `drive(left, right)` clamps, applies an
+optional **slew-rate limit** (`slew_rate` units/second — caps how fast a speed
+can change so you don't slam the drivetrain), and forwards to the actuators the
+layout named. `arm()` holds every ESC at neutral for `arm_seconds` so they
+recognise the signal before commands flow; servo-kind actuators are parked
+without the wait, since there is nothing there to arm. `stop()` zeros everything.
+`TankDrive` is still the tank drivetrain under its old name, constructed from a
+`DriveConfig` exactly as before.
+
+`DriveCommand(left, right)` remains the one command type in the system, and this
+module is the only thing that knows what the robot is built like. That is what
+lets a one-motor-and-a-steering-servo rover reuse teleop, object_align and
+waypoint completely unchanged.
+
+| Kind | What it does with `(left, right)` |
+|---|---|
+| `tank` | slew-limits each side, fans it out to every actuator on that side |
+| `servo_steer` | recovers `throttle = (l+r)/2` and `steer = (l−r)/2` — the exact inverse of `DriveCommand.arcade` — drives the wheels at throttle and the servo at steer, each slew-limited separately |
+| `single` | `throttle = (l+r)/2`; steering is discarded (logged once, never per tick) |
+| `none` | accepts commands and moves nothing (a build that is only mechanisms) |
+
+> **A steered chassis cannot pivot, and the autonomy modes ask it to.** A
+> differential-drive controller expresses "point at it, then go" as
+> `arcade(0.0, steer)` — see `object_align.py` and `waypoint.py`. On a tank that
+> turns in place; on a steered chassis it is throttle zero with the wheels
+> turned, so the robot doesn't rotate and `object_align` would steer at a cone
+> until its search timeout. `min_pivot_throttle` (default 0.15) creeps forward
+> whenever steering is commanded with no throttle, so the steering has authority.
+> This is a **mitigation, not a fix** — proper Ackermann autonomy would need the
+> controllers themselves to plan arcs, which they don't. The Hardware tab warns
+> when a `servo_steer` layout is saved on a robot whose start mode is an align
+> mode.
 
 **`ESCMotor` (`motor.py`).** Wraps one PWM channel. `set_throttle(t)`:
 1. clamps to `[−1, 1]`, applies per-motor `inverted`;
@@ -293,6 +408,118 @@ signal and arm before commands flow. `stop()` zeros both.
 `ESCMotor` uses a `_MockServo` that just records the last angle. This is what
 lets the whole stack run on a laptop — the control/comms/telemetry logic is
 exercised with no HAT attached.
+
+### 4.4b Mechanisms (`drive/mechanism.py`)
+
+Everything that moves but doesn't drive: an intake, an arm, a second launcher.
+This is `Shooter` generalized, and it keeps that module's two rules because both
+were load-bearing.
+
+- **`PowerMechanism`** holds a value across one or more actuators. A named
+  *preset* maps actuator → value (`in` = roller 1.0, belt 0.8), which is what a
+  routine addresses by name so it reads "intake → in" rather than a column of
+  numbers. A preset zeroes the actuators it doesn't mention: it describes the
+  whole mechanism's state, and a belt still running because the *previous* preset
+  named it is a surprise nobody wants near their hands.
+- **`PulseMechanism`** runs a timed `rest → active → recovering` cycle on
+  wall-clock deadlines, non-blocking for exactly the reason `shooter.py` gives —
+  a `sleep(0.3)` would freeze the 50 Hz loop, trip the slow-tick watchdog, and
+  hold the drive outputs at whatever they last were. It owns its own cycle, so
+  something asking every tick gets one activation per cycle instead of needing a
+  timer. `fire()` is an alias for `activate()`, so a user-declared launcher
+  satisfies `ShooterLike` and drops into `shooter_align` untouched.
+
+Two details worth stating because they are easy to get wrong:
+
+**Unchanged writes are elided.** A routine can hold an action every tick. Writing
+an unchanged value would cost one I²C transaction per actuator per tick — 300 a
+second on a six-actuator rover, inside a 100 ms tick budget. The drivetrain
+deliberately does *not* do this: its slew limiter changes the value nearly every
+tick anyway, and a drivetrain that stops writing is one whose failsafe stopped
+ticking.
+
+**The e-stop had to be extended to reach them.** `ControlManager` broadcasts
+`on_estop()` to *controllers* and forces `stopped()` out of `update()`, which
+covers the drivetrain completely — but a mechanism is not a controller, so an
+intake at full power would have kept spinning through the one button that exists
+to stop it. `Robot.run()` edge-detects the latch and stops every mechanism.
+Edge-detected rather than held, so an operator can still jog a mechanism while
+the robot is safely stopped, which is what bring-up looks like.
+
+### 4.4c Routines: the FSM engine (`robot/routine/`)
+
+Sequencing an action used to mean writing a `Controller` subclass in Python.
+`ControlManager` is a flat switch over hand-written modes, and the only ordered
+thing in the repo was `WaypointController`'s list of legs. A routine is a state
+machine an operator draws in the dashboard, validated and compiled once on
+arrival, and run on the **robot** as a fifth mode — so it survives losing the
+radio, which is the reason it doesn't live on the base station.
+
+```jsonc
+{ "id": "collect", "start": "seek", "on_end": "stop", "on_estop": "abort",
+  "states": [
+    { "id": "seek",
+      "drive": {"mode": "object_align"},              // DELEGATE, don't reimplement
+      "on_enter": [{"do": "mech_preset", "mech": "intake", "preset": "in"}],
+      "transitions": [{"when": "aligned", "for_seconds": 0.4, "to": "shoot"},
+                      {"when": "elapsed", "seconds": 20, "to": "done"}] },
+    { "id": "shoot", "drive": {"mode": "shooter_align"},
+      "on_enter": [{"do": "arm"}],
+      "transitions": [{"when": "shots", "at_least": 2, "to": "done"}],
+      "on_exit":  [{"do": "disarm"}] },
+    { "id": "done", "terminal": true } ] }
+```
+
+**Delegation is the design.** A state's `drive` is `stop`, `hold`, `manual`, or
+the name of a controller — and naming one hands the tick to the *real* instance,
+the one `Robot.__init__` already injected a detection or pose provider into. The
+FSM composes the autonomy that exists rather than re-expressing it as
+user-editable blocks. `RoutineController` owns the delegate's lifecycle
+(`on_activate` on entry, `on_deactivate` on exit), because from `ControlManager`'s
+view every non-active controller is inactive; it syncs *before* evaluating
+transitions, since conditions like `aligned` read state the delegate publishes
+from its own `update()`.
+
+**Conditions read what the controllers already publish** — `aligned`, `arrived`,
+`last_detection`, `route_done`, `shots` — rather than deriving a second, subtly
+different answer that would drift from the first. Each is a pure read through an
+injected `RoutineContext`, the same rule that makes the controllers testable, so
+a routine unit-tests against stubs on a laptop.
+
+**Three engine rules do most of the safety work.**
+
+1. **At most one transition per tick.** Evaluated in the order they were authored,
+   first match wins. A cycle of `always` transitions then advances one state per
+   20 ms tick instead of spinning inside a single one — and it makes the machine
+   predictable to whoever drew it: one box per tick.
+2. **`for_seconds` means *continuously*.** The launcher's dwell rule generalized:
+   a single tick of `aligned` is equally consistent with a false positive or a
+   target crossing the centre on its way past.
+3. **Every state can be left.** A state carries a timeout (inheriting
+   `routines.state_timeout_default`, re-read every tick so raising it applies to
+   the routine already running), and the routine may carry one too. Expiry *ends*
+   the routine rather than advancing: if a state overran, the next one's
+   assumptions probably don't hold either. A routine with no terminal state, no
+   routine timeout and every per-state limit switched off is a **validation
+   error** — an unattended runaway is what the e-stop exists to catch, not
+   something to author deliberately.
+
+**Arming is triple-gated**, being the one action a drawn program can take that
+makes something physically launch: off by default (`RS_ROUTINE_ALLOW_ARM`),
+refused *at parse time* outside a state that drives with `shooter_align` (where
+dwell, cooldown and the magazine are enforced), and re-checked at **runtime** so
+switching the gate off stops a routine already running. The only direction a
+safety gate may be slow in is on.
+
+Actions never touch the drivetrain — that is the state's `drive` source — so
+exactly one thing commands the motors at any moment. They run `on_enter` (once),
+`on_tick` (every tick, hence the write elision above) and `on_exit`, which fires
+however the state is left, *including* a timeout, an abort or an e-stop. That is
+what makes `on_exit` the right place to disarm something.
+
+A document that fails validation is stored but never armed: the robot keeps
+running the last set that was good, which is the difference between a rejected
+edit and a rover that stops mid-field.
 
 ### 4.5 Comms layer
 
@@ -334,14 +561,52 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 {"type":"disarm_shooter","to":"rover1"}                      // shooter_align: forbid + park
 {"type":"fire","to":"rover1"}                                // shooter_align: manual shot
 
+// documents — structure, not scalars. Chunked; see below.
+{"type":"get_layout"}  {"type":"get_routines"}  {"type":"get_fields"}
+{"type":"put_layout","txid":"B1","seq":0,"n":3,"part":"{\"vers…","save":true}
+{"type":"put_routines","txid":"B2","seq":0,"n":5,"part":"…"}
+{"type":"select_routine","id":"collect"}                     // choose which one runs
+{"type":"routine_cmd","cmd":"start"}                         // start | stop | restart
+{"type":"routine_event","name":"go"}                         // satisfies a `when I press` transition
+{"type":"jog","mech":"intake","power":0.3}                   // bench test; teleop only, expires in 0.4 s
+
 // robot -> base station (telemetry, ~5 Hz)
 {"type":"telemetry","from":"rover1","mode":"teleop","estop":false,
  "left":0.4,"right":0.6,"battery":87.0,
  "lat":37.77,"lon":-122.41,"heading":30.0,  // lat/lon/heading only when GPS has a fix
  "gps":{"fix":1,"sats":9,"speed":1.2,"hdop":0.9,"track":54.7,"track_age":0.4},  // fix health
  "imu_calib":3,
- "shooter":{"armed":true,"shots":1,"ready":false,"cool":0.0}}  // only while in shooter_align
+ "shooter":{"armed":true,"shots":1,"ready":false,"cool":0.0},  // only while in shooter_align
+ "mech":{"intake":{"kind":"power","values":{"roller":1.0}}}, // only if the layout has any
+ "routine":{"id":"collect","state":"seek","t":3.4,"drive":"object_align"}}  // only in `routine`
+
+// robot -> base station (documents + verdicts)
+{"type":"layout","from":"rover1","rev":4,"txid":"L4","seq":0,"n":3,"part":"…"}
+{"type":"layout_result","from":"rover1","ok":true,"errors":[],"restart_required":true}
+{"type":"routines_result","from":"rover1","ok":false,
+ "errors":["state 'shoot': unknown mechanism 'intak'"]}
+{"type":"fields","from":"rover1","seq":0,"n":2,"fields":[…]}  // descriptors for layout-derived params
 ```
+
+**Documents are reassembled whole, never merged.** A config snapshot merges
+safely because it is a flat map of independent scalars — half of one is a valid
+smaller one. A layout is a *tree*, and half a tree is a robot with one drive
+motor; partially applying it is exactly how two motors end up on one channel. So
+`comms/doc_transfer.py` slices the JSON text into numbered fragments and applies
+nothing until every fragment is in hand. The receiver is bounded: one transfer at
+a time, a 5 s timeout, a 32 KB cap. Acking is whole-document — the robot replies
+`layout_result` / `routines_result` after validating, and the base station
+retries the entire document once after 3 s of silence. No per-part NAKs: a save
+is a rare deliberate action, and whole-doc retry is a tenth of the code for the
+same reliability at this scale.
+
+**Multi-frame replies are paced, not burst.** `XBeeLink.send` drops the frame and
+flushes when the radio isn't draining inside its 0.2 s write timeout, so firing
+ten frames inside one tick is precisely the shape that arrives incomplete.
+`Robot` queues them and drains two per control tick; the base station does the
+same in the other direction. Telemetry still goes direct — it is one small frame,
+it is what an operator most needs to be current, and delaying it behind a config
+dump is the wrong trade.
 
 The base station rate-limits `drive` frames it sends (see [§7](#7-the-base-station))
 so a fast gamepad stream doesn't back up a slow radio.
@@ -662,11 +927,25 @@ switching, routes, settings — with no hardware.
 WebSocket: each robot is a heading arrow with a position trail; the rail lists
 mode / battery / link / GPS health / track speeds and selects a robot; route
 mode drops waypoints and sends them. The gear opens a full-screen settings view
-with three tabs — **Robot** (the selected rover's tunables, fetched on demand),
-**Controller** (mapping, bound by pressing the control you want), and **Base
-station** (link and UI rates, basemap). `settings/schema.ts` mirrors the two
-Python whitelists for labels, ranges and help text, exactly as `net/types.ts`
-mirrors the `/ws` contract; Python remains the authority and clamps everything.
+with five tabs — **Tuning** (the selected rover's tunables, fetched on demand),
+**Hardware** (its actuators, drivetrain kind and mechanisms), **Routines** (the
+FSM editor), **Controller** (mapping, bound by pressing the control you want),
+and **Base station** (link and UI rates, basemap). `settings/schema.ts` mirrors
+the two Python whitelists for labels, ranges and help text, exactly as
+`net/types.ts` mirrors the `/ws` contract; Python remains the authority and
+clamps everything. For actuators the operator declared it has nothing to mirror,
+so it builds those groups from the descriptors the robot sends — and with none,
+it renders byte-for-byte the page it always did.
+
+**Hardware and Routines are draft-then-Save**, unlike the Tuning tab next door.
+Committing each field on its own is right for a scalar the robot clamps and
+answers; a layout is a document, half of which is a robot with one drive motor,
+so the whole thing is edited locally and sent in one go. The draft is kept until
+the robot answers, so a refused edit isn't silently lost, and the robot echoes
+the *stored* copy back — the validator clamps, so what was saved is not
+necessarily what was sent. The Routines tab shows the live state highlighted from
+telemetry, in the state card and in a small read-only SVG graph, which is what
+makes it a debugger rather than only an editor.
 
 ---
 
@@ -726,7 +1005,7 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
-| `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint`. |
+| `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint` \| `routine`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
 | `RS_GPS_ENABLED` / `RS_GPS_PORT` / `RS_GPS_BAUD` / `RS_GPS_RATE_MS` | `1` / `/dev/ttyAMA0` / `9600` / `1000` | Adafruit GPS reader; `RATE_MS` is the PMTK220 fix interval. |
@@ -744,6 +1023,9 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_SHOOTER_DWELL` / `RS_SHOOTER_COOLDOWN` | `0.5` / `2.0` | Hold the aim this long before firing; min seconds between shots. |
 | `RS_SHOOTER_REQUIRE_ARM` / `RS_SHOOTER_REQUIRE_ARRIVED` / `RS_SHOOTER_MAX_SHOTS` | `1` / `1` / `0` | Firing gates; magazine size (0 = unlimited). |
 | `RS_TUNING_FILE` | `/var/lib/roversoftware/tuning.json` | Where values set from the dashboard are saved. Applied *after* env and CLI (see [§4.1](#41-configuration-robotconfigpy)). |
+| `RS_LAYOUT_FILE` | `/var/lib/roversoftware/layout.json` | The hardware layout. Applied *before* tuning, because it decides which tuning paths exist. Takes effect on the next start; no file = the stock tank drive. |
+| `RS_ROUTINES_FILE` | `/var/lib/roversoftware/routines.json` | UI-authored state machines. Unlike a layout these are hot-swappable. |
+| `RS_ROUTINE_ALLOW_ARM` / `RS_ROUTINE_STATE_TIMEOUT` | `0` / `60` | Whether a routine may arm the launcher (leave at 0), and the limit a state inherits when it sets none. |
 
 > **Env, CLI, or the dashboard?** Env and CLI set what the robot boots with;
 > the dashboard changes what it is doing *now* and saves it. PID gains, speeds
@@ -843,3 +1125,23 @@ GPS exists.
 - **Shooter dwell** — the aim must hold for `dwell` seconds before a shot, and the
   timer resets on any gap in control ticks, so time spent e-stopped or paused can
   never count toward it.
+- **PWM channel collisions are validated**, not prevented by a comment. Two
+  actuators on one channel move together and neither answers its own commands,
+  which reads as a wiring fault and is not one. The drivetrain wins the tie and
+  the losing mechanism is disabled rather than the layout being fatal.
+- **The e-stop reaches mechanisms**, not only the drivetrain. `ControlManager`
+  broadcasts to controllers, and a mechanism is not one, so `Robot` edge-detects
+  the latch and stops every mechanism — an intake at full power would otherwise
+  spin through the one button that exists to stop it.
+- **A layout needs a restart.** Rebuilding actuators mid-loop with the drivetrain
+  armed leaves an ESC holding an undefined pulse, so a saved layout is stored and
+  reported as pending, never applied live.
+- **Routines cannot run forever** — every state carries a timeout, and a machine
+  with no terminal state, no routine timeout and every limit switched off is
+  refused at validation.
+- **A routine cannot arm the launcher** unless the robot was configured to permit
+  it, and then only inside a state that drives with `shooter_align`. The gate is
+  re-checked at runtime, so turning it off stops a routine already running.
+- **Jog has its own failsafe** — the bench-test control is refused unless the
+  robot is in teleop with no e-stop latched, and every jog expires after 0.4 s so
+  a dropped command can't leave a motor running.
