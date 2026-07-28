@@ -56,7 +56,7 @@ class DriveConfig:
 @dataclass
 class CommsConfig:
     port: str = "/dev/ttyUSB0"  # XBee serial port (USB adapter; use /dev/serial0 for the GPIO header)
-    baud: int = 57600
+    baud: int = 9600
     command_timeout: float = (
         0.5  # Failsafe: stop if no drive command arrives within this many seconds
     )
