@@ -21,7 +21,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
-# Offline model-conversion toolchain (tools/imx500_convert.py). Kept OUT of
+# Offline model-conversion toolchain (tools/imx500_*.py). Kept OUT of
 # [project.dependencies] on purpose: torch is a ~100MB build-machine-only
 # dependency and nothing on the robot imports it — the Pi loads the finished
 # .rpk through picamera2. `uv sync` stays lean; run the converter with
@@ -31,7 +31,7 @@ dev = [
 # binaries (imxconv-pt / uni-pytorch); MCT's PyTorch quantization backend needs
 # torch itself, which the [pt] extra does not pull in.
 convert = [
-    # UPPER BOUND IS LOad-BEARING, do not relax it to "latest torch".
+    # THE UPPER BOUND IS LOAD-BEARING, do not relax it to "latest torch".
     # mct_quantizers emits its MCTQ quantizer nodes from `symbolic()` methods on
     # torch.autograd.Function — a hook only the legacy TorchScript ONNX exporter
     # calls. torch 2.9 flipped torch.onnx.export to dynamo=True by default, and
