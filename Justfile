@@ -7,8 +7,8 @@
 # Assumes standard Raspberry Pi OS, where the default user has passwordless
 # sudo (so `sudo rsync` / `sudo systemctl` over SSH work without a prompt).
 
-host    := env_var_or_default("ROBOT_HOST", "rover1.local")
-user    := env_var_or_default("ROBOT_USER", "pi")
+host    := env_var_or_default("ROBOT_HOST", "raspberrypi.local")
+user    := env_var_or_default("ROBOT_USER", "Lucas")
 version := "0.1.0"
 
 target  := user + "@" + host

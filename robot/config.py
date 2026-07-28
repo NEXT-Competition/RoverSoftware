@@ -43,11 +43,17 @@ class MotorConfig:
 @dataclass
 class DriveConfig:
     # motor1 -> channel 0 (left), motor2 -> channel 1 (right, mounted mirrored)
-    left: MotorConfig = field(
+    left_1: MotorConfig = field(
         default_factory=lambda: MotorConfig(channel=0, inverted=False)
     )
-    right: MotorConfig = field(
-        default_factory=lambda: MotorConfig(channel=1, inverted=True)
+    left_2: MotorConfig = field(
+        default_factory=lambda: MotorConfig(channel=1, inverted=False)
+    )
+    right_1: MotorConfig = field(
+        default_factory=lambda: MotorConfig(channel=2, inverted=True)
+    )
+    right_2: MotorConfig = field(
+        default_factory=lambda: MotorConfig(channel=3, inverted=True)
     )
     arm_seconds: float = 2.0  # Hold neutral this long so the ESCs arm on boot
     slew_rate: float = 4.0  # Max throttle change per second (0 disables limiting)
@@ -56,7 +62,7 @@ class DriveConfig:
 @dataclass
 class CommsConfig:
     port: str = "/dev/ttyUSB0"  # XBee serial port (USB adapter; use /dev/serial0 for the GPIO header)
-    baud: int = 57600
+    baud: int = 9600
     command_timeout: float = (
         0.5  # Failsafe: stop if no drive command arrives within this many seconds
     )
@@ -228,7 +234,7 @@ class FPVConfig:
     # and a shared WiFi/LAN (the XBee radio can't carry video), so it's opt-in
     # rather than something every robot fires into the void on boot.
     enabled: bool = False
-    base_host: str = "base-station.local"  # where the base station receives UDP
+    base_host: str = "lucas-Latitude-7490.local"  # where the base station receives UDP
     base_port: int = 5005
     fps: int = 15           # cap on frames sent per second
     jpeg_quality: int = 60  # 1-100; lower = smaller packets, less bandwidth
