@@ -9,16 +9,20 @@ import signal
 import time
 from typing import Callable, Dict, Optional, Tuple
 
-from . import tuning
+from . import layout, tuning
 from .config import PIDConfig, RobotConfig
+from .comms.doc_transfer import Reassembler, split
 from .comms.xbee_link import XBeeLink
 from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
+from .control.routine_controller import RoutineController
 from .control.shooter_align import ShooterAlignController
 from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
+from .routine import schema as routine_schema
+from .routine import store as routine_store
 from .drive.drivetrain import build_drivetrain
 from .drive.mechanism import Mechanism, build_mechanism
 from .drive.shooter import Shooter
@@ -39,6 +43,11 @@ SLOW_TICK_S = 0.1
 # while never handing the radio more than it can write inside one tick. See
 # Robot._queue for why bursting is the failure mode worth designing against.
 OUTBOX_PER_TICK = 2
+
+# How long a bench jog runs before it stops itself. The Hardware tab repeats the
+# command while the control is held, so this is the same shape as teleop's
+# command_timeout: lose the link mid-jog and the motor stops on its own.
+JOG_TIMEOUT_S = 0.4
 
 
 def _pid(cfg: PIDConfig) -> PID:
@@ -81,6 +90,13 @@ class Robot:
             name: build_mechanism(mech)
             for name, mech in config.mechanisms.items() if mech.enabled
         }
+        # Everything that can be told to move or stop, including the launcher.
+        # Built once and shared by reference, because the routine controller
+        # keeps a handle on it — rebuilding it per call would hand the FSM a
+        # snapshot that stops reflecting the robot.
+        self._registry: Dict[str, Mechanism] = dict(self.mechanisms)
+        if self.shooter is not None:
+            self._registry["shooter"] = self.shooter
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
         # Multi-frame replies (a config snapshot, a layout, a routine set) are
@@ -131,6 +147,13 @@ class Robot:
                     heading_pid=_pid(config.nav.heading_pid),
                 ),
             }
+            # The FSM mode. Constructed with the SAME dict it will be registered
+            # in, so a state that says "drive with object_align" delegates to
+            # the instance whose providers get wired below — not a second one
+            # that would see nothing. It holds no routines until one is loaded,
+            # and until then it simply holds the robot still.
+            controllers["routine"] = RoutineController(
+                controllers, self._registry, config.routines)
         self.manager = ControlManager(controllers, config.start_mode)
 
         # Messages arrive on the XBee reader thread; process them on the main
@@ -239,11 +262,34 @@ class Robot:
                     c.set_detection_provider(self.detector.detection)
                     c.set_rate_provider(self.pose_estimator.heading_rate)
 
+        # The FSM's own sensing. Its conditions read the controllers' published
+        # state (aligned, arrived, route_done) rather than re-deriving any of
+        # it, so this is only what no controller owns: position and the latch.
+        self.routine_controller: Optional[RoutineController] = next(
+            (c for c in controllers.values() if isinstance(c, RoutineController)),
+            None)
+        if self.routine_controller is not None:
+            if self.pose_provider is not None:
+                self.routine_controller.set_pose_provider(self.pose_provider)
+            self.routine_controller.set_estop_provider(lambda: self.manager.estop)
+        # Documents the base station has saved on this robot. A layout needs a
+        # restart to take effect, so it is loaded in run_robot.py before the
+        # hardware is built; routines are just data, so they load here.
+        self._routine_doc: dict = routine_store.empty_doc()
+        self._load_routines()
+
+        # Reassembly buffers for chunked documents arriving off the radio, one
+        # per document type so a layout and a routine save can't interleave.
+        self._rx = {"put_layout": Reassembler(), "put_routines": Reassembler()}
+        self._layout_rev = 0
+        self._routine_rev = 0
+        # Bench-jog failsafe; see _jog.
+        self._jog_mech = ""
+        self._jog_until = 0.0
+
     def _all_mechanisms(self) -> Dict[str, Mechanism]:
         """Layout mechanisms plus the built-in launcher, keyed by name."""
-        if self.shooter is None:
-            return self.mechanisms
-        return {**self.mechanisms, "shooter": self.shooter}
+        return self._registry
 
     def _apply_estop(self) -> None:
         """Make mechanisms safe the moment the e-stop latches.
@@ -283,6 +329,16 @@ class Robot:
                 self._send_config()
             elif mtype == "set_config":
                 self._set_config(msg)
+            elif mtype == "get_fields":
+                self._send_fields()
+            elif mtype == "get_layout":
+                self._send_doc("layout", layout.to_doc(self.cfg), self._layout_rev)
+            elif mtype == "get_routines":
+                self._send_doc("routines", self._routine_doc, self._routine_rev)
+            elif mtype in ("put_layout", "put_routines"):
+                self._receive_doc(mtype, msg)
+            elif mtype == "jog":
+                self._jog(msg)
             else:
                 self.manager.handle_message(msg)
 
@@ -339,6 +395,162 @@ class Robot:
             print(f"[Robot] config rejected {path}: {why}")
         self._queue(self._config_frame(
             applied, rejected=rejected, restart=restart, save_error=error))
+
+    # --- documents (layout, routines) ---------------------------------------
+
+    def _send_fields(self) -> None:
+        """Describe the parameters the dashboard's schema.ts cannot know about.
+
+        Only the layout-derived ones: the ~90 static fields are already mirrored
+        in TypeScript, and restating them would cost 2 KB of shared airtime for
+        something the browser already has.
+        """
+        fields = tuning.descriptors(self.cfg)
+        for frame in split({"fields": fields}, "fields", self.cfg.robot_id,
+                           txid=f"F{self._layout_rev}"):
+            self._queue(frame)
+
+    def _send_doc(self, mtype: str, doc: dict, rev: int) -> None:
+        for frame in split(doc, mtype, self.cfg.robot_id,
+                           txid=f"{mtype[0].upper()}{rev}", rev=rev):
+            self._queue(frame)
+
+    def _receive_doc(self, mtype: str, msg: dict) -> None:
+        """Absorb one fragment; act only once the whole document has landed.
+
+        Documents are never partially applied — see comms/doc_transfer.py. Half
+        a layout is two motors on one channel, not a smaller layout.
+        """
+        reassembler = self._rx[mtype]
+        doc = reassembler.feed(msg)
+        if doc is None:
+            if reassembler.error:
+                self._queue(self._result_frame(mtype, False, [reassembler.error]))
+            return
+        if mtype == "put_layout":
+            self._apply_layout(doc, bool(msg.get("save", True)))
+        else:
+            self._apply_routines(doc, bool(msg.get("save", True)))
+
+    def _result_frame(self, mtype: str, ok: bool, errors, warnings=(),
+                      **extra) -> dict:
+        return {"type": f"{mtype[4:]}_result", "from": self.cfg.robot_id,
+                "ok": ok, "errors": list(errors), "warnings": list(warnings),
+                **extra}
+
+    def _apply_layout(self, doc: dict, save: bool) -> None:
+        """Validate a layout and store it. It does NOT take effect now.
+
+        Actuators are owned by constructors: rebuilding them mid-loop with the
+        drivetrain armed is how an ESC ends up holding an undefined pulse. So a
+        layout is checked, saved, and reported as needing a restart — the same
+        contract every `live=False` tuning field already has.
+        """
+        result = layout.validate(
+            doc, {self.cfg.shooter.channel: "the built-in shooter"}
+            if self.cfg.shooter.enabled else {})
+        error = None
+        if result.ok and save:
+            error = layout.save(doc)
+            if error:
+                print(f"[Robot] layout valid but NOT saved: {error}")
+        if result.ok:
+            self._layout_rev += 1
+            print(f"[Robot] layout accepted (rev {self._layout_rev}); "
+                  "restart the service to apply it")
+        for message in result.errors:
+            print(f"[Robot] layout rejected: {message}")
+        self._queue(self._result_frame(
+            "put_layout", result.ok, result.errors, result.warnings,
+            rev=self._layout_rev, save_error=error, restart_required=result.ok))
+
+    def _apply_routines(self, doc: dict, save: bool) -> None:
+        """Validate routines and install them. These DO take effect now.
+
+        Unlike a layout, a routine is data the engine reads — there is nothing
+        to reconstruct. A document that fails validation is not installed at
+        all: the robot keeps running the last set that was good, which is the
+        difference between a rejected edit and a rover that stops mid-field.
+        """
+        result = routine_schema.parse(doc, self.cfg.routines,
+                                      tuple(self.manager.controllers))
+        error = None
+        if result.ok:
+            self._routine_doc = doc
+            self._routine_rev += 1
+            if self.routine_controller is not None:
+                self.routine_controller.set_routines(result.routines)
+            if save:
+                error = routine_store.save(doc)
+                if error:
+                    print(f"[Robot] routines applied but NOT saved: {error}")
+            print(f"[Robot] routines accepted: {len(result.routines)} "
+                  f"(rev {self._routine_rev})")
+        for message in result.errors:
+            print(f"[Robot] routines rejected: {message}")
+        self._queue(self._result_frame(
+            "put_routines", result.ok, result.errors, result.warnings,
+            rev=self._routine_rev, save_error=error))
+
+    def _load_routines(self) -> None:
+        doc = routine_store.load()
+        if doc is None:
+            return
+        result = routine_schema.parse(doc, self.cfg.routines,
+                                      tuple(self.manager.controllers))
+        if result.ok:
+            self._routine_doc = doc
+            if self.routine_controller is not None:
+                self.routine_controller.set_routines(result.routines)
+            print(f"[Robot] routines: {len(result.routines)} loaded from "
+                  f"{routine_store.routines_path()}")
+        else:
+            for message in result.errors:
+                print(f"[Robot] routines REJECTED at boot: {message}")
+
+    def _jog(self, msg: dict) -> None:
+        """Move one actuator briefly, for bring-up from the Hardware tab.
+
+        This is a new way to make hardware move, so it gets the same discipline
+        as the thing it resembles: it is refused unless the robot is in teleop
+        with the drivetrain at rest and no e-stop latched, and every jog carries
+        its own expiry so a dropped "stop" can't leave a motor running. Teleop's
+        command_timeout is the same idea; this is that idea for a bench.
+        """
+        name = str(msg.get("mech", ""))
+        actuator = msg.get("actuator")
+        try:
+            power = float(msg.get("power", 0.0))
+        except (TypeError, ValueError):
+            power = 0.0
+
+        if self.manager.estop:
+            print("[Robot] jog refused: e-stop is latched")
+            return
+        if self.manager.mode != "teleop":
+            print(f"[Robot] jog refused: only in teleop (mode is "
+                  f"{self.manager.mode!r})")
+            return
+
+        mech = self._registry.get(name)
+        if mech is None:
+            print(f"[Robot] jog refused: no mechanism named {name!r}")
+            return
+        if not hasattr(mech, "set_power"):
+            print(f"[Robot] jog refused: {name!r} is not a powered mechanism")
+            return
+        mech.set_power(power, str(actuator) if actuator else None)
+        self._jog_until = time.monotonic() + JOG_TIMEOUT_S if power else 0.0
+        self._jog_mech = name if power else ""
+
+    def _expire_jog(self) -> None:
+        if not self._jog_mech:
+            return
+        if time.monotonic() >= self._jog_until:
+            mech = self._registry.get(self._jog_mech)
+            if mech is not None:
+                mech.stop()
+            self._jog_mech = ""
 
     def _push_live_config(self) -> None:
         """Copy config onto the objects that cached it at construction.
@@ -429,6 +641,11 @@ class Robot:
         # any, and only a summary — the radio is 57600 baud and shared.
         if self.mechanisms:
             t["mech"] = {name: m.status() for name, m in self.mechanisms.items()}
+        # Which state the FSM is in, so the Routines tab can highlight the live
+        # card. Rides the hot path because that is the whole point of it — a
+        # state highlight that lags by a second is worse than none.
+        if isinstance(active, RoutineController):
+            t["routine"] = active.status()
         return t
 
     def start(self) -> None:
@@ -470,6 +687,7 @@ class Robot:
 
                 self._drain_inbox()
                 self._apply_estop()
+                self._expire_jog()
                 t1 = time.monotonic()
                 cmd = self.manager.update(dt)
                 # Unconditional, and deliberately outside the controller: a mode

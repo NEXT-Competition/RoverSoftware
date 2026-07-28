@@ -138,7 +138,7 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("loop_hz", 1, 200),
     _f("telemetry_hz", 0, 20),
     _e("heading_source", ("auto", "gps", "imu")),
-    _e("start_mode", ("teleop", "object_align", "shooter_align", "waypoint"), live=False),
+    _e("start_mode", ("teleop", "object_align", "shooter_align", "waypoint", "routine"), live=False),
     _t("robot_id", live=False),
 
     # --- comms ---
@@ -226,6 +226,14 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _b("imu.persist_calibration"),
     _b("imu.enabled", live=False),
     _i("imu.i2c_address", 0x08, 0x77, live=False),
+
+    # --- routines (the FSM engine; the documents live in routines.json) ---
+    _f("routines.state_timeout_default", 1, 600),
+    # Off by default and worth keeping that way: this is the one action a
+    # user-authored program can take that makes something physically launch.
+    # Even on, arming is only accepted inside a state that drives with
+    # shooter_align, and is dropped on every state exit, mode exit and e-stop.
+    _b("routines.allow_arm", live=False),
 
     # --- FPV ---
     _i("fpv.fps", 1, 60),

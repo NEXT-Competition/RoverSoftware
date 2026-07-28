@@ -1,0 +1,290 @@
+"""Validating a state machine somebody drew in a browser.
+
+Most of this is ordinary shape-checking. Three rules are not, and they are the
+reason this file is long: a routine must not be able to dead-end into a state
+that doesn't exist, must not be able to run forever unattended, and must not be
+able to arm the launcher anywhere the firing policy isn't being enforced.
+"""
+
+from robot.config import RoutineConfig
+from robot.routine import schema
+
+CONTROLLERS = ("teleop", "object_align", "shooter_align", "waypoint", "routine")
+
+
+def parse(doc, **cfg_kw):
+    return schema.parse(doc, RoutineConfig(**cfg_kw), CONTROLLERS)
+
+
+def routine(states, **kw):
+    body = {"id": "r1", "start": states[0]["id"], "states": states}
+    body.update(kw)
+    return {"version": 1, "routines": [body]}
+
+
+SIMPLE = routine([
+    {"id": "go", "drive": {"mode": "manual", "throttle": 0.5},
+     "transitions": [{"when": "elapsed", "seconds": 1, "to": "done"}]},
+    {"id": "done", "terminal": True},
+])
+
+
+# --- the happy path ----------------------------------------------------------
+
+def test_a_well_formed_routine_parses():
+    result = parse(SIMPLE)
+    assert result.ok, result.errors
+    r = result.routines["r1"]
+    assert r.start == "go"
+    assert set(r.states) == {"go", "done"}
+    assert r.states["done"].terminal
+
+
+def test_a_state_may_delegate_to_a_real_controller():
+    """The central design point: a state hands driving to the controller that
+    already exists, providers and all, instead of the FSM re-expressing it."""
+    result = parse(routine([
+        {"id": "seek", "drive": {"mode": "object_align"},
+         "transitions": [{"when": "aligned", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    seek = result.routines["r1"].states["seek"]
+    assert seek.drive_source == "controller"
+    assert seek.drive_controller == "object_align"
+
+
+def test_drive_modes_stop_hold_and_manual_are_understood():
+    result = parse(routine([
+        {"id": "a", "drive": {"mode": "stop"},
+         "transitions": [{"when": "always", "to": "b"}]},
+        {"id": "b", "drive": {"mode": "hold"},
+         "transitions": [{"when": "always", "to": "c"}]},
+        {"id": "c", "drive": {"mode": "manual", "throttle": 0.3, "steer": -0.2},
+         "terminal": True}]))
+    assert result.ok, result.errors
+    states = result.routines["r1"].states
+    assert states["a"].drive_source == "stop"
+    assert states["b"].drive_source == "hold"
+    assert (states["c"].drive_throttle, states["c"].drive_steer) == (0.3, -0.2)
+
+
+def test_a_transition_may_require_its_condition_to_hold():
+    result = parse(routine([
+        {"id": "a", "transitions": [
+            {"when": "aligned", "for_seconds": 0.4, "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.routines["r1"].states["a"].transitions[0].for_seconds == 0.4
+
+
+# --- structural errors -------------------------------------------------------
+
+def test_a_transition_to_a_state_that_does_not_exist_is_rejected():
+    result = parse(routine([
+        {"id": "a", "transitions": [{"when": "always", "to": "nowhere"}]},
+        {"id": "done", "terminal": True}]))
+    assert "does not exist" in " ".join(result.errors)
+
+
+def test_a_start_state_that_does_not_exist_is_rejected():
+    doc = routine([{"id": "a", "terminal": True}])
+    doc["routines"][0]["start"] = "b"
+    assert "start state" in " ".join(parse(doc).errors)
+
+
+def test_duplicate_state_ids_are_rejected():
+    result = parse(routine([
+        {"id": "a", "terminal": True}, {"id": "a", "terminal": True}]))
+    assert "duplicate state" in " ".join(result.errors)
+
+
+def test_duplicate_routine_ids_are_rejected():
+    doc = routine([{"id": "a", "terminal": True}])
+    doc["routines"].append(dict(doc["routines"][0]))
+    assert "duplicate routine" in " ".join(parse(doc).errors)
+
+
+def test_malformed_ids_are_rejected():
+    for bad in ("A", "9lives", "has space", "", "x" * 40):
+        assert not parse(routine([{"id": bad, "terminal": True}])).ok
+
+
+def test_an_unknown_drive_mode_is_rejected():
+    result = parse(routine([
+        {"id": "a", "drive": {"mode": "teleport"}, "terminal": True}]))
+    assert "unknown drive mode" in " ".join(result.errors)
+
+
+def test_a_controller_this_build_does_not_have_is_rejected():
+    """Better a message in the editor than a state that silently holds still."""
+    result = schema.parse(routine([
+        {"id": "a", "drive": {"mode": "object_align"}, "terminal": True}]),
+        RoutineConfig(), ("teleop",))
+    assert "unknown drive mode" in " ".join(result.errors)
+
+
+def test_an_unreachable_state_is_a_warning_not_an_error():
+    result = parse(routine([
+        {"id": "a", "terminal": True},
+        {"id": "orphan", "terminal": True}]))
+    assert result.ok, result.errors
+    assert "never be reached" in " ".join(result.warnings)
+
+
+# --- the termination rule ----------------------------------------------------
+
+def test_a_routine_that_can_never_end_is_rejected():
+    """A safety rule, not tidiness: a machine of states that all transition
+    forever, with every timeout switched off, is a robot that runs until
+    somebody hits the e-stop."""
+    result = parse(routine([
+        {"id": "a", "timeout": 0, "transitions": [{"when": "always", "to": "b"}]},
+        {"id": "b", "timeout": 0, "transitions": [{"when": "always", "to": "a"}]}]))
+    assert "nothing can stop it" in " ".join(result.errors)
+
+
+def test_a_loop_with_a_routine_timeout_is_allowed():
+    result = parse(routine([
+        {"id": "a", "timeout": 0, "transitions": [{"when": "always", "to": "b"}]},
+        {"id": "b", "timeout": 0, "transitions": [{"when": "always", "to": "a"}]}],
+        timeout=30.0))
+    assert result.ok, result.errors
+
+
+def test_a_loop_that_inherits_the_default_state_timeout_is_allowed():
+    """An inheriting state can always be left, because the default is bounded
+    above zero — so leaving the timeouts alone is enough."""
+    result = parse(routine([
+        {"id": "a", "transitions": [{"when": "always", "to": "b"}]},
+        {"id": "b", "transitions": [{"when": "always", "to": "a"}]}]))
+    assert result.ok, result.errors
+
+
+def test_an_unspecified_timeout_is_inherited_not_baked_in():
+    """None means "ask the config every tick", which is what makes
+    state_timeout_default a live parameter rather than one frozen at save."""
+    result = parse(routine([{"id": "a", "terminal": True}]))
+    assert result.routines["r1"].states["a"].timeout is None
+
+
+# --- arming ------------------------------------------------------------------
+
+ARMING = routine([
+    {"id": "shoot", "drive": {"mode": "shooter_align"},
+     "on_enter": [{"do": "arm"}],
+     "transitions": [{"when": "shots", "at_least": 1, "to": "done"}]},
+    {"id": "done", "terminal": True}])
+
+
+def test_arming_is_refused_by_default():
+    """The one action a user-authored program can take that makes something
+    physically launch, so it is off unless the robot was told otherwise."""
+    result = parse(ARMING)
+    assert "disabled on this robot" in " ".join(result.errors)
+
+
+def test_arming_is_allowed_when_the_robot_permits_it():
+    result = parse(ARMING, allow_arm=True)
+    assert result.ok, result.errors
+
+
+def test_arming_is_refused_outside_a_shooter_align_state():
+    """Anywhere else there is no dwell, no cooldown and no magazine check —
+    the firing policy lives in the controller, so arming must too."""
+    result = parse(routine([
+        {"id": "shoot", "drive": {"mode": "manual", "throttle": 0},
+         "on_enter": [{"do": "arm"}]},
+        {"id": "done", "terminal": True}]), allow_arm=True)
+    assert "only allowed in a state that drives with shooter_align" in \
+        " ".join(result.errors)
+
+
+# --- conditions and actions --------------------------------------------------
+
+def test_an_unknown_condition_is_rejected():
+    result = parse(routine([
+        {"id": "a", "transitions": [{"when": "vibes", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert "unknown 'when'" in " ".join(result.errors)
+
+
+def test_a_condition_missing_a_required_field_is_rejected():
+    result = parse(routine([
+        {"id": "a", "transitions": [{"when": "elapsed", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert "missing 'seconds'" in " ".join(result.errors)
+
+
+def test_an_unknown_action_is_rejected():
+    result = parse(routine([
+        {"id": "a", "on_enter": [{"do": "explode"}], "terminal": True}]))
+    assert "unknown 'do'" in " ".join(result.errors)
+
+
+def test_an_action_missing_a_required_field_is_rejected():
+    result = parse(routine([
+        {"id": "a", "on_enter": [{"do": "mech_preset", "mech": "intake"}],
+         "terminal": True}]))
+    assert "missing 'preset'" in " ".join(result.errors)
+
+
+def test_conditions_compose():
+    result = parse(routine([
+        {"id": "a", "transitions": [{"to": "done", "when": "all", "of": [
+            {"when": "aligned"}, {"when": "elapsed", "seconds": 1}]}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+
+
+def test_a_composition_with_an_empty_list_is_rejected():
+    result = parse(routine([
+        {"id": "a", "transitions": [{"to": "done", "when": "any", "of": []}]},
+        {"id": "done", "terminal": True}]))
+    assert "non-empty list" in " ".join(result.errors)
+
+
+def test_a_broken_nested_condition_is_reported():
+    result = parse(routine([
+        {"id": "a", "transitions": [{"to": "done", "when": "all",
+                                     "of": [{"when": "nonsense"}]}]},
+        {"id": "done", "terminal": True}]))
+    assert "unknown 'when'" in " ".join(result.errors)
+
+
+# --- caps and junk -----------------------------------------------------------
+
+def test_too_many_states_are_refused():
+    states = [{"id": f"s{i}", "terminal": True}
+              for i in range(schema.MAX_STATES + 1)]
+    assert "at most" in " ".join(parse(routine(states)).errors)
+
+
+def test_too_many_routines_are_refused():
+    doc = routine([{"id": "a", "terminal": True}])
+    doc["routines"] *= (schema.MAX_ROUTINES + 1)
+    assert "at most" in " ".join(parse(doc).errors)
+
+
+def test_an_oversized_document_is_refused():
+    doc = routine([{"id": "a", "terminal": True}])
+    doc["pad"] = "x" * schema.MAX_DOC_BYTES
+    assert "at most" in " ".join(parse(doc).errors)
+
+
+def test_an_unsupported_version_is_refused():
+    assert not parse({"version": 99, "routines": []}).ok
+
+
+def test_junk_never_raises():
+    for junk in (None, [], "routine", 7, {"version": 1, "routines": "x"},
+                 {"version": 1, "routines": [None]},
+                 {"version": 1, "routines": [{"id": "a", "states": "x"}]},
+                 {"version": 1, "routines": [{"id": "a", "states": []}]}):
+        result = parse(junk)
+        assert not result.ok
+        assert result.errors
+
+
+def test_an_empty_document_is_valid_and_holds_no_routines():
+    result = parse({"version": 1, "routines": []})
+    assert result.ok
+    assert result.routines == {}

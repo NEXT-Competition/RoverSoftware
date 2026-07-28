@@ -116,8 +116,17 @@ class WaypointController(Controller):
             self._idx = 0
             self.heading_pid.reset()
 
+    def route_done(self) -> bool:
+        """True once every leg has been reached (telemetry, and FSM routines).
+
+        An empty route counts as done: a routine state that waits for "the route
+        is finished" before moving on must not hang forever because nobody
+        pushed one.
+        """
+        return self._idx >= len(self.waypoints)
+
     def update(self, dt: float) -> Optional[DriveCommand]:
-        if self.pose_provider is None or self._idx >= len(self.waypoints):
+        if self.pose_provider is None or self.route_done():
             return DriveCommand.stopped()
 
         pose = self.pose_provider()
