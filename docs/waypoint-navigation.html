@@ -463,13 +463,15 @@ bearing = atan2(y, x) &nbsp;<span style="color:var(--muted)">→ normalized 0–
         self._idx += <span class="kw">1</span>; pid.<span class="fn">reset</span>()
         <span class="kw">return</span> DriveCommand.<span class="fn">stopped</span>()
 
-    <span class="cmt"># stage 3 — steer</span>
+    <span class="cmt"># stage 3 — steer (which loop? see below)</span>
     err  = <span class="fn">_heading_error_deg</span>(<span class="fn">bearing_deg</span>(…), heading)
-    steer = self.heading_pid.<span class="fn">update</span>(err, dt)
+    steer = self.<span class="fn">_steer_for</span>(err, heading, dt, absolute)
 
-    <span class="cmt"># stage 4 — mix</span>
-    forward = cruise * <span class="fn">max</span>(<span class="kw">0.2</span>, <span class="kw">1</span> − <span class="fn">abs</span>(steer))
-    <span class="kw">return</span> DriveCommand.<span class="fn">arcade</span>(forward, steer)</code></pre>
+    <span class="cmt"># stage 4 — mix: pivot, or arc, or cruise</span>
+    <span class="kw">if</span> <span class="fn">abs</span>(err) &gt; pivot_threshold_deg:
+        <span class="kw">return</span> DriveCommand.<span class="fn">arcade</span>(
+            <span class="kw">0.0</span> <span class="kw">if</span> absolute <span class="kw">else</span> acquire_speed, steer)
+    <span class="kw">return</span> DriveCommand.<span class="fn">arcade</span>(cruise_speed, steer)</code></pre>
         </div>
         <div class="stack">
           <div class="card">
@@ -484,10 +486,12 @@ bearing = atan2(y, x) &nbsp;<span style="color:var(--muted)">→ normalized 0–
             <p style="margin-top:0;"><strong>State it carries between ticks</strong></p>
             <div class="kv">
               <div class="row"><span class="k">_idx</span><span class="v">current leg</span></div>
-              <div class="row"><span class="k">heading_pid</span><span class="v">integrator + last error</span></div>
+              <div class="row"><span class="k">heading_pid</span><span class="v">integrator + last error (IMU)</span></div>
+              <div class="row"><span class="k">gps_heading_pid</span><span class="v">the slower loop, for a GPS course</span></div>
+              <div class="row"><span class="k">_steer</span><span class="v">held output between GPS fixes</span></div>
             </div>
             <p style="color:var(--muted);font-size:14px;margin-bottom:0;">Reset together on activate, arrival,
-              and every new route.</p>
+              every new route, and whenever the heading changes sensor.</p>
           </div>
         </div>
       </div>

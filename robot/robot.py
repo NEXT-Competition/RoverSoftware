@@ -145,6 +145,7 @@ class Robot:
                     acquire_speed=config.nav.acquire_speed,
                     pivot_threshold_deg=config.nav.pivot_threshold_deg,
                     heading_pid=_pid(config.nav.heading_pid),
+                    gps_heading_pid=_pid(config.nav.gps_heading_pid),
                 ),
             }
             # The FSM mode. Constructed with the SAME dict it will be registered
@@ -240,12 +241,15 @@ class Robot:
         if self.fpv is not None and overlays is not None:
             self.fpv.set_overlay_provider(overlays)
 
-        # Give the waypoint controller the fused pose source and the IMU yaw-rate
-        # (for the heading PID's measured derivative).
+        # Give the waypoint controller the fused pose source, the IMU yaw-rate
+        # (for the heading PID's measured derivative), and which sensor actually
+        # answered — a GPS course over ground gets the slower gains and never
+        # pivots in place, because a pivot doesn't move the antenna.
         wp = controllers.get("waypoint")
         if isinstance(wp, WaypointController) and self.pose_provider is not None:
             wp.set_pose_provider(self.pose_provider)
             wp.set_rate_provider(self.pose_estimator.heading_rate)
+            wp.set_absolute_heading_provider(self.pose_estimator.heading_is_absolute)
 
         # Same idea for object_align: the detector is its "where is it", the IMU
         # yaw-rate its measured derivative. Note this is NOT gated on
@@ -599,6 +603,7 @@ class Robot:
                 c.acquire_speed = cfg.nav.acquire_speed
                 c.pivot_threshold_deg = cfg.nav.pivot_threshold_deg
                 _retune(c.heading_pid, cfg.nav.heading_pid)
+                _retune(c.gps_heading_pid, cfg.nav.gps_heading_pid)
         # Safe to assign directly: tuning.py restricts this to the same enum
         # PoseEstimator validates against.
         self.pose_estimator.heading_source = cfg.heading_source

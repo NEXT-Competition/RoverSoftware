@@ -175,7 +175,7 @@ from environment variables / CLI flags, and hands it to `Robot`.
 | `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5`, `update_rate_ms=1000` | Adafruit Ultimate GPS reader settings. |
 | `PIDConfig` | `kp`, `ki`, `kd`, `out_limit`, `i_limit` | Gains for one loop, so they are tunable rather than edit-and-redeploy constants. |
 | `AlignConfig` | `forward_speed=0.25`, `pivot_threshold=0.25`, `aligned_tolerance=0.05`, `search_after=0.5`, `search_timeout=10`, `pid` | The `object_align` / `shooter_align` state machine. |
-| `NavConfig` | `arrive_radius_m=2.0`, `cruise_speed=0.35`, `acquire_speed=0.4`, `pivot_threshold_deg=25`, `heading_pid` | Waypoint navigation. |
+| `NavConfig` | `arrive_radius_m=2.0`, `cruise_speed=0.35`, `acquire_speed=0.4`, `pivot_threshold_deg=25`, `heading_pid`, `gps_heading_pid` | Waypoint navigation. Two heading loops: `heading_pid` for an absolute IMU heading, the slower `gps_heading_pid` for a GPS course over ground. |
 | `RobotConfig` | `drive`, `comms`, `gps`, `align`, `nav`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5`, `heading_source="auto"` | Top-level composition. `heading_source`: `auto` (IMU, else the GPS track angle) \| `gps` \| `imu`. |
 
 > **ESC-as-servo mapping.** An ESC takes the same PWM as a servo — neutral pulse
@@ -627,11 +627,36 @@ heading_deg) | None` (heading: `0°` = North, clockwise positive).
    `_idx`, reset the PID, `stopped()` for one tick (a clean pause between legs).
 3. **Steer** — `bearing_deg(pos, target)` gives the target compass direction;
    `_heading_error_deg` wraps `bearing − heading` to the shortest signed turn
-   `[−180, 180]`; the heading `PID` (`kp=0.02, ki=0, kd=0.005, out_limit=0.7`)
-   turns that error into `steer`.
-4. **Mix** — `forward = cruise_speed · max(0.2, 1 − |steer|)` (slow down while
-   turning hard, but never below 20% of cruise), then
-   `DriveCommand.arcade(forward, steer)`.
+   `[−180, 180]`; a heading `PID` turns that error into `steer`. Error is in
+   DEGREES, which is why the gains look small — `kp=0.02` saturates a `0.6`
+   output at 30° of error, leaving the whole sub-pivot band proportional
+   instead of bang-bang.
+4. **Mix** — `|error| > pivot_threshold_deg` (25°) turns in place
+   (`arcade(0, steer)`); otherwise cruise and let the loop trim
+   (`arcade(cruise_speed, steer)`).
+
+**Which heading, and why it changes the loop.** `PoseEstimator.heading_is_absolute()`
+tells the controller whether the heading it just read is an IMU attitude or a GPS
+course over ground, and all three of these swing on it:
+
+| | IMU heading (absolute) | GPS track angle (course over ground) |
+|---|---|---|
+| gains | `nav.heading_pid` — `kp=0.02, ki=0.002, kd=0.008, out_limit=0.6` | `nav.gps_heading_pid` — `kp=0.008, ki=0, kd=0.006, out_limit=0.4` |
+| large error | pivot in place | **arc** at `acquire_speed` — a pivot doesn't move the antenna, so the track angle would freeze and the loop would spin against an error that never updates |
+| loop rate | every tick | every tick when a gyro supplies the derivative; otherwise once per **fresh** heading sample, with the true elapsed `dt`, holding the output in between |
+
+The GPS loop is deliberately about half the authority: it is closing around a
+sensor that refreshes at `gps.update_rate_ms` (1 Hz by default) while the control
+loop runs at 50 Hz, and it carries no integral at all — a course over ground has
+no steady-state bias to trim, and integrating a once-a-second error only winds
+up. Switching source mid-route (the IMU finishing calibration, or dropping out)
+resets both loops so neither inherits a stale integrator.
+
+If the GPS heading feels sluggish, the fix is upstream of the gains: raise the
+GPS fix rate (`gps.update_rate_ms` — and the module baud with it, see below),
+lower `gps.min_move_mps` so slower motion still yields a course, and keep an IMU
+in the loop even if only for `heading_rate()` — a gyro-fed derivative is the one
+thing that lets this loop run at full rate on a 1 Hz heading.
 
 Routes arrive live: `on_message({"type":"route","waypoints":[...]})` swaps the
 list in and resets to leg 0.
