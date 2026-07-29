@@ -192,7 +192,8 @@
 <tr><td>A tuning value came back different</td><td>It was clamped, not refused. The field shows what the robot is actually using.</td></tr>
 <tr><td>Waypoint mode steers but does not move</td><td>A steered chassis with <em>pivot creep</em> at zero. It cannot turn on the spot.</td></tr>
 <tr><td>The map is blank</td><td>No route to the tile provider. Point <code>--tiles</code> at a local server, or build a cache first with <code>tools/fetch_tiles.py</code>.</td></tr>
-<tr><td>The camera panel says "waiting for video"</td><td>FPV needs WiFi, not the radio. Start the robot with <code>--fpv --fpv-host &lt;base-ip&gt;</code>.</td></tr>
+<tr><td>The camera panel says "waiting for video"</td><td>FPV needs WiFi, not the radio — the rover has to be on the same network. Everything else is under Tuning → FPV video, which goes over the radio: switch <strong>Streaming enabled</strong> on, and check <strong>Base station host</strong> is this machine. Neither needs a restart.</td></tr>
+<tr><td>Tuning, Hardware or Routines never fills in</td><td>Those are fetched from the robot over the radio, in fragments. The tab retries a few times and then offers <strong>Ask again</strong> — if that keeps failing, the robot is off, out of range, or on a build old enough not to answer.</td></tr>
 <tr><td>Voice is dead but typing works</td><td>faster-whisper is not installed, or there is no microphone. The badges at the top of the Command screen say which.</td></tr>
 </tbody></table>
 </div>

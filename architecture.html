@@ -679,10 +679,10 @@ the first document push.</p>
 <code>False</code> means "not connected — you send it". So <code>comms.base_host</code> being blank, a
 base station that isn't up, and a rover driving out of WiFi range all degrade to
 exactly the pre-existing radio behaviour, decided per frame. Only the pacing
-changes with it — <code>Robot._drain_outbox</code> meters frames onto the radio at
-<code>OUTBOX_PER_TICK</code>, but empties the whole queue over WiFi, because there's no
-airtime to protect. A config snapshot that took ~100 ms of paced ticks lands in
-one.</p>
+changes with it — <code>Robot._drain_outbox</code> meters frames onto the radio at the
+radio's own byte rate, but empties the whole queue over WiFi, because there's no
+airtime to protect. A config snapshot that takes the better part of a second on
+the radio lands in one tick.</p>
 <h3 id="46-sensors"><a class="header" href="#46-sensors">4.6 Sensors</a></h3>
 <p><strong><code>gps.py</code> — Adafruit Ultimate GPS reader.</strong> See <a href="#6-gps-waypoint-autonomy">§6</a>.</p>
 <hr />
@@ -742,17 +742,27 @@ motor; partially applying it is exactly how two motors end up on one channel. So
 <code>comms/doc_transfer.py</code> slices the JSON text into numbered fragments and applies
 nothing until every fragment is in hand. The receiver is bounded: one transfer at
 a time, a 5 s timeout, a 32 KB cap. Acking is whole-document — the robot replies
-<code>layout_result</code> / <code>routines_result</code> after validating, and the base station
-retries the entire document once after 3 s of silence. No per-part NAKs: a save
-is a rare deliberate action, and whole-doc retry is a tenth of the code for the
-same reliability at this scale.</p>
-<p><strong>Multi-frame replies are paced, not burst.</strong> <code>XBeeLink.send</code> drops the frame and
-flushes when the radio isn't draining inside its 0.2 s write timeout, so firing
-ten frames inside one tick is precisely the shape that arrives incomplete.
-<code>Robot</code> queues them and drains two per control tick; the base station does the
-same in the other direction. Telemetry still goes direct — it is one small frame,
-it is what an operator most needs to be current, and delaying it behind a config
-dump is the wrong trade.</p>
+<code>layout_result</code> / <code>routines_result</code> after validating. No per-part NAKs: a save is
+a rare deliberate action, and the editor holds its draft until the ack arrives,
+so a save that got lost is visible as a Save button that stayed dirty.</p>
+<p><strong>Multi-frame traffic is metered against the line, not counted in frames.</strong>
+<code>comms/airtime.py</code> is a token bucket denominated in bytes and refilled at the
+link's own baud rate. Both ends used to pace in <em>frames per tick</em>, which reads
+like pacing and isn't: the robot's two frames per 50 Hz tick is 100 frames a
+second, and at ~430 bytes a frame that is 43 kB/s offered to a link that carries
+5.8. The buffer fills, <code>serial.write</code> hits its 0.2 s timeout, and the frame is
+dropped to keep the control loop alive — and what gets dropped is a fragment of
+a document, which is all-or-nothing, so the settings page stays blank forever.</p>
+<p>So <code>XBeeLink</code> has two doors. <code>send()</code> is realtime (drive, telemetry, e-stop):
+it goes now and is <em>charged</em> afterwards, so bulk gives way to it rather than
+competing. <code>send_bulk()</code> answers whether the caller is <strong>done with the frame</strong> —
+<code>False</code> means the link is merely busy and the frame stays at the head of the
+queue, <code>True</code> means written <em>or</em> unwritable (a dead port never will take it, and
+hoarding it would turn a queue into a leak). Both <code>Robot._drain_outbox</code> and the
+base station's <code>drain_documents</code> pop only on <code>True</code>.</p>
+<p>The dashboard closes the loop from the other side: <code>state/fetch.ts</code> re-asks a
+document that hasn't arrived, three times over eight seconds, and then says so
+with a button instead of leaving "Fetching…" on screen forever.</p>
 <p>The base station rate-limits <code>drive</code> frames it sends (see <a href="#7-the-base-station">§7</a>)
 so a fast gamepad stream doesn't back up a slow radio.</p>
 <hr />
@@ -932,7 +942,27 @@ robot wins) and <code>app.py</code> relays them as browser-native MJPEG at
 <code>/video/{robot_id}.mjpg</code>, which the dashboard shows in an <code>&lt;img&gt;</code>. FPV is
 independent of the model — it needs only a camera and OpenCV, so live view works
 with no <code>.eim</code> at all. Off by default (<code>RS_FPV_ENABLED</code>), since it needs the base
-station's IP.</p>
+station's IP — but that is a starting position, not a commitment; see below.</p>
+<p>Whether it streams and where it streams are both <strong>live</strong>, driven from the
+Tuning tab over the radio. <code>_push_live_config</code> hands <code>fpv.base_host</code> /
+<code>fpv.base_port</code> to <code>FPVStreamer.retarget()</code>, which rebuilds its <code>VideoSender</code> on
+the next frame, and <code>fpv.enabled</code> to <code>start()</code> / <code>stop(wait=False)</code>. This matters
+more than it sounds: the address belongs to whichever laptop is running the base
+station today, the robot only ever learns it over the radio, and a rover that
+needed a service restart to switch its camera on or re-aim it is one you cannot
+see out of at exactly the moment you cannot go and get it. Rebuilding rather
+than adjusting is also how a hostname that only started resolving later gets
+picked up — <code>VideoSender</code> resolves once, in its constructor.</p>
+<p>Three details make the switch safe. The <code>Camera</code> is <em>constructed</em> whenever one
+is configured but only <em>opened</em> by its first consumer, so a robot that booted
+with no detector and no feed leaves the device shut and still gets a picture
+when you ask for one an hour later — <code>Camera.start()</code> is idempotent and opens on
+its own thread, so the control loop never blocks on it. The off switch does not
+join: the streamer sleeps up to a frame interval, and waiting that out would
+stall a control tick to save nothing, so the loop notices the flag and closes
+its own socket in a <code>finally</code>. And <code>start()</code> on a loop that is still winding
+down re-arms the flag instead of spawning a second one, which is what makes
+flipping the switch off and straight back on harmless.</p>
 <p>When a model <em>is</em> running, the streamer draws the detection boxes onto each
 frame before encoding (green for the tracked target, amber for the rest). The
 boxes come from the detector via an injected <code>overlay_provider</code>, in full-frame
