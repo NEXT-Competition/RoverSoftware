@@ -675,14 +675,29 @@ out</strong> (mirroring the video path, and avoiding having to discover a rover'
 address on a DHCP field network); the base station keys sockets by the <code>from</code> on
 anything a robot sends, plus a <code>hello</code> on connect so the mapping exists before
 the first document push.</p>
-<p><strong>The fallback is the design.</strong> <code>send()</code> returns a <em>bool</em> rather than raising:
-<code>False</code> means "not connected — you send it". So <code>comms.base_host</code> being blank, a
-base station that isn't up, and a rover driving out of WiFi range all degrade to
-exactly the pre-existing radio behaviour, decided per frame. Only the pacing
-changes with it — <code>Robot._drain_outbox</code> meters frames onto the radio at the
-radio's own byte rate, but empties the whole queue over WiFi, because there's no
-airtime to protect. A config snapshot that takes the better part of a second on
-the radio lands in one tick.</p>
+<p><strong>Over WiFi or not at all.</strong> <code>send()</code> returns a <em>bool</em> rather than raising:
+<code>False</code> means "not connected". There is no radio fallback for bulk traffic — a
+snapshot is half a second of a channel shared with every robot's telemetry, and
+nothing about it is urgent, so a rover with a blank <code>comms.base_host</code>, a base
+station that isn't up, or a drive out of WiFi range simply <strong>isn't configurable
+until the link is back</strong>. It keeps driving, reporting and answering the e-stop
+throughout, because that is what the radio is for. Both ends say so rather than
+going quiet: the robot logs the dropped frames (<code>Robot._drain_outbox</code>) and the
+base station puts the reason where the settings page renders it
+(<code>FleetManager.note_unreachable</code>), so "not on WiFi" is stated, not inferred.</p>
+<p>Pacing follows from the same split. <code>Robot._drain_outbox</code> empties the whole
+queue over WiFi in one tick because there's no airtime to protect; the metering
+in <code>airtime.py</code> now only applies to the one frame type below.</p>
+<p><strong>The bootstrap exception.</strong> A <code>set_config</code> carrying nothing but
+<code>comms.base_host</code> / <code>comms.base_port</code> <em>does</em> go over the radio — it is how a
+rover is told where the WiFi link is, and requiring the link to configure the
+link is a chicken-and-egg that ends with an SSH session and a text editor. The
+test is all-or-nothing (<code>tuning.is_bootstrap</code>): a frame that slips a PID gain in
+beside the hostname is an ordinary config edit and waits for WiFi like one.
+~60 bytes, sent by hand, once. Both settings are <code>live=True</code> — <code>Robot</code>
+re-dials on the spot (<code>_retarget_ip_link</code>, on its own thread because <code>stop()</code>
+can block on a parked reader), so the new address takes effect without the
+service restart that would have meant walking out to the rover anyway.</p>
 <h3 id="46-sensors"><a class="header" href="#46-sensors">4.6 Sensors</a></h3>
 <p><strong><code>gps.py</code> — Adafruit Ultimate GPS reader.</strong> See <a href="#6-gps-waypoint-autonomy">§6</a>.</p>
 <hr />
@@ -692,11 +707,13 @@ the radio lands in one tick.</p>
 (<code>basestation.env</code>, default <strong>57600</strong>) <strong>must match each robot's</strong> <code>RS_XBEE_BAUD</code>
 — a mismatch delivers only garbage frames.</p>
 <blockquote>
-<p>The same message set also travels over WiFi when both ends are configured for
-it, but only the bulk half: <code>config</code>, <code>fields</code>, <code>layout</code>, <code>routines</code> and their
-<code>put_*</code>/<code>*_result</code> counterparts. Realtime frames — <code>drive</code>, <code>telemetry</code>,
-<code>mode</code>, <code>estop</code> — never leave the radio, because the radio is what has the
-range. See <a href="#45-comms-layer">§4.5</a>.</p>
+<p>Only the realtime half of this message set actually travels on the radio:
+<code>drive</code>, <code>telemetry</code>, <code>mode</code>, <code>estop</code>. The bulk half — <code>config</code>, <code>fields</code>,
+<code>layout</code>, <code>routines</code> and their <code>put_*</code>/<code>*_result</code> counterparts — travels over
+WiFi and does not fall back here, because the radio is what has the range and
+a config dump is what spends it. The single exception is a <code>set_config</code>
+carrying only <code>comms.base_host</code>/<code>comms.base_port</code>, which is how a rover is
+told where the WiFi link is. See <a href="#45-comms-layer">§4.5</a>.</p>
 </blockquote>
 <pre><code class="language-jsonc">// base station -&gt; robot
 {"type":"drive","throttle":0.5,"steer":-0.2,"to":"rover1"}  // arcade mixing
@@ -1283,7 +1300,7 @@ Each maps to a CLI flag on the respective entry point.</p>
 <div class="table-wrapper"><table><thead><tr><th>Env</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
 <tr><td><code>RS_ROBOT_ID</code></td><td><code>rover1</code></td><td>Unique id on the shared channel.</td></tr>
 <tr><td><code>RS_XBEE_PORT</code> / <code>RS_XBEE_BAUD</code></td><td><code>/dev/ttyUSB0</code> / <code>9600</code></td><td>XBee serial. Baud must match the base station.</td></tr>
-<tr><td><code>RS_BASE_HOST</code> / <code>RS_BASE_PORT</code></td><td><em>(blank)</em> / <code>5006</code></td><td>Base station host for WiFi bulk transfers (config, layouts, routines). Blank keeps everything on the radio; unreachable falls back to it per frame.</td></tr>
+<tr><td><code>RS_BASE_HOST</code> / <code>RS_BASE_PORT</code></td><td><em>(blank)</em> / <code>5006</code></td><td>Base station host for WiFi bulk transfers (config, layouts, routines). Blank or unreachable means those simply don't move — driving, telemetry and the e-stop are unaffected. Settable from the base station over the radio (the one config that is) and applied without a restart.</td></tr>
 <tr><td><code>RS_START_MODE</code></td><td><code>teleop</code></td><td><code>teleop</code> | <code>object_align</code> | <code>shooter_align</code> | <code>waypoint</code> | <code>routine</code>.</td></tr>
 <tr><td><code>RS_LOOP_HZ</code> / <code>RS_TELEMETRY_HZ</code></td><td><code>50</code> / <code>5</code></td><td>Control-loop and telemetry rates.</td></tr>
 <tr><td><code>RS_MOCK_MOTORS</code></td><td><code>0</code></td><td>Force mock servos (no HAT).</td></tr>
