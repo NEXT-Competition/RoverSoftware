@@ -44,6 +44,7 @@ from typing import Any, Optional, Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
+from robot import tuning
 from robot.comms.doc_transfer import split
 
 from .command import CommandExecutor
@@ -52,6 +53,13 @@ from .fleet import FleetManager
 from .places import PlaceStore
 from .settings import SettingsStore
 from .tiles import TileStore, attribution_for, content_type
+
+# What the dashboard says when a robot can't be configured. One sentence, and it
+# names the fix: the radio is up (you can see the rover moving) but config does
+# not travel on it, so "offline" would be a lie and "no response" unhelpful.
+OFFLINE_HINT = ("This robot is not on WiFi. Configuration, layouts and routines "
+                "travel over the WiFi link, not the radio — bring it into range, "
+                "or set comms.base_host to point it at this base station.")
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None,
               settings: SettingsStore | None = None, ip_server=None,
@@ -92,29 +100,79 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         if robot_id:
             link.send({**msg, "to": robot_id})
 
+    def _in_process_link() -> bool:
+        """True for the simulator: robots in this process, with no wire at all.
+
+        There is no radio to protect and no socket to dial in on, so none of the
+        rules below apply to it — everything goes straight down `link.send`.
+        """
+        return getattr(link, "send_bulk", None) is None
+
+    def _bulk_ready(robot_id) -> bool:
+        """Is there a link that will carry kilobytes to this robot right now?"""
+        if _in_process_link():
+            return True
+        return bool(robot_id and ip_server is not None
+                    and ip_server.is_connected(robot_id))
+
     def dispatch_bulk(robot_id, msg: dict) -> bool:
-        """Offer one bulk frame to a link. False means "not now, keep it".
+        """Offer one bulk frame to the WiFi link. False means "not now, keep it".
 
-        WiFi first: a robot on the LAN costs no airtime at all, so its fragments
-        go as fast as we can hand them over. Otherwise the radio, which takes a
-        frame only when it has the airtime for it (robot/comms/airtime.py). A
-        robot at the far end of the field simply isn't in `ip_server`, so it
-        keeps getting documents over the radio with no special handling here.
+        Documents go over WiFi or not at all. A layout is kilobytes on a channel
+        shared with every robot's telemetry, and unlike a drive frame nothing
+        about it is urgent — so a robot out at the far end of the field waits
+        for WiFi rather than spending the radio on it. Undeliverable frames are
+        reported to the editor (see `deliver_or_report`) instead of queueing
+        against a link that isn't coming back this match.
 
-        The False-means-keep-it rule is the whole point. Half a layout is not a
-        smaller layout, and a fragment dropped because the radio was busy is one
-        nobody re-requests.
+        The False-means-keep-it rule still holds for a robot that IS on WiFi:
+        half a layout is not a smaller layout, and a fragment dropped because a
+        socket was mid-reconnect is one nobody re-requests.
         """
         if not robot_id:
             return True  # nowhere to send it; drop it rather than queue forever
-        if ip_server is not None and ip_server.send({**msg, "to": robot_id}):
-            return True
-        send_bulk = getattr(link, "send_bulk", None)
-        if send_bulk is None:
-            # The simulator and any other in-process link: no wire, no pacing.
+        if _in_process_link():
             link.send({**msg, "to": robot_id})
             return True
-        return bool(send_bulk({**msg, "to": robot_id}))
+        return bool(ip_server is not None and ip_server.send({**msg, "to": robot_id}))
+
+    def dispatch_config(robot_id, msg: dict) -> bool:
+        """Send one config command over WiFi. False means it could not be sent.
+
+        The radio carries driving, telemetry and the e-stop. Configuration —
+        get_config, set_config, and the document/field requests whose REPLIES
+        are kilobytes — carries none of that urgency and all of the weight, so
+        it rides the WiFi link (robot/comms/ip_link.py) and waits when there
+        isn't one.
+
+        One exception, and it is the reason this function exists rather than
+        just calling `ip_server.send`: a set_config carrying nothing but
+        comms.base_host/base_port is how a rover is TOLD where the WiFi link is.
+        That one cannot require the link it configures, so it goes over the
+        radio — ~60 bytes, by hand, once. See tuning.BOOTSTRAP_PATHS.
+        """
+        if not robot_id:
+            return False
+        if _in_process_link():
+            link.send({**msg, "to": robot_id})
+            return True
+        if ip_server is not None and ip_server.send({**msg, "to": robot_id}):
+            return True
+        if tuning.is_bootstrap(msg.get("config")):
+            link.send({**msg, "to": robot_id})
+            return True
+        return False
+
+    def deliver_or_report(robot_id, msg: dict) -> None:
+        """dispatch_config, but a failure reaches the operator's page.
+
+        A settings page that just stays blank is the failure mode this whole
+        path is trying not to have. `fleet.note_unreachable` puts the reason
+        where the config result already renders, so "the rover is not on WiFi"
+        is something the dashboard says rather than something you infer.
+        """
+        if not dispatch_config(robot_id, msg):
+            fleet.note_unreachable(robot_id, OFFLINE_HINT)
 
     # Outbound document fragments, metered rather than dispatched in a loop. The
     # robot's own outbox does this in the other direction and for the same
@@ -127,20 +185,41 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     _txid = {"n": 0}
 
     def send_document(robot_id, action: str, doc: dict, save: bool) -> None:
+        mtype = "put_layout" if action == "set_layout" else "put_routines"
         if not robot_id:
             return
+        if not _bulk_ready(robot_id):
+            # Refuse up front rather than queueing against a link that isn't
+            # there. The editor's Save button gets an answer either way; a
+            # document sitting in a queue for a rover that never comes back on
+            # WiFi is the version that looks saved and isn't.
+            fleet.note_doc_unreachable(robot_id, mtype, OFFLINE_HINT)
+            return
         _txid["n"] += 1
-        mtype = "put_layout" if action == "set_layout" else "put_routines"
         for frame in split(doc, mtype, txid=f"B{_txid['n']}", save=save):
             _doc_queue.append((robot_id, frame))
 
     async def drain_documents() -> None:
         # Frames leave the queue only once a link has taken them, so a cycle
-        # where the radio has no airtime left simply defers the rest to the next
-        # one. Over WiFi nothing is ever refused and a whole layout goes in a
-        # single cycle.
-        while _doc_queue and dispatch_bulk(*_doc_queue[0]):
-            _doc_queue.popleft()
+        # where a socket is briefly busy simply defers the rest to the next one.
+        # A refusal that ISN'T transient — the robot has dropped off WiFi — means
+        # the rest of this document has nowhere to go: drop what is queued for
+        # that robot and say so, because a half-sent layout is one the robot
+        # will never assemble and nobody will re-request.
+        while _doc_queue:
+            robot_id, frame = _doc_queue[0]
+            if dispatch_bulk(robot_id, frame):
+                _doc_queue.popleft()
+                continue
+            if _bulk_ready(robot_id):
+                return  # transient; keep our place and try again next cycle
+            dropped = {f.get("type") for rid_, f in _doc_queue if rid_ == robot_id}
+            survivors = [item for item in _doc_queue if item[0] != robot_id]
+            _doc_queue.clear()
+            _doc_queue.extend(survivors)
+            for mtype in dropped:
+                fleet.note_doc_unreachable(robot_id, mtype or "put_layout",
+                                           OFFLINE_HINT)
 
     # ---- gamepad -> currently selected robot ----
     # Rate-limit drive frames so we don't flood a slow XBee link (at 9600 baud a
@@ -234,21 +313,19 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # is the one that can be out of date or disconnected.
             dispatch(rid, {"type": action})
         # ---- configuration ----
+        # All of it over WiFi (dispatch_config), because all of it is kilobytes
+        # of something nobody is waiting on. Still explicit, never polled: the
+        # pages ask once when they open.
         elif action == "get_config":
-            # Explicit, never polled: the reply is ~2.4 KB and the radio is
-            # shared with telemetry. The settings page asks once when opened.
-            dispatch(rid, {"type": "get_config"})
+            deliver_or_report(rid, {"type": "get_config"})
         elif action == "set_config":
             values = data.get("config")
             if isinstance(values, dict) and values:
-                dispatch(rid, {"type": "set_config", "config": values,
-                               "save": bool(data.get("save", True))})
+                deliver_or_report(rid, {"type": "set_config", "config": values,
+                                        "save": bool(data.get("save", True))})
         # ---- documents (hardware layout, FSM routines) ----
         elif action in ("get_layout", "get_routines", "get_fields"):
-            # Explicit, never polled — same rule as get_config. These are
-            # kilobytes on a radio shared with telemetry, and the editors ask
-            # once when they open.
-            dispatch(rid, {"type": action})
+            deliver_or_report(rid, {"type": action})
         elif action in ("set_layout", "set_routines"):
             doc = data.get("doc")
             if isinstance(doc, dict):

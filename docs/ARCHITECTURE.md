@@ -556,14 +556,31 @@ address on a DHCP field network); the base station keys sockets by the `from` on
 anything a robot sends, plus a `hello` on connect so the mapping exists before
 the first document push.
 
-**The fallback is the design.** `send()` returns a *bool* rather than raising:
-`False` means "not connected — you send it". So `comms.base_host` being blank, a
-base station that isn't up, and a rover driving out of WiFi range all degrade to
-exactly the pre-existing radio behaviour, decided per frame. Only the pacing
-changes with it — `Robot._drain_outbox` meters frames onto the radio at the
-radio's own byte rate, but empties the whole queue over WiFi, because there's no
-airtime to protect. A config snapshot that takes the better part of a second on
-the radio lands in one tick.
+**Over WiFi or not at all.** `send()` returns a *bool* rather than raising:
+`False` means "not connected". There is no radio fallback for bulk traffic — a
+snapshot is half a second of a channel shared with every robot's telemetry, and
+nothing about it is urgent, so a rover with a blank `comms.base_host`, a base
+station that isn't up, or a drive out of WiFi range simply **isn't configurable
+until the link is back**. It keeps driving, reporting and answering the e-stop
+throughout, because that is what the radio is for. Both ends say so rather than
+going quiet: the robot logs the dropped frames (`Robot._drain_outbox`) and the
+base station puts the reason where the settings page renders it
+(`FleetManager.note_unreachable`), so "not on WiFi" is stated, not inferred.
+
+Pacing follows from the same split. `Robot._drain_outbox` empties the whole
+queue over WiFi in one tick because there's no airtime to protect; the metering
+in `airtime.py` now only applies to the one frame type below.
+
+**The bootstrap exception.** A `set_config` carrying nothing but
+`comms.base_host` / `comms.base_port` *does* go over the radio — it is how a
+rover is told where the WiFi link is, and requiring the link to configure the
+link is a chicken-and-egg that ends with an SSH session and a text editor. The
+test is all-or-nothing (`tuning.is_bootstrap`): a frame that slips a PID gain in
+beside the hostname is an ordinary config edit and waits for WiFi like one.
+~60 bytes, sent by hand, once. Both settings are `live=True` — `Robot`
+re-dials on the spot (`_retarget_ip_link`, on its own thread because `stop()`
+can block on a parked reader), so the new address takes effect without the
+service restart that would have meant walking out to the rover anyway.
 
 ### 4.6 Sensors
 
@@ -578,11 +595,13 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 (`basestation.env`, default **57600**) **must match each robot's** `RS_XBEE_BAUD`
 — a mismatch delivers only garbage frames.
 
-> The same message set also travels over WiFi when both ends are configured for
-> it, but only the bulk half: `config`, `fields`, `layout`, `routines` and their
-> `put_*`/`*_result` counterparts. Realtime frames — `drive`, `telemetry`,
-> `mode`, `estop` — never leave the radio, because the radio is what has the
-> range. See [§4.5](#45-comms-layer).
+> Only the realtime half of this message set actually travels on the radio:
+> `drive`, `telemetry`, `mode`, `estop`. The bulk half — `config`, `fields`,
+> `layout`, `routines` and their `put_*`/`*_result` counterparts — travels over
+> WiFi and does not fall back here, because the radio is what has the range and
+> a config dump is what spends it. The single exception is a `set_config`
+> carrying only `comms.base_host`/`comms.base_port`, which is how a rover is
+> told where the WiFi link is. See [§4.5](#45-comms-layer).
 
 ```jsonc
 // base station -> robot
@@ -1223,7 +1242,7 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
-| `RS_BASE_HOST` / `RS_BASE_PORT` | *(blank)* / `5006` | Base station host for WiFi bulk transfers (config, layouts, routines). Blank keeps everything on the radio; unreachable falls back to it per frame. |
+| `RS_BASE_HOST` / `RS_BASE_PORT` | *(blank)* / `5006` | Base station host for WiFi bulk transfers (config, layouts, routines). Blank or unreachable means those simply don't move — driving, telemetry and the e-stop are unaffected. Settable from the base station over the radio (the one config that is) and applied without a restart. |
 | `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint` \| `routine`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |

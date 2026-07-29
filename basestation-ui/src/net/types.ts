@@ -118,6 +118,11 @@ export interface RobotConfigEntry {
     rejected: Record<string, string>; // path -> why it was refused
     restart: string[]; // applied, but only takes effect after a restart
     save_error: string | null; // applied but not persisted (read-only FS)
+    // The edit never reached the robot at all. Config travels over the WiFi
+    // link, never the radio (robot/comms/ip_link.py), so a rover that is
+    // driving perfectly well can still be unconfigurable — which is exactly the
+    // case an operator would otherwise read as "the page is broken".
+    error?: string | null;
   } | null;
 }
 

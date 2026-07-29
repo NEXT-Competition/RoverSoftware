@@ -20,17 +20,27 @@ robot is already configured with the base's host) and avoids needing to discover
 a rover's address on a DHCP field network — outbound also survives the usual
 firewall/NAT asymmetry.
 
---- The fallback is the whole design ---
-WiFi is opportunistic; the radio is what has the range. So `send()` returns a
-BOOL rather than raising: True means it went out over IP, False means "not
-connected — you send it". Callers keep their radio path and use it whenever
-this one is down, which makes an unreachable base station, a dropped access
-point, or `base_host` simply not being configured all degrade to exactly the
-behaviour that existed before this module.
+--- This link or nothing ---
+`send()` returns a BOOL rather than raising: True means it went out, False means
+"not connected". False is NOT an instruction to try the radio. Bulk traffic has
+no radio path any more — an unreachable base station, a dropped access point or
+an unconfigured `base_host` all mean the same thing, which is that this robot
+cannot be configured until the link is back. It keeps driving, reporting and
+answering the e-stop over the radio the whole time; those are what the range is
+for, and spending it on a config dump is what this module exists to stop.
+
+The one thing that still travels the other way is the ADDRESS of this link
+(robot/tuning.py::BOOTSTRAP_PATHS) — a rover pointed at no base station has no
+WiFi path to be told about one, so that single ~60-byte frame goes by radio.
+
+--- The fallback that remains ---
+Between the two ends, though, `False` still means "keep the frame". The callers
+above (Robot._drain_outbox, basestation/app.py) only remove a frame once a link
+has taken it, because half a document is not a smaller document.
 
 Nothing here retransmits or acknowledges: TCP already does, and a frame handed
-to a dead socket is reported False so the caller can fall back rather than
-having it silently queued into a socket that will never drain.
+to a dead socket is reported False so the caller can decide rather than having
+it silently queued into a socket that will never drain.
 """
 
 from __future__ import annotations

@@ -19,6 +19,9 @@ ONLINE_TIMEOUT = 3.0  # seconds without telemetry before a robot is "offline"
 # Chunked documents a robot sends, and the verdicts it returns on ones we sent.
 _DOC_TYPES = ("layout", "routines", "fields")
 _DOC_RESULTS = {"layout_result": "layout", "routines_result": "routines"}
+# The same two documents named by what we SEND, which is what a delivery failure
+# knows about — there is no reply to key on when nothing was delivered.
+_DOC_SENDS = {"put_layout": "layout", "put_routines": "routines"}
 
 
 @dataclass
@@ -177,9 +180,49 @@ class FleetManager:
                 "rejected": msg.get("rejected") or {},
                 "restart": msg.get("restart") or [],
                 "save_error": msg.get("save_error"),
+                # Cleared explicitly: a real answer from the robot is proof the
+                # link is back, and a stale "not on WiFi" banner sitting above a
+                # page that has just updated is worse than no banner at all.
+                "error": None,
             }
             st.config_rev += 1
         return robot_id
+
+    def note_unreachable(self, robot_id: Optional[str], reason: str) -> None:
+        """Record that a config command could not be delivered.
+
+        Written into the same `config_result` the robot's own answers land in,
+        because it is the same question the page is asking — "what happened to
+        my edit?" — and the answer wants to appear in the same place. The rev
+        bump is what pushes it: `configs()` only reports robots whose rev has
+        moved, so this also makes the entry exist for a robot that has never
+        managed to send a config at all.
+        """
+        if not robot_id:
+            return
+        with self._lock:
+            st = self._ensure(robot_id)
+            st.config_result = {"rejected": {}, "restart": [],
+                                "save_error": None, "error": reason}
+            st.config_rev += 1
+
+    def note_doc_unreachable(self, robot_id: Optional[str], mtype: str,
+                             reason: str) -> None:
+        """Same, for a layout or routine document that could not be sent.
+
+        Shaped exactly like the robot's own verdict on a document it rejected,
+        so the editors need no second code path for "it never got there".
+        """
+        field_name = _DOC_SENDS.get(mtype)
+        if not robot_id or field_name is None:
+            return
+        with self._lock:
+            st = self._ensure(robot_id)
+            setattr(st, f"{field_name}_result", {
+                "ok": False, "errors": [reason], "warnings": [],
+                "save_error": None, "restart_required": False,
+            })
+            setattr(st, f"{field_name}_rev", getattr(st, f"{field_name}_rev") + 1)
 
     def update_from_document(self, msg: dict) -> Optional[str]:
         """Absorb a document fragment, or a robot's verdict on one we sent.

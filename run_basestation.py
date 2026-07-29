@@ -98,14 +98,16 @@ def main():
                    help="UDP port the robots stream FPV video to")
     p.add_argument("--video-hz", type=float, default=float(_env("RS_VIDEO_HZ", 20)),
                    help="max MJPEG frame rate served to browsers")
-    # Bulk transfers (config snapshots, layouts, routines) over WiFi instead of
-    # the radio; see robot/comms/ip_link.py. Robots dial in, so this only needs
-    # the port. Robots that aren't connected keep using the radio, so leaving it
-    # on costs nothing.
+    # Bulk transfers (config snapshots, layouts, routines) over WiFi; see
+    # robot/comms/ip_link.py. Robots dial in, so this only needs the port.
+    # Turning it OFF means no robot can be configured from here at all — that
+    # traffic does not use the radio — so leave it on unless you are deliberately
+    # taking the settings pages out of service.
     p.add_argument("--no-bulk-ip", dest="bulk_ip", action="store_false",
                    default=os.environ.get("RS_BULK_IP", "1").strip().lower()
                    in ("1", "true", "yes", "on"),
-                   help="disable the WiFi bulk-transfer listener (everything on the radio)")
+                   help="disable the WiFi bulk-transfer listener "
+                        "(no config, layout or routine transfers at all)")
     p.add_argument("--bulk-port", type=int, default=int(_env("RS_BULK_PORT", 5006)),
                    help="TCP port robots connect to for config/layout/routine transfers")
     # ---- commanding in words (basestation/command/) ----

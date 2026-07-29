@@ -327,7 +327,30 @@ def rover(monkeypatch, tmp_path):
     # isn't waiting out that pacing; tests/test_airtime.py exercises it.
     bot.link.send_bulk = take
     bot.sent = sent
+    # Documents travel over the robot's WiFi link, never the radio (see
+    # robot/robot.py::_drain_outbox), so a rover with no link would drop every
+    # reply below. `bot.sent` is what the base station receives either way.
+    bot.ip_link = _FakeIP(sent)
     return bot
+
+
+class _FakeIP:
+    """A connected IPLink that records into the same list as the fake radio.
+
+    Which link carried what is tested in tests/test_robot_config.py; here it
+    only has to exist, so the reply lands somewhere the assertions can see it.
+    """
+
+    def __init__(self, sink):
+        self.sent = sink
+        self.host, self.port = "base.local", 5006
+
+    def is_connected(self):
+        return True
+
+    def send(self, msg):
+        self.sent.append(msg)
+        return True
 
 
 def deliver(bot, msg):

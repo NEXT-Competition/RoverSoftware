@@ -6,6 +6,7 @@ import collections
 import os
 import queue
 import signal
+import threading
 import time
 from typing import Callable, Dict, Optional, Tuple
 
@@ -101,10 +102,11 @@ class Robot:
             self._registry["shooter"] = self.shooter
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
-        # Multi-frame replies (a config snapshot, a layout, a routine set) are
-        # metered onto the radio at the rate it can actually carry rather than
-        # burst at it. See _queue.
-        self._outbox: "collections.deque[dict]" = collections.deque(maxlen=OUTBOX_MAX)
+        # Multi-frame replies (a config snapshot, a layout, a routine set) wait
+        # here for the WiFi link. Each entry is (frame, radio_ok), where the flag
+        # marks the one kind of frame still allowed onto the radio. See _queue.
+        self._outbox: "collections.deque[Tuple[dict, bool]]" = collections.deque(
+            maxlen=OUTBOX_MAX)
 
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
@@ -163,12 +165,14 @@ class Robot:
         # loop by funneling through a thread-safe queue.
         self._inbox: "queue.Queue[dict]" = queue.Queue()
         self.link = XBeeLink(config.comms.port, config.comms.baud, self._inbox.put)
-        # Bulk transfers go over WiFi when the base station is reachable, so a
-        # ~2.9 KB config snapshot stops costing half a second of shared airtime
-        # (and stops being the thing that makes telemetry frames get dropped).
-        # Unconfigured or unreachable -> every send() declines and the radio
-        # carries it, which is byte-for-byte the old behaviour. Inbound frames
-        # join the SAME inbox, so _drain_inbox can't tell how one arrived.
+        # Bulk transfers go over WiFi, full stop: a ~2.9 KB config snapshot is
+        # half a second of airtime on a channel shared with every robot, and it
+        # is telemetry that gets dropped to make room. Unconfigured or
+        # unreachable means config and documents simply don't move — the radio
+        # keeps carrying driving, telemetry and the e-stop, which is what it is
+        # for. The one exception is the address of this link itself; see
+        # tuning.BOOTSTRAP_PATHS and _retarget_ip_link. Inbound frames join the
+        # SAME inbox, so _drain_inbox can't tell how one arrived.
         self.ip_link: Optional[IPLink] = (
             IPLink(config.comms.base_host, config.comms.base_port,
                    self._inbox.put, config.robot_id)
@@ -373,11 +377,16 @@ class Robot:
         return {"type": "config", "from": self.cfg.robot_id, "config": values, **extra}
 
     def _send_config(self) -> None:
-        """Answer get_config, split into radio-sized frames (see tuning.chunks)."""
+        """Answer get_config, split into small frames (see tuning.chunks).
+
+        The chunking predates the WiFi link and outlives it: it is also what
+        keeps a partial transfer useful, since the base station MERGES config
+        frames rather than replacing on each one.
+        """
         for part in tuning.chunks(tuning.snapshot(self.cfg)):
             self._queue(self._config_frame(part))
 
-    def _queue(self, msg: dict) -> None:
+    def _queue(self, msg: dict, radio_ok: bool = False) -> None:
         """Hand a frame to the paced outbox instead of the radio directly.
 
         A multi-frame reply written all at once overruns the radio: the write
@@ -389,36 +398,70 @@ class Robot:
         one small frame, it is the thing an operator most needs to be current,
         and delaying it behind a config dump is the wrong trade.
 
-        This queue is also exactly the traffic that moves to WiFi when there is
-        any — bulk, non-realtime, and too big for the shared channel. See
+        This queue is the traffic that belongs on WiFi: bulk, non-realtime, and
+        too big for a channel shared with every robot on the field. It now goes
+        there or nowhere — `radio_ok=True` is the bootstrap exception (see
+        tuning.BOOTSTRAP_PATHS) and nothing else should set it. See
         _drain_outbox.
         """
-        self._outbox.append(msg)
+        self._outbox.append((msg, radio_ok))
 
     def _drain_outbox(self) -> None:
-        """Empty the outbox: over WiFi if we have it, otherwise paced onto the radio.
+        """Empty the outbox over WiFi. The radio carries only bootstrap frames.
 
         On WiFi there is no airtime to protect and no write timeout to lose
         frames to, so the whole queue goes at once — a config snapshot that took
-        the better part of a second on the radio lands in one tick. If the link
-        drops mid-drain, send() declines and the remainder simply waits for the
-        radio path below.
+        the better part of a second on the radio lands in one tick.
 
-        Either way a frame is only removed once a link has accepted it. A `False`
-        from send_bulk means the radio has no airtime this tick, not that the
-        frame is gone, and popping it anyway is the bug this whole path exists
-        to avoid.
+        Without WiFi, an ordinary bulk frame is DROPPED rather than sent, which
+        is the point of all this: the radio carries driving and telemetry, and a
+        2.9 KB config snapshot is half a second of the shared channel spent on
+        something nobody is being hurt by waiting for. Dropping is safe because
+        every request that produces one of these can only have arrived over the
+        same link — the base station won't ask over the radio (see
+        basestation/app.py dispatch_config), so the only way to get here is a
+        link that broke mid-transfer, and the operator's page re-asks.
+
+        The radio path stays for `radio_ok` frames — the acknowledgement of a
+        bootstrap set_config, which by definition has no WiFi to go back over.
+        A `False` from send_bulk means the radio has no airtime this tick, not
+        that the frame is gone, so it keeps its place in the queue.
         """
-        if self.ip_link is not None and self.ip_link.is_connected():
-            while self._outbox and self.ip_link.send(self._outbox[0]):
+        ip = self.ip_link if (self.ip_link is not None
+                              and self.ip_link.is_connected()) else None
+        dropped = 0
+        while self._outbox:
+            msg, radio_ok = self._outbox[0]
+            if ip is not None:
+                if ip.send(msg):
+                    self._outbox.popleft()
+                    continue
+                ip = None  # link broke mid-drain; the rest follows the rules below
+            if radio_ok:
+                if not self.link.send_bulk(msg):
+                    break  # no airtime this tick — keep it and try the next one
                 self._outbox.popleft()
-        while self._outbox and self.link.send_bulk(self._outbox[0]):
+                continue
             self._outbox.popleft()
+            dropped += 1
+        if dropped:
+            print(f"[Robot] dropped {dropped} bulk frame(s): no link to "
+                  f"{self.cfg.comms.base_host or '(no base_host set)'} "
+                  f"— config and documents do not go over the radio")
 
     def _set_config(self, msg: dict) -> None:
-        applied, rejected = tuning.apply(self.cfg, msg.get("config") or {})
+        requested = msg.get("config") or {}
+        # A frame that carries only the bulk link's address is the bootstrap
+        # case: it is the one thing the base station may send over the radio,
+        # because it is how a rover is told where the WiFi link even is. Its
+        # acknowledgement has to go back the same way — there is by definition
+        # no WiFi to answer over yet. See tuning.BOOTSTRAP_PATHS.
+        bootstrap = tuning.is_bootstrap(requested)
+        applied, rejected = tuning.apply(self.cfg, requested)
         if applied:
             self._push_live_config()
+        if any(path in tuning.BOOTSTRAP_PATHS for path in applied):
+            self._retarget_ip_link()
         # Persist by default: an operator tuning gains in a field expects them
         # to survive the next power cycle. `"save": false` is the escape hatch
         # for trying a value without committing to it.
@@ -435,7 +478,42 @@ class Robot:
         for path, why in rejected.items():
             print(f"[Robot] config rejected {path}: {why}")
         self._queue(self._config_frame(
-            applied, rejected=rejected, restart=restart, save_error=error))
+            applied, rejected=rejected, restart=restart, save_error=error),
+            radio_ok=bootstrap)
+
+    def _retarget_ip_link(self) -> None:
+        """Re-dial the bulk link after comms.base_host/base_port changed.
+
+        This is what makes the bootstrap worth having. Pointing a rover at a new
+        base station over the radio would be pointless if the new address only
+        took effect on the next start — you would have to walk out to the rover,
+        and at that point you may as well edit robot.env. So the link is torn
+        down and re-dialled here, including the case where there was no link at
+        all (a fresh install ships with base_host blank).
+
+        On its own thread because IPLink.stop() joins a reader that may be parked
+        in a blocking recv: up to a couple of seconds, which inside the control
+        loop is long enough to trip the teleop failsafe and stop the drivetrain
+        mid-command. The loop keeps ticking; the next _drain_outbox picks up
+        whichever link exists by then.
+        """
+        host, port = self.cfg.comms.base_host, self.cfg.comms.base_port
+        old = self.ip_link
+        if old is not None and old.host == host and old.port == port:
+            return
+        self.ip_link = None  # nothing goes out over the old link from here on
+
+        def swap() -> None:
+            if old is not None:
+                old.stop()
+            if not host:
+                print("[Robot] bulk link disabled (base_host cleared)")
+                return
+            link = IPLink(host, port, self._inbox.put, self.cfg.robot_id)
+            link.start()
+            self.ip_link = link
+
+        threading.Thread(target=swap, name="ip-retarget", daemon=True).start()
 
     # --- documents (layout, routines) ---------------------------------------
 

@@ -147,9 +147,14 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("comms.command_timeout", 0.05, 5),
     _t("comms.port", live=False),
     _i("comms.baud", 1200, 921600, live=False),
-    # WiFi bulk transfers. live=False because both open a socket at start-up.
-    _t("comms.base_host", live=False),
-    _i("comms.base_port", 1, 65535, live=False),
+    # WiFi bulk transfers. These two are BOOTSTRAP_PATHS below: the one pair of
+    # settings that still travels over the radio, because they are how you point
+    # a rover at a base station it cannot reach yet. Live — `Robot` redials the
+    # link on the spot (_retarget_ip_link), which is the whole point: a change
+    # that needed a service restart to take effect would mean walking out to the
+    # rover, and then you may as well have edited robot.env.
+    _t("comms.base_host"),
+    _i("comms.base_port", 1, 65535),
 
     # --- drive ---
     _f("drive.slew_rate", 0, 20),
@@ -267,6 +272,27 @@ _BASE_PARAMS: Tuple[Param, ...] = (
 PARAMS: Tuple[Param, ...] = _BASE_PARAMS + _motor("left") + _motor("right")
 
 BY_PATH: Dict[str, Param] = {p.path: p for p in PARAMS}
+
+# --- the bootstrap exception -------------------------------------------------
+#
+# Configuration is bulk traffic and rides the WiFi link (robot/comms/ip_link.py),
+# not the shared radio. These two paths are the exception, and they have to be:
+# they are the address of that link. A rover pointed at the wrong base station —
+# or at none at all, which is what a fresh install is — has no WiFi path to be
+# told the right one over, so a chicken-and-egg is the alternative to letting
+# this one pair through on the radio. It is ~60 bytes, sent by hand, once.
+#
+# Deliberately narrow. `is_bootstrap` demands that a frame carry NOTHING ELSE,
+# so a set_config that slips a PID gain in beside a hostname is not a bootstrap
+# frame and does not get a free ride on the radio.
+BOOTSTRAP_PATHS: Tuple[str, ...] = ("comms.base_host", "comms.base_port")
+
+
+def is_bootstrap(values) -> bool:
+    """True if `values` is a non-empty set of BOOTSTRAP_PATHS and nothing else."""
+    if not isinstance(values, dict) or not values:
+        return False
+    return all(path in BOOTSTRAP_PATHS for path in values)
 
 
 # --- this robot's actual parameter surface ----------------------------------

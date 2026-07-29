@@ -1,9 +1,11 @@
 // Robot tab: the selected robot's tunable parameters, grouped.
 //
-// The config is FETCHED, not pushed — it is ~2.4 KB over a radio shared with
-// telemetry, so it arrives only when this tab asks for it (on open, and on the
-// Refresh button). Until then the page says so rather than rendering a form
-// full of zeroes that would look like real values.
+// The config is FETCHED, not pushed — it is ~2.4 KB, so it arrives only when
+// this tab asks for it (on open, and on the Refresh button). Until then the
+// page says so rather than rendering a form full of zeroes that would look like
+// real values. It travels over the robot's WiFi link and never over the radio,
+// so a rover out of WiFi range reports that instead (see the banner below);
+// driving and telemetry are unaffected by any of this.
 
 import { useState } from "preact/hooks";
 import { robotConfigs, robotDocuments, robots } from "../../net/ws.ts";
@@ -49,6 +51,9 @@ export function RobotSettings() {
   const rejected = entry?.result?.rejected ?? {};
   const restart = new Set(entry?.result?.restart ?? []);
   const saveError = entry?.result?.save_error ?? null;
+  // Not "the robot is offline" — it may well be driving. Config does not travel
+  // over the radio, so this is specifically "no WiFi link to it".
+  const unreachable = entry?.result?.error ?? null;
   // The groups this robot actually has. A stock build's are the hand-written
   // ones; a build running its own layout describes its actuators and those
   // groups are generated from the description. See settings/schema.ts.
@@ -99,6 +104,7 @@ export function RobotSettings() {
         </button>
       </div>
 
+      {unreachable && <p class="banner error">{unreachable}</p>}
       {restart.size > 0 && (
         <p class="banner warn">
           {restart.size} change{restart.size === 1 ? "" : "s"} saved but not
