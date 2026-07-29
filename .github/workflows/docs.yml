@@ -1,0 +1,123 @@
+name: docs
+
+# Builds the handbook with mdBook and publishes it to the org site at
+# https://next-competition.github.io/roversoftware/ .
+#
+# The site lives in a DIFFERENT repository, so this pushes rather than using
+# actions/deploy-pages: only `roversoftware/` is touched, and the apt tree
+# underneath it is left alone (the release workflow owns that). See
+# docs/src/reference/releasing.md for the one-time setup.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MDBOOK_VERSION: "0.4.40"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache mdBook
+        id: cache-mdbook
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/mdbook
+          key: mdbook-${{ env.MDBOOK_VERSION }}-${{ runner.os }}
+
+      - name: Install mdBook
+        if: steps.cache-mdbook.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          url="https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" | tar -xz -C ~/.local/bin
+          chmod +x ~/.local/bin/mdbook
+
+      - name: Build
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          mdbook --version
+          mdbook build docs
+
+      - name: Check what was built
+        run: |
+          test -f docs/book/index.html || { echo "::error::no index.html"; exit 1; }
+          # Every screenshot referenced by a chapter has to have been copied.
+          missing=0
+          for f in docs/src/img/*.webp; do
+            b=$(basename "$f")
+            [ -f "docs/book/img/$b" ] || { echo "::error::img/$b missing from the build"; missing=1; }
+          done
+          [ "$missing" = 0 ] || exit 1
+          echo "$(find docs/book -name '*.html' | wc -l) pages, $(du -sh docs/book | cut -f1)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: book
+          path: docs/book
+          if-no-files-found: error
+
+  deploy:
+    # Pull requests build but do not publish.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    # Shares a lane with the release workflow's apt job: both push to the same
+    # Pages repo, and two concurrent pushes to one branch is a lost commit.
+    concurrency:
+      group: pages-site
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: book
+          path: book
+
+      - name: Check out the site repo
+        uses: actions/checkout@v4
+        with:
+          repository: NEXT-Competition/NEXT-Competition.github.io
+          token: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          path: site
+
+      - name: Replace the book, keep the apt repository
+        run: |
+          mkdir -p site/roversoftware
+          # rsync rather than rm -rf: `apt/` lives under the same prefix and is
+          # owned by the release workflow. Deleting it here would unpublish
+          # every package between a docs push and the next release.
+          rsync -a --delete --exclude 'apt/' book/ site/roversoftware/
+          # Jekyll would otherwise eat mdBook's _static-ish paths and any
+          # directory starting with an underscore.
+          touch site/.nojekyll
+          ls site/roversoftware | head
+
+      - name: Publish
+        working-directory: site
+        run: |
+          git config user.name  "roversoftware-docs[bot]"
+          git config user.email "noreply@github.com"
+          git add roversoftware .nojekyll
+          git diff --cached --quiet && { echo "nothing changed"; exit 0; }
+          git commit -m "docs: roversoftware handbook @ ${GITHUB_SHA::7}"
+          for i in 1 2 3 4 5; do
+            git push && exit 0
+            echo "push rejected, rebasing (attempt $i)"
+            git pull --rebase --autostash origin HEAD && sleep $((i * 3))
+          done
+          echo "::error::could not push to the site repo after 5 attempts"; exit 1

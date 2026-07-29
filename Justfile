@@ -354,3 +354,50 @@ bs-push-tiles:
     scp dist/tiles.mbtiles {{bs_target}}:/tmp/tiles.mbtiles
     ssh -t {{bs_target}} "sudo mkdir -p /var/lib/roversoftware && sudo mv /tmp/tiles.mbtiles /var/lib/roversoftware/tiles.mbtiles && sudo systemctl restart {{bs_service}}"
     @echo "==> pushed offline tiles to {{bs_host}}; reload the kiosk: just bs-reload"
+
+# ── documentation ──
+# The handbook is an mdBook under docs/. CI publishes it to
+# https://next-competition.github.io/roversoftware/ on every push to main that
+# touches docs/ — see docs/src/reference/releasing.md.
+mdbook_version := "0.4.40"
+
+# Build the book into docs/book.
+book:
+    mdbook build docs
+    @echo "==> docs/book/index.html"
+
+# Live-reloading preview on http://localhost:3000.
+book-serve:
+    mdbook serve docs --open
+
+# Install the same mdBook version CI uses, into ~/.local/bin.
+book-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p ~/.local/bin
+    curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v{{mdbook_version}}/mdbook-v{{mdbook_version}}-x86_64-unknown-linux-gnu.tar.gz" \
+      | tar -xz -C ~/.local/bin
+    chmod +x ~/.local/bin/mdbook
+    ~/.local/bin/mdbook --version
+
+# ── releasing ──
+# Cutting a release is `git tag -a vX.Y.Z && git push origin vX.Y.Z`; the rest
+# of this section is for reproducing what CI does, locally.
+
+# Build both .deb packages at a given version.
+packages VERSION=version:
+    VERSION={{VERSION}} ./packaging/build-deb.sh all
+
+# Build an apt repository over dist/*.deb. Pass a key to sign it:
+#   just GPG_KEY_ID=<fingerprint> apt-repo
+apt-repo:
+    ./packaging/apt-repo.sh dist/*.deb
+    @echo "==> serve it: python3 -m http.server -d dist/apt 8080"
+
+# Build the desktop base station for THIS platform.
+desktop:
+    cd basestation-ui && npm ci --no-audit --no-fund && npm run build && deno task bundle
+
+# Build the Python sdist + wheel into dist/.
+wheel:
+    pipx run build

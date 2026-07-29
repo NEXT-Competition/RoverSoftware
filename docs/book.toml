@@ -1,0 +1,37 @@
+[book]
+title = "RoverSoftware"
+description = "Operator handbook: run the base station, drive a rover, declare your motors and mechanisms, and program a robot without writing Python."
+authors = ["NEXT Competition"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+# Published under a subpath of the org site, so the 404 page and the search
+# index need to know where they actually live. Everything else is relative.
+site-url = "/roversoftware/"
+git-repository-url = "https://github.com/NEXT-Competition/RoverSoftware"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/NEXT-Competition/RoverSoftware/edit/main/docs/{path}"
+default-theme = "coal"
+preferred-dark-theme = "coal"
+additional-css = ["theme/custom.css"]
+no-section-label = true
+copy-fonts = false
+
+[output.html.playground]
+runnable = false
+
+[output.html.search]
+enable = true
+limit-results = 20
+use-boolean-and = true
+boost-title = 4
+boost-hierarchy = 3
+
+[output.html.fold]
+enable = true
+level = 1
