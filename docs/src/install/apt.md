@@ -13,11 +13,11 @@ Zero, a Pi 5 and an amd64 laptop alike.
 ```bash
 # 1. Trust the signing key.
 sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://next-competition.github.io/roversoftware/apt/roversoftware-archive-keyring.asc \
+curl -fsSL https://next-competition.github.io/RoverSoftware/apt/roversoftware-archive-keyring.asc \
   | sudo tee /etc/apt/keyrings/roversoftware.asc > /dev/null
 
 # 2. Point apt at the repository.
-echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/roversoftware/apt stable main" \
+echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/RoverSoftware/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/roversoftware.list > /dev/null
 
 # 3. Fetch the index.

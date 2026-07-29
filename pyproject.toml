@@ -61,7 +61,7 @@ roversoftware-basestation = "run_basestation:main"
 
 [project.urls]
 Homepage = "https://github.com/NEXT-Competition/RoverSoftware"
-Documentation = "https://next-competition.github.io/roversoftware/"
+Documentation = "https://next-competition.github.io/RoverSoftware/"
 
 [tool.hatch.build.targets.wheel]
 # There is no src/ layout: the two packages and the two entry points sit at the

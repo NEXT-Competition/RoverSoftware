@@ -127,10 +127,10 @@ cat > "$APT_ROOT/index.html" <<HTML
 <h1>RoverSoftware · apt repository</h1>
 <p>Debian packages for the robot and the base station. Add it once:</p>
 <pre>sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://next-competition.github.io/roversoftware/apt/roversoftware-archive-keyring.asc \\
+curl -fsSL https://next-competition.github.io/RoverSoftware/apt/roversoftware-archive-keyring.asc \\
   | sudo tee /etc/apt/keyrings/roversoftware.asc > /dev/null
 
-echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/roversoftware/apt $SUITE $COMPONENT" \\
+echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/RoverSoftware/apt $SUITE $COMPONENT" \\
   | sudo tee /etc/apt/sources.list.d/roversoftware.list > /dev/null
 
 sudo apt-get update

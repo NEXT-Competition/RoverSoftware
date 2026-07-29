@@ -12,7 +12,7 @@ create-missing = false
 [output.html]
 # Published under a subpath of the org site, so the 404 page and the search
 # index need to know where they actually live. Everything else is relative.
-site-url = "/roversoftware/"
+site-url = "/RoverSoftware/"
 git-repository-url = "https://github.com/NEXT-Competition/RoverSoftware"
 git-repository-icon = "fa-github"
 edit-url-template = "https://github.com/NEXT-Competition/RoverSoftware/edit/main/docs/{path}"
