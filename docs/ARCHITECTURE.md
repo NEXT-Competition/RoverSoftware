@@ -848,19 +848,29 @@ robot wins) and `app.py` relays them as browser-native MJPEG at
 `/video/{robot_id}.mjpg`, which the dashboard shows in an `<img>`. FPV is
 independent of the model — it needs only a camera and OpenCV, so live view works
 with no `.eim` at all. Off by default (`RS_FPV_ENABLED`), since it needs the base
-station's IP.
+station's IP — but that is a starting position, not a commitment; see below.
 
-*Where* it streams is a live parameter, though. `fpv.base_host` and
-`fpv.base_port` go over the radio like any other tuning value, and
-`_push_live_config` hands them to `FPVStreamer.retarget()`, which rebuilds its
-`VideoSender` on the next frame. This matters more than it sounds: the address
-belongs to whichever laptop is running the base station today, the robot only
-ever learns it over the radio, and a rover that needed a service restart to
-re-aim its camera is one you cannot see out of at exactly the moment you would
-want to. Rebuilding rather than adjusting is also how a hostname that only
-started resolving later gets picked up — `VideoSender` resolves once, in its
-constructor. Whether there is a feed at all (`fpv.enabled`) stays restart-only,
-because it decides whether the camera device is opened.
+Whether it streams and where it streams are both **live**, driven from the
+Tuning tab over the radio. `_push_live_config` hands `fpv.base_host` /
+`fpv.base_port` to `FPVStreamer.retarget()`, which rebuilds its `VideoSender` on
+the next frame, and `fpv.enabled` to `start()` / `stop(wait=False)`. This matters
+more than it sounds: the address belongs to whichever laptop is running the base
+station today, the robot only ever learns it over the radio, and a rover that
+needed a service restart to switch its camera on or re-aim it is one you cannot
+see out of at exactly the moment you cannot go and get it. Rebuilding rather
+than adjusting is also how a hostname that only started resolving later gets
+picked up — `VideoSender` resolves once, in its constructor.
+
+Three details make the switch safe. The `Camera` is *constructed* whenever one
+is configured but only *opened* by its first consumer, so a robot that booted
+with no detector and no feed leaves the device shut and still gets a picture
+when you ask for one an hour later — `Camera.start()` is idempotent and opens on
+its own thread, so the control loop never blocks on it. The off switch does not
+join: the streamer sleeps up to a frame interval, and waiting that out would
+stall a control tick to save nothing, so the loop notices the flag and closes
+its own socket in a `finally`. And `start()` on a loop that is still winding
+down re-arms the flag instead of spawning a second one, which is what makes
+flipping the switch off and straight back on harmless.
 
 When a model *is* running, the streamer draws the detection boxes onto each
 frame before encoding (green for the tracked target, amber for the rest). The

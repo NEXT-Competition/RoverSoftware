@@ -16,7 +16,13 @@ from robot.sensors.fpv import FPVStreamer
 
 
 class FakeCamera:
-    """Never produces a frame: this is about where the socket points, not JPEG."""
+    """Never produces a frame: this is about the socket and the switch, not JPEG."""
+
+    def __init__(self):
+        self.starts = 0
+
+    def start(self):
+        self.starts += 1
 
     def frame_and_stamp(self):
         return None, 0.0
@@ -100,6 +106,74 @@ def test_the_port_moves_with_the_host_or_not_at_all():
     assert streamer.target() == ("base.local", 6000)
 
 
+# --- the on/off switch -------------------------------------------------------
+
+def test_switching_it_on_opens_the_camera_and_starts_streaming(senders):
+    """A robot that booted with no frame consumer still gets a feed on demand."""
+    cfg = FPVConfig(enabled=False, base_host="base.local", base_port=5005, fps=200)
+    camera = FakeCamera()
+    streamer = FPVStreamer(cfg, camera, "rover1")
+
+    streamer.start()  # boot: switched off, so nothing happens
+    assert camera.starts == 0
+    assert senders == []
+
+    cfg.enabled = True  # what a config frame off the radio does
+    streamer.start()
+    assert _wait_for(lambda: senders == [("base.local", 5005)])
+    assert camera.starts == 1  # opened by its first consumer, not at boot
+    streamer.stop()
+
+
+def test_switching_it_off_stops_the_feed_without_blocking_the_caller(senders):
+    """stop(wait=False) runs on the control loop; it must not join a sleeping thread."""
+    cfg = FPVConfig(enabled=True, base_host="base.local", base_port=5005, fps=200)
+    streamer = FPVStreamer(cfg, FakeCamera(), "rover1")
+    streamer.start()
+    assert _wait_for(lambda: senders)
+
+    cfg.enabled = False
+    streamer.stop(wait=False)
+    assert streamer._running is False
+    # The loop tidies up after itself — the socket belongs to that thread.
+    assert _wait_for(lambda: streamer._sender is None)
+
+
+def test_it_can_be_switched_back_on(senders):
+    cfg = FPVConfig(enabled=True, base_host="base.local", base_port=5005, fps=200)
+    streamer = FPVStreamer(cfg, FakeCamera(), "rover1")
+    streamer.start()
+    assert _wait_for(lambda: len(senders) == 1)
+    streamer.stop()
+
+    streamer.start()
+    assert _wait_for(lambda: len(senders) == 2)
+    streamer.stop()
+
+
+def test_off_and_straight_back_on_does_not_race_two_loops(senders):
+    """The old loop picks the flag back up rather than being duplicated."""
+    cfg = FPVConfig(enabled=True, base_host="base.local", base_port=5005, fps=200)
+    streamer = FPVStreamer(cfg, FakeCamera(), "rover1")
+    streamer.start()
+    assert _wait_for(lambda: senders)
+    first = streamer._thread
+
+    streamer.stop(wait=False)
+    streamer.start()  # before the loop has necessarily noticed
+    assert streamer._running is True
+    assert streamer._thread is first or not first.is_alive()
+    streamer.stop()
+
+
+def test_no_camera_means_no_feed_however_hard_you_switch_it(senders):
+    cfg = FPVConfig(enabled=True, base_host="base.local", base_port=5005)
+    streamer = FPVStreamer(cfg, None, "rover1")
+    streamer.start()
+    assert senders == []
+    assert streamer._running is False
+
+
 def test_a_config_frame_off_the_radio_retargets_the_running_feed(monkeypatch, tmp_path):
     """End to end: the Tuning tab sets fpv.base_host, the rover re-aims."""
     from robot import tuning
@@ -120,11 +194,35 @@ def test_a_config_frame_off_the_radio_retargets_the_running_feed(monkeypatch, tm
     bot.fpv = FPVStreamer(cfg.fpv, FakeCamera(), "rover1")
 
     applied, rejected = tuning.apply(cfg, {"fpv.base_host": "192.168.4.2",
-                                           "fpv.base_port": 5010})
+                                           "fpv.base_port": 5010,
+                                           "fpv.enabled": True})
     assert not rejected, rejected
-    # The parameters have to be live, or the dashboard tells the operator to
-    # restart the service and this whole path is moot.
+    # These have to be live, or the dashboard tells the operator to restart the
+    # service and this whole path is moot.
     assert not tuning.needs_restart(applied, tuning.by_path_for(cfg))
 
     bot._push_live_config()
     assert bot.fpv.target() == ("192.168.4.2", 5010)
+    assert bot.fpv._running is True  # and the feed was switched on
+
+    # ...and off again, from the same place.
+    tuning.apply(cfg, {"fpv.enabled": False})
+    bot._push_live_config()
+    assert bot.fpv._running is False
+
+
+def test_a_robot_builds_its_streamer_even_with_the_feed_off(monkeypatch, tmp_path):
+    """Otherwise `fpv.enabled` is restart-only for no reason but a missing object."""
+    from robot.config import RobotConfig
+    from robot.robot import Robot
+
+    monkeypatch.setenv("RS_MOCK_MOTORS", "1")
+    monkeypatch.setenv("RS_TUNING_FILE", str(tmp_path / "tuning.json"))
+    cfg = RobotConfig()
+    cfg.gps.enabled = cfg.imu.enabled = False
+    cfg.camera.enabled = cfg.vision.enabled = False
+    cfg.drive.arm_seconds = 0.0
+    assert cfg.fpv.enabled is False
+
+    bot = Robot(cfg)
+    assert bot.fpv is not None

@@ -212,9 +212,11 @@ class Robot:
         # something actually wants frames; it reads on its own thread so the
         # 50 Hz loop never touches the device.
         mock_det = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on")
-        need_camera = config.camera.enabled and (
-            (config.vision.enabled and not mock_det) or config.fpv.enabled
-        )
+        # Constructing a Camera opens nothing — start() does, on its own thread —
+        # so one is built whenever the robot has a camera configured, even if
+        # nothing wants frames yet. That is what lets FPV be switched on from the
+        # base station later: the first consumer to arrive opens the device.
+        self._detector_wants_frames = config.vision.enabled and not mock_det
         # Which detector we run also decides which capture backend to open (an
         # IMX500 detector needs the camera that loaded the sensor's network), so
         # resolve it BEFORE constructing the camera. Skipped entirely for the
@@ -224,7 +226,7 @@ class Robot:
             if (config.vision.enabled and not mock_det) else "mock" if mock_det else "off"
         )
         self.camera: Optional[Camera] = (
-            Camera(config.camera, config.vision) if need_camera else None
+            Camera(config.camera, config.vision) if config.camera.enabled else None
         )
 
         # Object detection feeds object_align. Either backend reads from the
@@ -247,9 +249,12 @@ class Robot:
         # see what was detected — keyed on the overlays() capability rather than
         # a backend type, so both real detectors qualify and the mock (which has
         # no real frames to annotate) doesn't.
-        self.fpv: Optional[FPVStreamer] = (
-            FPVStreamer(config.fpv, self.camera, config.robot_id) if config.fpv.enabled else None
-        )
+        # Built whether or not the feed is currently on, so the base station can
+        # switch it on later — there is nothing to construct at that point, and a
+        # streamer that only existed when it was already running would make
+        # `fpv.enabled` a restart-only setting for no reason but this line.
+        self.fpv: Optional[FPVStreamer] = FPVStreamer(
+            config.fpv, self.camera, config.robot_id)
         overlays = getattr(self.detector, "overlays", None)
         if self.fpv is not None and overlays is not None:
             self.fpv.set_overlay_provider(overlays)
@@ -639,13 +644,22 @@ class Robot:
         # Safe to assign directly: tuning.py restricts this to the same enum
         # PoseEstimator validates against.
         self.pose_estimator.heading_source = cfg.heading_source
-        # Where the camera feed goes. The streamer resolves the address once
-        # when it builds its socket, so a new host has to be handed over rather
-        # than read out of cfg — see sensors/fpv.py. This is what lets an
-        # operator point a rover at whichever laptop is running the base station
-        # today without a service restart, over the radio, from the Tuning tab.
+        # The camera feed: whether it runs, and where it goes. Both are settable
+        # from the Tuning tab, over the radio, with no service restart — which is
+        # the whole point, since the address belongs to whichever laptop is
+        # running the base station today and the robot only learns it over the
+        # radio. The streamer resolves the host once when it builds its socket,
+        # so a new one is handed over rather than read out of cfg; and start() is
+        # idempotent and opens the camera itself, so switching the feed on works
+        # even on a robot that booted with nothing wanting frames.
         if self.fpv is not None:
             self.fpv.retarget(cfg.fpv.base_host, cfg.fpv.base_port)
+            if cfg.fpv.enabled:
+                self.fpv.start()
+            else:
+                # Not joined: this is the control loop, and waiting out a frame
+                # interval to save nothing would stall a tick.
+                self.fpv.stop(wait=False)
         if self.imu is not None:
             self.imu.heading_offset_deg = cfg.imu.heading_offset_deg
             self.imu.invert = cfg.imu.invert
@@ -719,8 +733,10 @@ class Robot:
             self.imu.start()
         # Camera before its consumers (detector, FPV) so frames are flowing when
         # they start; the detector is heaviest (it spawns the .eim subprocess, or
-        # waits on the sensor's network upload).
-        if self.camera is not None:
+        # waits on the sensor's network upload). Only opened for a consumer that
+        # actually wants frames — FPV starts it itself if it is switched on, now
+        # or later, so a robot with no detector and no feed leaves the device shut.
+        if self.camera is not None and self._detector_wants_frames:
             self.camera.start()
         if self.detector is not None:
             self.detector.start()

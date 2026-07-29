@@ -65,12 +65,26 @@ class FPVStreamer:
             return self._target
 
     def start(self) -> None:
-        if not self.cfg.enabled:
+        """Begin streaming, if the feed is switched on.
+
+        Safe to call at any time and any number of times — this is also the
+        base station's on switch, so it runs long after boot, from the control
+        loop, on a robot that may never have opened its camera.
+        """
+        if not self.cfg.enabled or self.camera is None:
+            if self.cfg.enabled:
+                print("[fpv] no camera — live view disabled")
             return
-        if self.camera is None:
-            print("[fpv] no camera — live view disabled")
-            return
+        # The device may not be open: on a robot with no detector, nothing
+        # wanted frames at boot. Idempotent, and Camera.start() opens on its own
+        # thread, so this never blocks the caller.
+        self.camera.start()
         self._running = True
+        # A loop still winding down from a just-issued stop simply picks the
+        # flag back up, rather than being raced by a second one. That is what
+        # makes flipping the switch off and straight back on safe.
+        if self._thread is not None and self._thread.is_alive():
+            return
         self._thread = threading.Thread(target=self._loop, name="fpv-tx", daemon=True)
         self._thread.start()
 
@@ -84,40 +98,54 @@ class FPVStreamer:
               f"@ up to {self.cfg.fps}fps q{self.cfg.jpeg_quality}")
 
         last_stamp = -1.0
-        while self._running:
-            t0 = time.monotonic()
-            # Rebuild the sender when the target moves. Done here rather than in
-            # retarget() so the socket is only ever touched by this thread.
-            target = self.target()
-            if target != aimed_at:
-                sender.close()
-                sender = VideoSender(target[0], target[1], self.robot_id)
-                self._sender = sender
-                aimed_at = target
-            # Read from cfg every pass: fps and quality are live parameters, and
-            # a rate captured once would ignore the slider that was moved to get
-            # the feed through a congested link.
-            period = 1.0 / max(self.cfg.fps, 1)
-            frame, stamp = self.camera.frame_and_stamp()
-            # Only encode+send a genuinely new frame. Re-sending the same image
-            # would burn a core on JPEG encoding and airtime for no visible gain.
-            if frame is not None and stamp != last_stamp:
-                last_stamp = stamp
-                if self.overlay_provider is not None:
-                    boxes = self.overlay_provider()
-                    if boxes:
-                        # Draws on a copy — never mutate the shared camera frame.
-                        frame = draw_boxes(frame, boxes)
-                jpeg = encode_jpeg(frame, self.cfg.jpeg_quality)
-                if jpeg:
-                    sender.send_frame(jpeg)
-            sleep_for = period - (time.monotonic() - t0)
-            if sleep_for > 0:
-                time.sleep(sleep_for)
+        try:
+            while self._running:
+                t0 = time.monotonic()
+                # Rebuild the sender when the target moves. Done here rather than
+                # in retarget() so the socket is only touched by this thread.
+                target = self.target()
+                if target != aimed_at:
+                    sender.close()
+                    sender = VideoSender(target[0], target[1], self.robot_id)
+                    self._sender = sender
+                    aimed_at = target
+                # Read from cfg every pass: fps and quality are live parameters,
+                # and a rate captured once would ignore the slider that was moved
+                # to get the feed through a congested link.
+                period = 1.0 / max(self.cfg.fps, 1)
+                frame, stamp = self.camera.frame_and_stamp()
+                # Only encode+send a genuinely new frame. Re-sending the same
+                # image would burn a core on JPEG encoding and airtime for no
+                # visible gain.
+                if frame is not None and stamp != last_stamp:
+                    last_stamp = stamp
+                    if self.overlay_provider is not None:
+                        boxes = self.overlay_provider()
+                        if boxes:
+                            # Draws on a copy — never mutate the shared frame.
+                            frame = draw_boxes(frame, boxes)
+                    jpeg = encode_jpeg(frame, self.cfg.jpeg_quality)
+                    if jpeg:
+                        sender.send_frame(jpeg)
+                sleep_for = period - (time.monotonic() - t0)
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+        finally:
+            # The socket belongs to this thread, so this thread closes it —
+            # including when the feed is simply switched off from the dashboard
+            # and the loop ends on its own.
+            sender.close()
+            self._sender = None
+            print("[fpv] streaming stopped")
 
-    def stop(self) -> None:
+    def stop(self, wait: bool = True) -> None:
+        """Stop streaming.
+
+        `wait=False` is the dashboard's off switch: it runs on the control loop,
+        and joining a thread that sleeps up to a frame interval would stall a
+        control tick to save nothing. The loop notices the flag and tidies up
+        after itself either way.
+        """
         self._running = False
-        if self._thread is not None:
+        if wait and self._thread is not None:
             self._thread.join(timeout=1.0)
-        if self._sender is not None:
-            self._sender.close()
