@@ -1,10 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
 [project]
 name = "roversoftware"
+# Bumped by the release workflow from the git tag; the value here is the
+# development default, so a local `pip install -e .` still works.
 version = "0.1.0"
-description = "Add your description here"
+description = "Ground-robot stack and fleet base station: XBee teleop, GPS and vision autonomy, and a dashboard that declares the hardware and programs the behaviour"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "edge-mdt-cl>=1.1.1",
     "edge-mdt[pt]>=1.3.0",
     "fastapi>=0.110",
     "pygame>=2.5",
@@ -20,7 +27,67 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "httpx>=0.27",  # starlette TestClient (tests/test_*_bridge.py)
 ]
+# Offline model-conversion toolchain (tools/imx500_*.py). Kept OUT of
+# [project.dependencies] on purpose: torch is a ~100MB build-machine-only
+# dependency and nothing on the robot imports it — the Pi loads the finished
+# .rpk through picamera2. `uv sync` stays lean; run the converter with
+# `uv sync --group convert` first.
+#
+# edge-mdt[pt] IS in the runtime deps above but only ships the converter
+# binaries (imxconv-pt / uni-pytorch); MCT's PyTorch quantization backend needs
+# torch itself, which the [pt] extra does not pull in.
+convert = [
+    # THE UPPER BOUND IS LOAD-BEARING, do not relax it to "latest torch".
+    # mct_quantizers emits its MCTQ quantizer nodes from `symbolic()` methods on
+    # torch.autograd.Function — a hook only the legacy TorchScript ONNX exporter
+    # calls. torch 2.9 flipped torch.onnx.export to dynamo=True by default, and
+    # the dynamo exporter does not consult those symbolics, so the export either
+    # errors out or silently produces an ONNX file with no quantization nodes in
+    # it — which imxconv-pt then rejects. Staying on <2.9 keeps the legacy path.
+    "torch>=2.4,<2.9",
+    "torchvision<0.23",     # edge-mdt-cl hard-requires it alongside torch
+    "tflite>=2.10",       # flatbuffer schema bindings — reads the .lite graph
+    "ai-edge-litert>=1.0",  # reference interpreter, for parity checks only
+    "pillow>=10.0",         # representative-dataset image loading
+    "ultralytics>=8.3",
+]
+
+[project.scripts]
+# The same two names the systemd units use, so `pip install roversoftware` and
+# `apt install roversoftware-robot` give you the same command.
+roversoftware-robot = "run_robot:main"
+roversoftware-basestation = "run_basestation:main"
+
+[project.urls]
+Homepage = "https://github.com/NEXT-Competition/RoverSoftware"
+Documentation = "https://next-competition.github.io/RoverSoftware/"
+
+[tool.hatch.build.targets.wheel]
+# There is no src/ layout: the two packages and the two entry points sit at the
+# repo root, and the .deb copies them verbatim to /opt. The wheel mirrors that
+# rather than inventing a second arrangement.
+#
+# only-include, not include: `include` ADDS to hatchling's default selection,
+# which sweeps up packaging/ and anything else at the root. This is an
+# allowlist.
+only-include = ["robot", "basestation", "run_robot.py", "run_basestation.py"]
+
+[tool.hatch.build.targets.sdist]
+# Also an allowlist, for the same reason — and because the default selection
+# reaches into basestation-ui/node_modules, which is 120 files of nobody's
+# business. The UI's *source* is included; its dependencies are not.
+only-include = [
+    "robot", "basestation", "tools", "packaging", "tests", "docs",
+    "basestation-ui/src", "basestation-ui/server", "basestation-ui/public",
+    "basestation-ui/package.json", "basestation-ui/package-lock.json",
+    "basestation-ui/deno.json", "basestation-ui/tsconfig.json",
+    "basestation-ui/vite.config.ts", "basestation-ui/index.html",
+    "run_robot.py", "run_basestation.py", "start-basestation.sh",
+    "Justfile", "requirements.txt", "README.md",
+]
+exclude = ["docs/book", "**/__pycache__", "**/*.pyc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,19 +1,22 @@
 import { useEffect, useRef } from "preact/hooks";
 import L from "leaflet";
 import {
-  activeSiteId,
-  boundary,
   robots,
   selected,
   selectRobot,
-  sites,
   tilesAttribution,
   tilesMaxZoom,
   tilesUrl,
 } from "../net/ws.ts";
 import { addWaypoint, routeMode, routePts } from "../state/route.ts";
-import { mapFlipped } from "../state/mapMode.ts";
-import type { LatLon, Robot } from "../net/types.ts";
+import {
+  addPlaceAt,
+  editingPlace,
+  movePlaceTo,
+  placeMode,
+  placeList,
+} from "../state/places.ts";
+import type { LatLon, Place, Robot } from "../net/types.ts";
 
 // Satellite imagery, not a street map: driving a rover is about the terrain you
 // can see (grass, gravel, tree lines), and rural test sites are mostly blank on
@@ -22,86 +25,58 @@ import type { LatLon, Robot } from "../net/types.ts";
 const DEFAULT_TILES =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const DEFAULT_ATTRIBUTION = "Imagery © Esri, Maxar, Earthstar Geographics";
-// Global imagery bottoms out around z19, but this specific field has real
-// z20 coverage (checked directly against the tile server — z21 comes back
-// "not yet available"). Past the true max, upscale rather than requesting
-// tiles that come back blank.
-const IMAGERY_MAX_NATIVE_ZOOM = 20;
+// Global imagery bottoms out around z19. Past that, upscale the deepest tile we
+// can actually get rather than requesting tiles that come back blank.
+const IMAGERY_MAX_NATIVE_ZOOM = 19;
 // 1x1 transparent PNG so uncached (204) tiles render blank, not broken.
 const BLANK_TILE =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-// The dashboard is locked to whichever named site is active (basestation/sites.py)
-// — not a general-purpose map, so its view is fixed rather than fit to whatever's
-// on screen. These are just the bootstrap values used for the very first paint,
-// before the bridge's first snapshot (with the real site list) arrives; the
-// reactive "site view" effect below takes over from there.
-const DEFAULT_CENTER: LatLon = [38.8331773, -77.3232135];
-const DEFAULT_ROTATION_DEG = 33;
-const DEFAULT_ZOOM = 19.5;
-// How much bigger than the visible viewport the (square) Leaflet container is,
-// so its corners still cover the screen once rotated and clipped. Generous on
-// purpose — the cost is a few off-screen tiles, not correctness.
-const OVERSIZE_PCT = 250;
-// Extra upward nudge past the panel gap's true center — trimmed in by hand
-// against the live layout, purely a look-and-feel call.
-const MAP_VERTICAL_NUDGE_PX = 60;
-
-function robotIcon(r: Robot, isSel: boolean, rotationDeg: number): L.DivIcon {
+function robotIcon(r: Robot, isSel: boolean): L.DivIcon {
   const cls = "robot-icon" + (r.online ? "" : " offline") + (isSel ? " sel" : "");
   const heading = r.heading ?? 0;
   return L.divIcon({
     className: cls,
     html:
       `<div class="body"><div class="arrow" style="transform:rotate(${heading}deg)"></div></div>` +
-      // Counter-rotate the label only: the map (and this icon with it) is
-      // rotated by rotationDeg, so spinning the tag back by the same amount
-      // keeps the text upright while the heading arrow above it still
-      // correctly inherits the map's rotation.
-      `<div class="tag" style="transform:translateX(-50%) rotate(${-rotationDeg}deg)">${r.robot_id}</div>`,
+      `<div class="tag">${r.robot_id}</div>`,
     iconSize: [0, 0],
   });
-}
-
-/**
- * The map div is rotated for readability, but Leaflet has no idea — it still
- * does its own pixel math in an unrotated frame. A raw click's e.latlng would
- * therefore land in the wrong spot. Since panning/zoom are locked (the only
- * thing that ever moves is what the user taps), the fix is just undoing a
- * fixed rotation around a fixed center: take the click in the *unrotated*
- * wrapper's coordinate space, rotate that point by -angle around the visible
- * center, then hand Leaflet a corrected container point.
- */
-function correctedLatLng(
-  ev: MouseEvent,
-  map: L.Map,
-  mapEl: HTMLElement,
-  wrapEl: HTMLElement,
-  angleDeg: number,
-): L.LatLng {
-  const wrapRect = wrapEl.getBoundingClientRect();
-  // mapEl's own left/top (set in the rotation effect) is the actual pivot —
-  // usually the visible panel gap's center, not the wrap's raw center.
-  const cx = mapEl.offsetLeft;
-  const cy = mapEl.offsetTop;
-  const dx = ev.clientX - wrapRect.left - cx;
-  const dy = ev.clientY - wrapRect.top - cy;
-  const rad = (-angleDeg * Math.PI) / 180;
-  const dxr = dx * Math.cos(rad) - dy * Math.sin(rad);
-  const dyr = dx * Math.sin(rad) + dy * Math.cos(rad);
-  const px = dxr + mapEl.offsetWidth / 2;
-  const py = dyr + mapEl.offsetHeight / 2;
-  return map.containerPointToLatLng(L.point(px, py));
 }
 
 interface MarkerEntry {
   marker: L.Marker;
   trail: L.Polyline;
-  iconKey: string;
+}
+
+// A saved place reads as permanent, a pending route waypoint as transient, so
+// they must not share a colour: the whole point of the workflow is knowing at a
+// glance which marks survive the match and which are this run's plan.
+const KIND_GLYPH: Record<Place["kind"], string> = {
+  bucket: "◆",
+  marker: "●",
+  start: "▲",
+  hazard: "✕",
+};
+
+/** A place name is operator-typed and lands in a divIcon's innerHTML. */
+function escapeHtml(text: string): string {
+  return text.replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!),
+  );
+}
+
+function placeIcon(place: Place, isSel: boolean): L.DivIcon {
+  return L.divIcon({
+    className: `place-icon k-${place.kind}` + (isSel ? " sel" : ""),
+    html: `<div class="pin">${KIND_GLYPH[place.kind] ?? "●"}</div>` +
+      `<div class="tag">${escapeHtml(place.name)}</div>`,
+    iconSize: [0, 0],
+  });
 }
 
 export function MapView() {
-  const wrapRef = useRef<HTMLDivElement>(null);
   const elRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tileRef = useRef<L.TileLayer | null>(null);
@@ -110,10 +85,10 @@ export function MapView() {
     pts: [],
     line: null,
   });
-  const boundaryLayerRef = useRef<L.Polygon | null>(null);
+  const placeLayersRef = useRef<Record<string, L.Marker>>({});
+  const firstFitRef = useRef(true);
   const routeModeRef = useRef(false);
-  const rotationRef = useRef(DEFAULT_ROTATION_DEG);
-  const zoomControlRef = useRef<L.Control.Zoom | null>(null);
+  const placeModeRef = useRef(false);
 
   // Read signals so this component re-renders (and the sync effects run) on change.
   const robotList = robots.value;
@@ -123,46 +98,36 @@ export function MapView() {
   const tAttr = tilesAttribution.value;
   const rMode = routeMode.value;
   const rPts = routePts.value;
-  const bounds = boundary.value;
-  const flipped = mapFlipped.value;
-  const activeSite = activeSiteId.value ? sites.value[activeSiteId.value] : undefined;
-  const siteCenter = activeSite?.origin ?? DEFAULT_CENTER;
-  const siteZoom = activeSite?.zoom ?? DEFAULT_ZOOM;
-  const locked = activeSite?.locked ?? true;
-  const rotationDeg = (activeSite?.rotation_deg ?? DEFAULT_ROTATION_DEG) + (flipped ? 180 : 0);
+  const pMode = placeMode.value;
+  const savedPlaces = placeList.value;
+  const editing = editingPlace.value;
   routeModeRef.current = rMode;
-  rotationRef.current = rotationDeg;
+  placeModeRef.current = pMode;
 
-  // ---- init once: locked interactions (view itself is set by the site effect below) ----
+  // ---- init once ----
   useEffect(() => {
-    const mapEl = elRef.current!;
-    const map = L.map(mapEl, {
-      zoomControl: false,
-      zoomSnap: 0.25, // lets a site's zoom sit at a half-step instead of a whole zoom level
-      dragging: false,
-      touchZoom: false,
-      scrollWheelZoom: false,
-      doubleClickZoom: false,
-      boxZoom: false,
-      keyboard: false,
-      minZoom: 15,
-      maxZoom: 20,
-    }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+    // Touch-first: no +/- control (it collided with the top bar); pinch and
+    // scroll-wheel zoom stay enabled by default.
+    const map = L.map(elRef.current!, { zoomControl: false })
+      .setView([37.7749, -122.4194], 17);
     mapRef.current = map;
     // Imagery licences want a visible credit, but a kiosk doesn't need the
     // "Leaflet" link — keep the control, drop the prefix.
     map.attributionControl.setPrefix(false);
     tileRef.current = L.tileLayer(DEFAULT_TILES, {
-      maxZoom: IMAGERY_MAX_NATIVE_ZOOM,
+      maxZoom: 20,
       maxNativeZoom: IMAGERY_MAX_NATIVE_ZOOM,
       errorTileUrl: BLANK_TILE,
       attribution: DEFAULT_ATTRIBUTION,
     }).addTo(map);
 
     map.on("click", (e: L.LeafletMouseEvent) => {
-      if (!routeModeRef.current) return;
-      const ll = correctedLatLng(e.originalEvent, map, mapEl, wrapRef.current!, rotationRef.current);
-      addWaypoint(ll.lat, ll.lng);
+      // Route drawing wins if both are somehow on; the controls keep them
+      // mutually exclusive (state/route.ts), so this is belt and braces.
+      if (routeModeRef.current) addWaypoint(e.latlng.lat, e.latlng.lng);
+      else if (placeModeRef.current) {
+        editingPlace.value = addPlaceAt(e.latlng.lat, e.latlng.lng);
+      }
     });
 
     return () => {
@@ -171,79 +136,13 @@ export function MapView() {
     };
   }, []);
 
-  // ---- interactions: locked sites (a fixed, rotated frame matched against a
-  // real measured boundary) stay pan/zoom-locked; sites with no boundary to
-  // match against (e.g. the open GMU plaza) get free pan/zoom instead ----
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const toggle = (h: L.Handler) => (locked ? h.disable() : h.enable());
-    toggle(map.dragging);
-    toggle(map.touchZoom);
-    toggle(map.scrollWheelZoom);
-    toggle(map.doubleClickZoom);
-    toggle(map.boxZoom);
-    if (locked) {
-      zoomControlRef.current?.remove();
-    } else {
-      if (!zoomControlRef.current) zoomControlRef.current = L.control.zoom();
-      zoomControlRef.current.addTo(map);
-    }
-  }, [locked]);
-
-  // ---- rotation: applied on mount, whenever the flip mode changes, and
-  // whenever the visible gap between panels resizes ----
-  useEffect(() => {
-    const mapEl = elRef.current!;
-    const wrapEl = wrapRef.current!;
-    // The HUD grid has a top bar but no matching bottom bar, so the visible
-    // "hole" between panels isn't centered on the viewport — it sits lower.
-    // Anchor the map's rotation on that hole's actual center (measured via
-    // the invisible .map-hole grid cell) instead of the viewport's 50/50,
-    // so the field stays centered in the visible gap at any rotation angle.
-    const holeEl = document.querySelector<HTMLElement>(".map-hole");
-    const position = () => {
-      const wrapRect = wrapEl.getBoundingClientRect();
-      let cx = wrapRect.width / 2;
-      let cy = wrapRect.height / 2;
-      if (holeEl) {
-        const holeRect = holeEl.getBoundingClientRect();
-        cx = holeRect.left - wrapRect.left + holeRect.width / 2;
-        cy = holeRect.top - wrapRect.top + holeRect.height / 2 - MAP_VERTICAL_NUDGE_PX;
-      }
-      mapEl.style.left = `${cx}px`;
-      mapEl.style.top = `${cy}px`;
-      mapEl.style.transform = `translate(-50%, -50%) rotate(${rotationDeg}deg)`;
-    };
-    position();
-    if (!holeEl) return;
-    const ro = new ResizeObserver(position);
-    ro.observe(holeEl);
-    return () => ro.disconnect();
-  }, [rotationDeg]);
-
-  // ---- site view: re-center/re-zoom whenever the active site changes.
-  // Keyed on the actual lat/lon/zoom values, not the site object, since
-  // `sites` is replaced wholesale on every snapshot — and on `locked`, since
-  // that's what decides whether the zoom range gets pinned back down. ----
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    // Locked sites pin the zoom range to one fixed level; unlocked sites (no
-    // measured boundary to hold the view against) keep the map's full 15-20
-    // range so the user can freely zoom in/out.
-    map.setMinZoom(locked ? siteZoom : 15);
-    map.setMaxZoom(locked ? siteZoom : 20);
-    map.setView(siteCenter, siteZoom);
-  }, [siteCenter[0], siteCenter[1], siteZoom, locked]);
-
   // ---- tile source (offline /tiles arrives with the first fleet message) ----
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const url = tUrl || DEFAULT_TILES;
     const opts: L.TileLayerOptions = {
-      maxZoom: IMAGERY_MAX_NATIVE_ZOOM,
+      maxZoom: 20,
       // Cache depth if we know it, else the imagery source's global limit;
       // either way Leaflet upscales instead of asking for tiles that don't exist.
       maxNativeZoom: tMax ?? IMAGERY_MAX_NATIVE_ZOOM,
@@ -260,31 +159,24 @@ export function MapView() {
     if (!map) return;
     const markers = markersRef.current;
     const seen = new Set<string>();
+    const positioned: LatLon[] = [];
 
     for (const r of robotList) {
       if (r.lat == null || r.lon == null) continue;
       seen.add(r.robot_id);
+      positioned.push([r.lat, r.lon]);
       const isSel = r.robot_id === sel;
       let entry = markers[r.robot_id];
-      const iconKey = `${r.online}|${isSel}|${r.heading ?? 0}|${rotationDeg}`;
       if (!entry) {
         entry = {
-          marker: L.marker([r.lat, r.lon], { icon: robotIcon(r, isSel, rotationDeg) }).addTo(map),
+          marker: L.marker([r.lat, r.lon], { icon: robotIcon(r, isSel) }).addTo(map),
           trail: L.polyline([], { color: "#4c9eff", weight: 2, opacity: 0.55 }).addTo(map),
-          iconKey,
         };
         entry.marker.on("click", () => selectRobot(r.robot_id));
         markers[r.robot_id] = entry;
       }
       entry.marker.setLatLng([r.lat, r.lon]);
-      // setIcon tears down and rebuilds the marker's DOM node (and its click
-      // listener) — at 30Hz telemetry that was happening ~27x/sec, so a real
-      // click could land mid-swap and get silently dropped. Only rebuild when
-      // something the rendered icon actually depends on has changed.
-      if (entry.iconKey !== iconKey) {
-        entry.marker.setIcon(robotIcon(r, isSel, rotationDeg));
-        entry.iconKey = iconKey;
-      }
+      entry.marker.setIcon(robotIcon(r, isSel));
       if (r.trail && r.trail.length) entry.trail.setLatLngs(r.trail as L.LatLngExpression[]);
     }
 
@@ -295,25 +187,59 @@ export function MapView() {
         delete markers[id];
       }
     }
+
+    if (firstFitRef.current && positioned.length) {
+      firstFitRef.current = false;
+      if (positioned.length === 1) map.setView(positioned[0], 18);
+      else map.fitBounds(positioned as L.LatLngBoundsExpression, { padding: [70, 70] });
+    }
   });
 
-  // ---- field boundary outline — some sites (e.g. an open plaza) have none,
-  // so an empty `bounds` means "remove whatever fence the last site had" ----
+  // ---- saved places ----
+  // Draggable, because a bucket recorded from a rover parked beside it is a
+  // metre or two off by construction, and nudging the pin is how that gets
+  // fixed without driving back out to it.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    if (boundaryLayerRef.current) {
-      map.removeLayer(boundaryLayerRef.current);
-      boundaryLayerRef.current = null;
+    const layers = placeLayersRef.current;
+    const seen = new Set<string>();
+
+    for (const place of savedPlaces) {
+      seen.add(place.id);
+      let marker = layers[place.id];
+      if (!marker) {
+        marker = L.marker([place.lat, place.lon], {
+          icon: placeIcon(place, place.id === editing),
+          draggable: true,
+        }).addTo(map);
+        marker.on("click", () => {
+          editingPlace.value = editingPlace.value === place.id ? null : place.id;
+        });
+        marker.on("dragend", (e) => {
+          const at = (e.target as L.Marker).getLatLng();
+          movePlaceTo(place.id, at.lat, at.lng);
+        });
+        layers[place.id] = marker;
+      }
+      marker.setLatLng([place.lat, place.lon]);
+      marker.setIcon(placeIcon(place, place.id === editing));
     }
-    if (bounds.length) {
-      boundaryLayerRef.current = L.polygon(bounds as L.LatLngExpression[], {
-        color: "#ff2d2d",
-        weight: 4,
-        fill: false,
-      }).addTo(map);
+
+    for (const id of Object.keys(layers)) {
+      if (!seen.has(id)) {
+        map.removeLayer(layers[id]);
+        delete layers[id];
+      }
     }
-  }, [bounds]);
+  }, [savedPlaces, editing]);
+
+  // Drop mode changes what a tap on the map MEANS, which is exactly the kind of
+  // mode an operator forgets they are in. The cursor is the standing reminder.
+  useEffect(() => {
+    const el = elRef.current;
+    if (el) el.classList.toggle("dropping", rMode || pMode);
+  }, [rMode, pMode]);
 
   // ---- pending route overlay ----
   useEffect(() => {
@@ -335,11 +261,11 @@ export function MapView() {
           fillOpacity: 1,
           weight: 2,
         })
-          .bindTooltip(
-            // Counter-rotate the number too, same reasoning as the robot tag.
-            `<span style="display:inline-block;transform:rotate(${-rotationDeg}deg)">${i + 1}</span>`,
-            { permanent: true, direction: "top", className: "wp-tip" },
-          )
+          .bindTooltip(String(i + 1), {
+            permanent: true,
+            direction: "top",
+            className: "wp-tip",
+          })
           .addTo(map),
       );
     });
@@ -350,15 +276,7 @@ export function MapView() {
         dashArray: "6 6",
       }).addTo(map);
     }
-  }, [rPts, rotationDeg]);
+  }, [rPts]);
 
-  return (
-    <div ref={wrapRef} class="map-wrap">
-      <div
-        ref={elRef}
-        class="map"
-        style={{ width: `${OVERSIZE_PCT}%`, height: `${OVERSIZE_PCT}%` }}
-      />
-    </div>
-  );
+  return <div ref={elRef} class="map" />;
 }

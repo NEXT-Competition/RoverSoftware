@@ -1,43 +1,121 @@
-/* RoverSoftware base station — control-HUD theme.
-   Adapts an OLED-dark, glass-instrument aesthetic to a dense teleop console:
-   the map is the hero, controls float above it in machined-glass panels. */
+/* RoverSoftware base station — "The Plot Table".
+ *
+ * THESIS: A mission-control plot table. The terrain is the only lit thing in the
+ *   room and every panel is machined chrome pulled back around it. The category
+ *   ships a smart-home cockpit — soft 26px cards of glass floating on a blurred
+ *   gradient — and this refuses that: milled plates, tight radii, notched
+ *   corners, and a number that is a MEASUREMENT in tabular mono, never a "stat".
+ * OWN-WORLD: Graphite ground (#0b0f10) with the map as the lit object. Panels are
+ *   dark plates with a 1px lit top edge; the top bar and command dock carry a
+ *   chamfered corner, which is the signature and appears nowhere else. ONE signal
+ *   teal that only ever means "the rover you are calling". Amber only ever means
+ *   a plan — routes, waypoints, pending. Three hard flags for how a machine IS.
+ *   Archivo 800 numerals, JetBrains Mono for anything measured. 14/10/8/6 radii.
+ * STORY: The operator finds their rover before reading a word, reads its
+ *   condition across a pit, and reaches the stop without looking for it.
+ * FIRST VIEWPORT: Full-bleed terrain, dimmed at the edges so plates read. Top-left
+ *   a chamfered cluster (brand, link state, gear). Left rail of plates, the
+ *   selected rover filled teal. Bottom the command dock; top-right the E-STOP,
+ *   above everything at z-index 1001.
+ * FORM: Plot table / flight-control console — brief-pinned by the operator's
+ *   reference boards, so no direction roll was dealt. The reference supplied the
+ *   dark ground, teal + amber, and the dense instrument rail; the plot table is
+ *   what makes those true for a rover fleet rather than a stadium.
+ *
+ * --- Two renditions, one identity ---
+ * Dark is the default because the console is read indoors and in a pit. But the
+ * PRIMARY panel is a 7" screen used OUTDOORS in direct sun, where a dark ground
+ * is exactly wrong — so `[data-theme="daylight"]` re-renders the same identity
+ * on paper, at full contrast, and the operator can flip to it in one tap. Same
+ * accent, same geometry, same grammar; only the light changes. Every value below
+ * has a daylight twin, and adding a token here means adding it there.
+ */
 
 :root {
-  /* Surface */
-  --bg: #07090d;
-  --panel: rgba(19, 24, 33, 0.72);
-  --panel-solid: #131821;
-  --panel-2: rgba(31, 38, 48, 0.7);
-  --hairline: rgba(255, 255, 255, 0.08);
-  --hairline-strong: rgba(255, 255, 255, 0.14);
-  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* Surface — graphite, never pure black (a black plate beside a sunlit
+     satellite tile reads as a hole punched in the screen). */
+  --bg: #07090a;
+  --paper: #0f1416;
+  --panel: rgba(15, 20, 22, 0.88);
+  --panel-solid: #0f1416;
+  --panel-2: rgba(30, 38, 41, 0.72);
+  --well: #171e20;
+  --hairline: rgba(150, 180, 184, 0.14);
+  --hairline-strong: rgba(150, 180, 184, 0.3);
+  /* The lit top edge that makes a plate look milled rather than painted. */
+  --inset-hi: inset 0 1px 0 rgba(190, 225, 228, 0.09);
 
   /* Ink */
-  --text: #e9edf4;
-  --muted: #8b95a5;
-  --faint: #5c6675;
+  --ink: #e9f1f1;
+  --text: #e9f1f1;
+  --muted: #9aacae;
+  --faint: #7d9094;
 
-  /* Signal colors */
-  --accent: #4c9eff;
-  --accent-deep: #2f7fe0;
-  --ok: #35c46b;
-  --warn: #f0a53a;
-  --danger: #ff4d5a;
+  /* The tape: selection and engagement. Never a state, never type. */
+  --accent: #2ee6c5;
+  --accent-deep: #17c8a8;
+  --accent-lift: #86f6e0;
+  --on-accent: #04211c;
+
+  /* The plan: routes, pending waypoints, anything proposed but not yet done.
+     Distinct from the flags — amber here means "drawn", not "wrong". */
+  --data: #f0a53a;
+  --on-data: #231602;
+
+  /* The flags: how a machine is. Never confusable with the tape or the plan. */
+  --ok: #35d68a;
+  --warn: #f5b43f;
+  --danger: #ff4256;
+  --on-danger: #1a0206;
+  /* Bright flags on a dark ground carry DARK ink; the daylight twin inverts
+     both, so a fill never has to guess what sits on it. */
+  --on-ok: #04211c;
+  --panel-rgb: 15, 20, 22;
+
+  /* Channels, so alpha ramps don't hardcode a rendition's ink. */
+  --shadow-rgb: 0, 0, 0;
+  --hi-rgb: 190, 225, 228;
+  --accent-rgb: 46, 230, 197;
+  --data-rgb: 240, 165, 58;
+  --danger-rgb: 255, 66, 86;
+  --ok-rgb: 53, 214, 138;
 
   /* Type */
-  --font-ui: "Space Grotesk Variable", system-ui, -apple-system, "Segoe UI",
+  --font-ui: "Archivo Variable", system-ui, -apple-system, "Segoe UI",
     "Noto Sans", "DejaVu Sans", sans-serif, "Noto Color Emoji",
     "Apple Color Emoji", "Segoe UI Emoji";
   --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular",
     "DejaVu Sans Mono", monospace;
+  --display-size: 38px;
+
+  /* Depth — offset and blur, never a zero-offset halo. On a dark ground the
+     shadow does less work than the lit top edge, so it sits shallower. */
+  --lift-card: 0 16px 32px -22px rgba(0, 0, 0, 0.9);
+  --lift-pad: 0 20px 44px -20px rgba(0, 0, 0, 0.95);
+  --lift-cap: 0 8px 18px -6px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 rgba(190, 225, 228, 0.1);
+
+  /* How far the map is pulled down so plates read against it. */
+  --map-dim: 0.34;
+
+  /* Marker labels sit on imagery, not on a plate. Imagery is bright in both
+     renditions, so these do NOT flip with the theme — a label that inverted
+     with the ink would be dark-on-dark half the time. */
+  --map-label-bg: rgba(6, 10, 11, 0.72);
+  --map-label-ink: #f2f7f7;
 
   /* Motion — real-world mass, never linear/ease-in-out */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* Geometry */
-  --radius: 20px;
-  --radius-sm: 13px;
+  /* Geometry — machined, not moulded. */
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-input: 8px;
+  --radius-inner: 6px;
+  /* The signature chamfer. Used on the top cluster and the command dock ONLY;
+     a notch on every plate is a texture, not a mark. */
+  --chamfer: 13px;
   --tap: 52px;
 
   /* Safe-area shorthands (iPad home indicator / notch) */
@@ -47,6 +125,61 @@
   --sa-l: env(safe-area-inset-left, 0px);
 
   color-scheme: dark;
+}
+
+/* --- Daylight: the same console, read in the sun -------------------------
+   Not a "light mode" in the theming sense — it is the field rendition, and the
+   one the 7" panel boots into outdoors. Contrast is pushed harder than the dark
+   rendition needs, because the competition here is sunlight on glass, and the
+   accent darkens so that dark ink still sits on it at the same ratio. */
+:root[data-theme="daylight"] {
+  --bg: #d9dbd4;
+  --paper: #fbfbf8;
+  --panel: rgba(251, 251, 248, 0.9);
+  --panel-solid: #fbfbf8;
+  --panel-2: rgba(255, 255, 255, 0.78);
+  --well: #e7e8e1;
+  --hairline: rgba(20, 22, 15, 0.12);
+  --hairline-strong: rgba(20, 22, 15, 0.24);
+  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+
+  --ink: #14160f;
+  --text: #14160f;
+  --muted: #4e5449;
+  --faint: #666c5f;
+
+  --accent: #10b394;
+  --accent-deep: #0b8d75;
+  --accent-lift: #6fe6cd;
+  --on-accent: #04211c;
+
+  --data: #b0600a;
+  --on-data: #fff8ee;
+
+  --ok: #0f7a4a;
+  --warn: #a85c08;
+  --danger: #d4192a;
+  --on-danger: #ffffff;
+  --on-ok: #ffffff;
+  --panel-rgb: 251, 251, 248;
+
+  --shadow-rgb: 20, 22, 15;
+  --hi-rgb: 255, 255, 255;
+  --accent-rgb: 16, 179, 148;
+  --data-rgb: 176, 96, 10;
+  --danger-rgb: 212, 25, 42;
+  --ok-rgb: 15, 122, 74;
+
+  --lift-card: 0 14px 34px -20px rgba(20, 22, 15, 0.36);
+  --lift-pad: 0 18px 40px -18px rgba(20, 22, 15, 0.42);
+  --lift-cap: 0 6px 14px -4px rgba(20, 22, 15, 0.4),
+    inset 0 1px 2px rgba(255, 255, 255, 0.6);
+
+  /* Sunlight already flattens the imagery; dimming it further costs legibility
+     of the one thing the operator is navigating by. */
+  --map-dim: 0;
+
+  color-scheme: light;
 }
 
 * {
@@ -81,25 +214,22 @@ body {
   height: 100dvh;
 }
 
-/* Wrapper stays unrotated and clips; .map is the oversized div Leaflet
-   mounts into, centered and rotated (see MapView.tsx) so its corners still
-   cover the wrapper once turned. */
-.map-wrap {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  background: #0a0d12;
-}
-
 .map {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform-origin: center center;
-  /* translate(-50%,-50%) uses the element's OWN box (unlike % margins, which
-     are quirkily based on the container's width for both axes) — this is
-     what actually centers an oversized div regardless of aspect ratio. The
-     rotation is appended to this same string at runtime in MapView.tsx. */
+  inset: 0;
+  background: var(--bg);
+}
+
+/* The terrain is the lit object on the plot table, but raw satellite imagery is
+   brighter than any plate we can build — left alone it flattens the rail into
+   it. So the tiles are pulled down, and ONLY the tiles: markers, trails, routes
+   and place pins are siblings of this layer, not children, so the rover you are
+   looking for stays at full strength against a dimmed ground.
+   In daylight --map-dim is 0, because there the competition is the sun and the
+   imagery is the one thing being navigated by. */
+.leaflet-tile-pane {
+  filter: brightness(calc(1 - var(--map-dim))) saturate(calc(1 - var(--map-dim) * 0.5));
+  transition: filter 0.4s var(--ease-out);
 }
 
 /* The overlay is transparent to pointers; individual panels re-enable them.
@@ -110,29 +240,20 @@ body {
   inset: 0;
   z-index: 1000;
   display: grid;
-  grid-template-columns: minmax(300px, 340px) 1fr minmax(320px, 360px);
+  grid-template-columns: minmax(320px, 360px) 1fr auto;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
-    "top   top   top  "
-    "left  hole  right"
-    "left  hole  right";
+    "top   top   top "
+    "rail  .     .   "
+    "rail  cmd   dock";
   gap: 14px;
   padding: calc(14px + var(--sa-t)) calc(14px + var(--sa-r))
     calc(14px + var(--sa-b)) calc(14px + var(--sa-l));
   pointer-events: none;
 }
-/* Marks the actual visible gap between panels — the top bar has no matching
-   bottom bar, so this cell's center sits lower than the raw viewport center.
-   MapView measures it to keep the field centered under rotation/flip. */
-.map-hole {
-  grid-area: hole;
-}
 .hud > * {
   pointer-events: auto;
   min-height: 0;
-}
-.hud > .map-hole {
-  pointer-events: none;
 }
 
 .topbar {
@@ -140,16 +261,11 @@ body {
   justify-self: start;
 }
 .rail {
+  grid-area: rail;
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-}
-.rail-left {
-  grid-area: left;
-}
-.rail-right {
-  grid-area: right;
 }
 .rail-body {
   display: flex;
@@ -195,6 +311,15 @@ body {
   font-size: 12px;
   color: var(--faint);
 }
+.dock {
+  grid-area: dock;
+  justify-self: end;
+  align-self: end;
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+}
+
 /* ---------- Glass panel (double-bezel instrument) ---------- */
 
 .panel {
@@ -202,9 +327,9 @@ body {
   background: var(--panel);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  box-shadow: var(--inset-hi), 0 18px 50px -24px rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(20px) saturate(1.3);
-  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  box-shadow: var(--inset-hi), var(--lift-card);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
 }
 .panel-pad {
   padding: 14px;
@@ -212,25 +337,33 @@ body {
 
 .eyebrow {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.18em;
   color: var(--faint);
 }
 
 /* ---------- Topbar ---------- */
 
+/* One capsule, internally divided — brand, fleet health, link, settings all act
+   on the same subject (this station), so they share a single object. */
+/* The signature. A pill reads as an app chrome; a plate with its trailing
+   corner cut off reads as a console faceplate, which is what the plot table is
+   made of. It appears here and on the command dock and NOWHERE else — a notch
+   on every panel would be a texture rather than a mark. */
 .topbar {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-  padding: 10px 16px;
-}
-.topbar-row {
-  display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  padding: 7px 7px 7px 15px;
+  border-radius: var(--radius) 0 var(--radius) var(--radius);
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--chamfer)) 0,
+    100% var(--chamfer),
+    100% 100%,
+    0 100%
+  );
 }
 .brand {
   display: flex;
@@ -240,20 +373,104 @@ body {
 .brand img {
   width: 26px;
   height: 26px;
-  border-radius: 8px;
+  border-radius: 999px;
 }
 .brand .name {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 16px;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.02em;
 }
 .brand .name small {
   display: block;
   font-size: 9px;
-  letter-spacing: 0.24em;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--faint);
-  font-weight: 600;
+  font-weight: 700;
+}
+
+/* The tape, as a lozenge: which rover you are calling. */
+.tape {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--accent-deep);
+}
+
+/* ---------- Pit-board readout (signature component) ----------
+   The identity of the whole system: the numbers an operator reads standing over
+   a bench, at poster scale, in mono because a robot measured them. Three at
+   most — a pit board with ten numbers is a spreadsheet. */
+.pitboard-section {
+  padding-top: 3px;
+}
+.pitboard {
+  display: grid;
+  /* minmax(0,1fr) not 1fr: a grid track's default min-content floor lets a wide
+     numeral push its neighbour out of its own column. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  align-items: end;
+}
+.pb-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.pb-key {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--faint);
+}
+.pb-val {
+  font-family: var(--font-mono);
+  font-size: var(--display-size);
+  font-weight: 800;
+  line-height: 0.88;
+  letter-spacing: -0.045em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  /* Never wrap a numeral: a value broken across two lines is unreadable at the
+     distance this component exists for. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The unit rides the label, not the numeral. An inline superscript beside a
+   38px digit is a collision waiting to happen and reads as a footnote mark. */
+.pb-unit {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--faint);
+}
+/* A value the robot has never reported is shown, but visibly not real. It does
+   NOT hold display scale: an em-dash at 56px reads as a redaction bar, and a
+   headline-sized placeholder claims importance the absent number hasn't got. */
+.pb-none {
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding-bottom: 0.42em;
 }
 
 .pill {
@@ -275,7 +492,7 @@ body {
   height: 8px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 8px currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 20%, transparent);
 }
 .pill.ok {
   color: var(--ok);
@@ -285,6 +502,45 @@ body {
 }
 .pill.warn {
   color: var(--warn);
+}
+/* Fleet-count pill: an indicator, not a status light — the LED inside carries
+   the colour so the text stays quiet next to the connection pill. */
+.pill.quiet {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.pill.quiet .led.ok {
+  color: var(--ok);
+}
+.pill.quiet .led.bad {
+  color: var(--danger);
+}
+
+/* Icon-only control (settings gear). Sized to the same tap target as a .btn
+   even though it looks smaller — it is on a touchscreen, in the field. */
+.icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 13px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--inset-hi);
+  cursor: pointer;
+  transition: transform 0.25s var(--ease), color 0.25s var(--ease),
+    border-color 0.25s var(--ease);
+}
+.icon-btn:hover {
+  color: var(--text);
+}
+.icon-btn:active {
+  transform: scale(0.94);
 }
 
 /* ---------- Fleet list ---------- */
@@ -320,9 +576,24 @@ body {
 .robot:active {
   transform: scale(0.985);
 }
+/* The tape. On a pit board the car you are calling is MARKED, not outlined —
+   a tinted border is something you have to look for. */
 .robot.sel {
-  border-color: var(--accent);
-  background: rgba(76, 158, 255, 0.1);
+  border-color: var(--accent-deep);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.robot.sel .mode,
+.robot.sel .meta {
+  color: rgba(var(--shadow-rgb), 0.68);
+}
+/* Flag colours have to survive the lime fill they sit on. */
+.robot.sel .dot.online {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(var(--shadow-rgb), 0.16);
+}
+.robot.sel .estop-flag {
+  color: #8c0714;
 }
 .robot .top {
   display: flex;
@@ -345,7 +616,7 @@ body {
 }
 .dot.online {
   background: var(--ok);
-  box-shadow: 0 0 9px var(--ok);
+  box-shadow: 0 0 0 3px rgba(var(--ok-rgb), 0.18);
 }
 .dot.offline {
   background: var(--danger);
@@ -388,7 +659,7 @@ body {
 }
 .bar-track {
   height: 7px;
-  background: #0c0f15;
+  background: var(--well);
   border-radius: 4px;
   overflow: hidden;
   position: relative;
@@ -422,29 +693,22 @@ body {
 .btn:active {
   transform: scale(0.96);
 }
-.btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.btn:disabled:active {
-  transform: none;
-}
 .btn.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #06131f;
+  color: var(--on-accent);
 }
 .btn.ghost {
   background: transparent;
 }
 .btn.danger {
   color: var(--danger);
-  background: rgba(255, 77, 90, 0.1);
-  border-color: rgba(255, 77, 90, 0.4);
+  background: rgba(var(--danger-rgb), 0.09);
+  border-color: rgba(var(--danger-rgb), 0.38);
 }
 .btn.danger:active {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .btn-row {
@@ -453,6 +717,22 @@ body {
 }
 .btn-row .btn {
   flex: 1;
+}
+
+/* Mode picker: equal cells, so a longer mode name can't reflow the others. */
+.mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+.mode-grid .btn {
+  font-size: 14px;
+  padding: 0 10px;
+}
+/* An odd number of modes leaves the last one alone in its row looking like a
+   rendering bug. Let it span instead. */
+.mode-grid .btn:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 /* ---------- Telemetry ---------- */
@@ -482,6 +762,32 @@ body {
   font-family: var(--font-mono);
   font-size: 14px;
   color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-align: right;
+}
+/* Seconds since the last telemetry frame, next to the link state. */
+.tel-age {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* IMU calibration, 0-3. Three pips rather than a number: what matters is
+   "enough to trust the heading yet", which is a level, not a measurement. */
+.pips {
+  display: inline-flex;
+  gap: 3px;
+}
+.pip {
+  width: 5px;
+  height: 11px;
+  border-radius: 2px;
+  background: rgba(var(--shadow-rgb), 0.1);
+}
+.pip.on {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(var(--ok-rgb), 0.18);
 }
 
 /* ---------- E-STOP ---------- */
@@ -496,19 +802,22 @@ body {
   pointer-events: auto;
   z-index: 1001;
 }
+/* The one control that does NOT theme. A stop button is a physical object: the
+   same red, the same place, the same weight in every rendition and in every
+   light. An operator reaching for it is not reading the screen. */
 .estop {
   font-family: var(--font-ui);
   font-weight: 700;
   font-size: 17px;
   letter-spacing: 0.14em;
   color: #fff;
-  background: linear-gradient(180deg, #ff5b67, #e0313e);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(180deg, #e8394a, #b8101f);
+  border: 1px solid rgba(var(--shadow-rgb), 0.22);
   border-radius: 16px;
   min-height: 60px;
   padding: 0 26px;
   cursor: pointer;
-  box-shadow: 0 10px 30px -8px rgba(255, 60, 76, 0.6), var(--inset-hi);
+  box-shadow: 0 10px 30px -8px rgba(var(--danger-rgb), 0.5), var(--inset-hi);
   transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
 }
 .estop:active {
@@ -519,15 +828,615 @@ body {
 }
 @keyframes estop-pulse {
   0%, 100% {
-    box-shadow: 0 10px 30px -8px rgba(255, 60, 76, 0.55), var(--inset-hi);
+    box-shadow: 0 10px 30px -8px rgba(var(--danger-rgb), 0.45), var(--inset-hi);
   }
   50% {
-    box-shadow: 0 10px 42px -4px rgba(255, 60, 76, 0.95), var(--inset-hi);
+    box-shadow: 0 10px 42px -4px rgba(var(--danger-rgb), 0.72), var(--inset-hi);
   }
 }
 .estop-clear {
   min-height: 60px;
   padding: 0 16px;
+}
+
+/* ---------- Command dock ----------
+   The bottom strip: every rover's current activity, and where a spoken order
+   will land once there is something to receive it. Carries the chamfer, so it
+   reads as the same faceplate family as the top cluster — those two are the
+   console's frame, and the plates between them are its instruments. */
+
+.cmd-dock {
+  grid-area: cmd;
+  align-self: end;
+  justify-self: start;
+  max-width: min(660px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  backdrop-filter: blur(14px) saturate(1.3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--inset-hi), var(--lift-card);
+  clip-path: polygon(
+    var(--chamfer) 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 var(--chamfer)
+  );
+}
+
+.cmd-order {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+/* A door, not a microphone. It opens the command view, where a transcript can
+   actually be shown — see the header of CommandDock.tsx. */
+.cmd-mic {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-inner);
+  border: 1px solid transparent;
+  background: var(--well);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.16s var(--ease-out), border-color 0.16s var(--ease-out);
+}
+.cmd-mic:hover {
+  color: var(--accent);
+  border-color: var(--hairline-strong);
+}
+.cmd-input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  color: var(--text);
+}
+.cmd-input::placeholder {
+  color: var(--faint);
+}
+.cmd-state {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  appearance: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+/* The three vocabularies of DESIGN.md, kept apart: green/red are flags for how
+   a command went, amber is a *plan* — something asked for and not yet done. */
+.cmd-state.ok {
+  color: var(--ok);
+  border-color: rgba(var(--ok-rgb), 0.4);
+}
+.cmd-state.bad {
+  color: var(--danger);
+  border-color: rgba(var(--danger-rgb), 0.45);
+}
+.cmd-state.plan {
+  color: var(--data);
+  border-color: rgba(var(--data-rgb), 0.5);
+  cursor: pointer;
+}
+.cmd-state.quiet {
+  color: var(--muted);
+}
+
+.cmd-fleet {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.cmd-fleet::-webkit-scrollbar {
+  display: none;
+}
+.cmd-rover {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 11px 6px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.16s var(--ease-out), background 0.16s var(--ease-out);
+}
+.cmd-rover.sel {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+.cmd-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--faint);
+}
+/* State is never carried by colour alone — the activity is spelled out beside
+   the dot, which is what an operator actually reads. */
+.cmd-led.run {
+  background: var(--accent);
+}
+.cmd-led.bad {
+  background: var(--danger);
+}
+.cmd-led.warn {
+  background: var(--warn);
+}
+.cmd-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.cmd-act {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.cmd-act.bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+.cmd-act.run {
+  color: var(--accent);
+}
+
+/* ---------- Command view ----------
+   The screen for giving orders in words. Same sheet treatment as Settings — it
+   is a full view over the map, not a panel — but laid out as a plot table: the
+   talk button and what it produced on the left, the camera and the live
+   vocabulary on the right, the log across the bottom.
+
+   Colour follows the DESIGN.md split exactly. Teal marks engagement (the mic
+   while it is listening, the selected rover). Amber is a *plan*: a command
+   drawn but not yet carried out, which is precisely what one waiting on a
+   human is. Red is refused or failed. None of the three ever answers a
+   question the others are asking. */
+
+.command-page {
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(var(--panel-rgb), 0.92);
+  backdrop-filter: blur(26px) saturate(1.2);
+  -webkit-backdrop-filter: blur(26px) saturate(1.2);
+  padding: calc(14px + var(--sa-t)) calc(14px + var(--sa-r))
+    calc(14px + var(--sa-b)) calc(14px + var(--sa-l));
+  animation: sheet-in 0.32s var(--ease-out);
+  overflow-y: auto;
+}
+
+.cmd-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding: 9px 12px;
+  /* Room for the e-stop, which floats in this corner on every view. */
+  padding-right: 210px;
+}
+.cmd-top .name {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.cmd-top .name small {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--faint);
+  letter-spacing: normal;
+}
+
+.ready-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.btn.small {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.cmd-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.9fr);
+  gap: 12px;
+  align-items: start;
+}
+.cmd-col-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+.cmd-col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cmd-side-panel {
+  padding: 14px;
+}
+
+/* --- the talk button ---
+   The largest object on the view, because it is the one thing a hand reaches
+   for without reading. Teal only while it is actually listening: engagement,
+   per the accent rule. */
+.talk {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 2px;
+}
+.talk-btn {
+  position: relative;
+  appearance: none;
+  width: 108px;
+  height: 108px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--well);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--inset-hi), var(--lift-cap);
+  transition: color 0.2s var(--ease-out), border-color 0.2s var(--ease-out),
+    transform 0.2s var(--ease-out);
+  /* A held button must not also select the label under the thumb. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.talk-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.talk-btn.live {
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: scale(0.97);
+}
+/* The level ring. Scaled from the real input peak, so a muted OS microphone is
+   visibly different from a quiet room — which is otherwise indistinguishable
+   until an order has already been lost. */
+.talk-ring {
+  position: absolute;
+  inset: -1px;
+  border-radius: 999px;
+  border: 2px solid rgba(var(--accent-rgb), 0.45);
+  opacity: 0;
+  transition: transform 0.09s linear, opacity 0.2s var(--ease-out);
+  pointer-events: none;
+}
+.talk-btn.live .talk-ring {
+  opacity: 1;
+}
+.talk-label {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.talk-hint {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--faint);
+  text-align: center;
+  min-height: 16px;
+}
+kbd {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 1px 6px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-inner);
+  background: var(--well);
+  color: var(--muted);
+}
+
+/* --- typing an order --- */
+.order-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.order-input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  min-height: var(--tap);
+  padding: 0 14px;
+  border-radius: var(--radius-input);
+  border: 1px solid var(--hairline);
+  background: var(--well);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 16px;
+}
+.order-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.order-input::placeholder {
+  color: var(--faint);
+}
+
+/* --- what was heard, while the model is still deciding --- */
+.heard {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--well);
+  border: 1px solid var(--hairline);
+}
+/* Nothing was transcribed. Red rather than amber: this is not a plan waiting
+   to happen, it is a failure the operator has to do something about. */
+.heard.failed {
+  border-color: rgba(var(--danger-rgb), 0.45);
+  background: rgba(var(--danger-rgb), 0.07);
+}
+.heard.failed .eyebrow {
+  color: var(--danger);
+}
+.heard.failed .heard-text {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.heard-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  color: var(--ink);
+}
+.heard-conf {
+  font-size: 11.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Three dots that march while the model is classifying. Without this, a slow
+   model is indistinguishable from a command that was silently dropped. */
+.heard-dots {
+  flex: none;
+  width: 18px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0 33%,
+    transparent 33% 100%
+  );
+  background-size: 300% 100%;
+  animation: heard-march 1.1s var(--ease) infinite;
+}
+@keyframes heard-march {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* --- the confirmation gate, made visible ---
+   Amber, because this is a plan: something asked for and not yet done. The
+   button that carries it out is the danger red, because that is what it is. */
+.confirm-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.confirm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--data-rgb), 0.09);
+  border: 1px solid rgba(var(--data-rgb), 0.5);
+}
+.confirm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.confirm-head .eyebrow {
+  color: var(--data);
+}
+.confirm-src {
+  font-size: 11.5px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.confirm-say {
+  font-family: var(--font-ui);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+/* --- the fleet strip, on this view as well --- */
+.cmd-fleet.wide {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+.cmd-empty {
+  font-size: 13.5px;
+  color: var(--faint);
+  padding: 10px 2px;
+}
+
+/* --- camera --- */
+.cmd-fpv {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- the live vocabulary --- */
+.say-list {
+  margin: 10px 0 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  align-items: baseline;
+}
+.say-list dt {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.say-list dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.say-note {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  border-top: 1px solid var(--hairline);
+  padding-top: 10px;
+}
+
+/* --- the log --- */
+.cmd-log {
+  padding: 14px 16px 8px;
+}
+.log-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 300px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.log-row {
+  display: flex;
+  gap: 10px;
+  padding: 9px 2px;
+  border-top: 1px solid var(--hairline);
+}
+.log-row:first-child {
+  border-top: 0;
+}
+.log-led {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-top: 6px;
+  background: var(--faint);
+}
+.log-led.ok {
+  background: var(--ok);
+}
+.log-led.bad {
+  background: var(--danger);
+}
+.log-led.plan {
+  background: var(--data);
+}
+.log-body {
+  min-width: 0;
+  flex: 1;
+}
+.log-said {
+  font-size: 13.5px;
+  color: var(--muted);
+  font-style: italic;
+}
+.log-say {
+  font-size: 16px;
+  color: var(--ink);
+  line-height: 1.35;
+}
+.log-row.bad .log-say {
+  color: var(--danger);
+}
+.log-row.plan .log-say {
+  color: var(--data);
+}
+.log-meta {
+  font-size: 11.5px;
+  color: var(--faint);
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
+/* One column on the kiosk and in portrait. The camera moves below the talk
+   button rather than beside it — at this width a side column is 140px wide and
+   shows nothing usefully. */
+@media (max-width: 900px), (orientation: portrait) {
+  .cmd-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cmd-top {
+    padding-right: 12px;
+  }
+  .talk-btn {
+    width: 96px;
+    height: 96px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heard-dots {
+    animation: none;
+  }
+  .talk-ring {
+    transition: opacity 0.2s var(--ease-out);
+  }
 }
 
 /* ---------- Drive pad ---------- */
@@ -540,14 +1449,14 @@ body {
   border-radius: 50%;
   background: radial-gradient(
       circle at 50% 38%,
-      rgba(76, 158, 255, 0.14),
+      rgba(var(--accent-rgb), 0.30),
       transparent 60%
     ),
     var(--panel);
   border: 1px solid var(--hairline-strong);
-  box-shadow: var(--inset-hi), 0 20px 50px -20px rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(20px) saturate(1.3);
-  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  box-shadow: var(--inset-hi), var(--lift-pad);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
   touch-action: none;
   overflow: hidden;
 }
@@ -582,7 +1491,7 @@ body {
   position: absolute;
   inset: 16%;
   border-radius: 50%;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border: 1px dashed rgba(var(--shadow-rgb), 0.14);
   pointer-events: none;
 }
 .drivepad .nub {
@@ -593,10 +1502,9 @@ body {
   height: 74px;
   margin: -37px 0 0 -37px;
   border-radius: 50%;
-  background: linear-gradient(180deg, #7cc0ff, var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  box-shadow: 0 8px 20px -6px rgba(0, 0, 0, 0.7),
-    inset 0 1px 2px rgba(255, 255, 255, 0.4);
+  background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--lift-cap);
   transition: transform 0.18s var(--ease-out);
   will-change: transform;
 }
@@ -655,7 +1563,7 @@ body {
   border-left: 9px solid transparent;
   border-right: 9px solid transparent;
   border-bottom: 20px solid var(--accent);
-  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.7));
+  filter: drop-shadow(0 1px 3px rgba(var(--shadow-rgb), 0.45));
   transform-origin: 50% 65%;
   transition: transform 0.25s var(--ease-out);
 }
@@ -664,7 +1572,7 @@ body {
   opacity: 0.6;
 }
 .robot-icon.sel .arrow {
-  border-bottom-color: #fff;
+  border-bottom-color: var(--accent);
 }
 .robot-icon .tag {
   position: absolute;
@@ -674,8 +1582,8 @@ body {
   font-size: 11px;
   font-family: var(--font-mono);
   white-space: nowrap;
-  color: var(--text);
-  background: rgba(0, 0, 0, 0.62);
+  color: var(--map-label-ink);
+  background: var(--map-label-bg);
   padding: 2px 6px;
   border-radius: 5px;
 }
@@ -692,12 +1600,12 @@ body {
 }
 .leaflet-bar {
   border: none !important;
-  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.8);
+  box-shadow: 0 12px 30px -18px rgba(var(--shadow-rgb), 0.34);
 }
 /* Basemap credit: required by the imagery licence, so it stays visible — but
    small and dim enough not to compete with telemetry on the kiosk. */
 .leaflet-control-attribution {
-  background: rgba(0, 0, 0, 0.45) !important;
+  background: rgba(var(--panel-rgb), 0.72) !important;
   color: var(--muted);
   font-size: 10px;
   padding: 1px 6px;
@@ -719,23 +1627,842 @@ body {
   display: none;
 }
 
+/* ---------- Saved places ----------
+   Deliberately NOT the route's colour. A place is a fact about the field that
+   outlives the match; a route waypoint is this run's plan. An operator has to
+   tell them apart at a glance on a bright screen outdoors, so they differ in
+   hue and in shape, not in shade. */
+
+.place-icon .pin {
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--on-accent);
+  background: var(--accent-deep);
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  box-shadow: var(--lift-cap);
+  transition: transform 0.18s var(--ease-out);
+}
+.place-icon.k-hazard .pin {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.place-icon.k-start .pin {
+  background: var(--ok);
+  color: var(--on-ok);
+}
+.place-icon.k-marker .pin {
+  background: var(--paper);
+  color: var(--ink);
+}
+/* The open row's pin, so selecting in the list finds it on the map. */
+.place-icon.sel .pin {
+  transform: scale(1.25);
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.45), var(--lift-cap);
+}
+.place-icon .tag {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--map-label-ink);
+  background: var(--map-label-bg);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+/* Drop mode changes what a tap MEANS, which is the kind of mode you forget you
+   are in. The cursor is the standing reminder. */
+.map.dropping {
+  cursor: crosshair;
+}
+
+.place-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.place-row {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--panel-2);
+}
+.place-row.open {
+  border-color: var(--hairline-strong);
+}
+.place-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 8px;
+}
+.place-id {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.place-glyph {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  border-radius: 50%;
+  color: var(--on-accent);
+  background: var(--accent-deep);
+}
+.place-glyph.k-marker {
+  background: var(--well);
+  color: var(--muted);
+}
+.place-glyph.k-start {
+  background: var(--ok);
+  color: var(--on-ok);
+}
+.place-glyph.k-hazard {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.place-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.place-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Tabular figures: a column of coordinates that jitters as digits change is
+   unreadable, and these are read as a column. */
+.place-coords {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.place-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px 9px;
+}
+.place-edit .segmented {
+  align-self: flex-start;
+}
+
+/* The primary action in a rail otherwise full of equals. Only ever one. */
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent-deep);
+  color: var(--on-accent);
+}
+.btn.primary:disabled {
+  background: var(--well);
+  border-color: var(--hairline);
+  color: var(--faint);
+}
+
+/* ---------- Route chips (routine editor) ---------- */
+
+.arg-route {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.route-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.route-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px 3px 6px;
+  border-radius: 9px;
+  background: var(--well);
+  font-size: 12.5px;
+}
+/* A leg pointing at a deleted place is silently dropped on save, so it has to
+   look wrong here — this is the only place it is visible before the rover
+   drives a shorter route than the one on screen. */
+.route-chip.missing {
+  background: rgba(var(--danger-rgb), 0.1);
+  color: var(--danger);
+}
+.route-n {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-deep);
+  color: var(--on-accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+.route-chip.missing .route-n {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.route-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.route-btn {
+  appearance: none;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.route-btn:active {
+  background: var(--hairline);
+}
+
+/* ============================ Settings sheet ============================ */
+
+/* Full-screen over the map, but under the e-stop dock (z 1001) — changing a
+   drive limit must never put the stop button out of reach. */
+.settings-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(var(--panel-rgb), 0.92);
+  backdrop-filter: blur(26px) saturate(1.2);
+  -webkit-backdrop-filter: blur(26px) saturate(1.2);
+  padding: calc(14px + var(--sa-t)) calc(14px + var(--sa-r))
+    calc(14px + var(--sa-b)) calc(14px + var(--sa-l));
+  gap: 12px;
+  animation: sheet-in 0.32s var(--ease-out);
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  flex: none;
+  /* Leaves room for the e-stop, which floats in the same corner. */
+  padding-right: 210px;
+}
+.settings-head .back {
+  min-height: 42px;
+  padding: 0 14px;
+  flex: none;
+}
+.settings-conn {
+  font-size: 12px;
+  color: var(--warn);
+  margin-left: auto;
+}
+
+/* A capsule of pills: one object with internal divisions, per the
+   Cluster-Is-A-Capsule rule. */
+.tabs {
+  display: flex;
+  gap: 3px;
+  padding: 5px;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+}
+.tabs button {
+  appearance: none;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  min-height: 38px;
+  padding: 0 16px;
+  cursor: pointer;
+  transition: background 0.25s var(--ease), color 0.25s var(--ease);
+}
+/* Ink, not paper: this tab is simply ON — it is not the rover you are calling,
+   so it must not wear the tape. */
+.tabs button.on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+/* A measure, not a full-width sprawl: these are forms with help text, and a
+   1600 px line of prose on a kiosk is unreadable. */
+.settings-col {
+  max-width: 720px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The graph is the exception to the measure above: a node canvas squeezed into
+   720 px is a canvas you spend the whole time panning. It takes the room. */
+.settings-col.wide {
+  max-width: 1600px;
+}
+
+.settings-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 2px;
+}
+.settings-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* ---------- Collapsible group ---------- */
+
+.group {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.group-head {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  min-height: var(--tap);
+  padding: 0 15px;
+  cursor: pointer;
+}
+.group-head.static {
+  cursor: default;
+}
+.group.open .group-head {
+  border-bottom: 1px solid var(--hairline);
+}
+.chevron {
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--faint);
+  border-bottom: 2px solid var(--faint);
+  transform: rotate(45deg);
+  transition: transform 0.3s var(--ease);
+  flex: none;
+}
+.group.open .chevron {
+  transform: rotate(225deg);
+}
+.group-body {
+  padding: 6px 15px 14px;
+}
+.group-blurb {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 8px 0 4px;
+  line-height: 1.5;
+}
+
+/* ---------- One setting ---------- */
+
+.field {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.field:last-child {
+  border-bottom: 0;
+}
+.field-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+.field-label {
+  flex: 1;
+  font-size: 14.5px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.field-unit {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.field-help {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 4px 0 0;
+  max-width: 62ch;
+}
+.field-help.error {
+  color: var(--danger);
+}
+
+/* State: a pending edit, a confirmed one, a refused one. All three are on the
+   left edge so a column of fields reads as a single status gutter. */
+.field.dirty {
+  box-shadow: inset 2px 0 0 var(--warn);
+  padding-left: 10px;
+}
+.field.confirmed {
+  box-shadow: inset 2px 0 0 var(--ok);
+  padding-left: 10px;
+  transition: box-shadow 0.6s var(--ease);
+}
+.field.rejected {
+  box-shadow: inset 2px 0 0 var(--danger);
+  padding-left: 10px;
+}
+/* A value the server has never reported — shown, but visibly not real. */
+.field.unknown {
+  opacity: 0.5;
+}
+
+.badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 5px;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+.badge.warn {
+  color: var(--warn);
+  border-color: rgba(var(--data-rgb), 0.45);
+}
+
+/* Inputs */
+.field-num,
+.field-text,
+.field-select {
+  appearance: none;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  min-height: 38px;
+  padding: 0 10px;
+}
+.field-num {
+  width: 92px;
+  text-align: right;
+  flex: none;
+}
+.field-text {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 13px;
+  text-align: left;
+}
+.field-select {
+  flex: none;
+  min-width: 130px;
+  font-family: var(--font-ui);
+  padding-right: 8px;
+}
+.field-num:focus,
+.field-text:focus,
+.field-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* The spinners are useless at 52 px tap targets and steal width. */
+.field-num::-webkit-outer-spin-button,
+.field-num::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+.field-num {
+  -moz-appearance: textfield;
+}
+
+.field-range {
+  appearance: none;
+  width: 100%;
+  height: 34px; /* tap target; the visible track is drawn on the thumb line */
+  margin-top: 2px;
+  background: transparent;
+  cursor: pointer;
+}
+.field-range::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+}
+.field-range::-moz-range-track {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+}
+.field-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  margin-top: -11px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
+  border: 1px solid var(--hairline-strong);
+  box-shadow: 0 4px 12px -5px rgba(var(--shadow-rgb), 0.42);
+}
+.field-range::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
+  border: 1px solid var(--hairline-strong);
+}
+
+/* Toggle */
+.toggle {
+  appearance: none;
+  position: relative;
+  width: 56px;
+  height: 32px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  cursor: pointer;
+  transition: background 0.28s var(--ease), border-color 0.28s var(--ease);
+}
+.toggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle .knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #cdd7e4;
+  box-shadow: 0 2px 6px rgba(var(--shadow-rgb), 0.28);
+  transition: transform 0.28s var(--ease);
+}
+.toggle.on .knob {
+  transform: translateX(24px);
+  background: var(--paper);
+}
+
+/* Segmented enum */
+.segmented {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: 11px;
+  flex: none;
+}
+.segmented button {
+  appearance: none;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  min-height: 32px;
+  padding: 0 11px;
+  cursor: pointer;
+}
+.segmented button.on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ---------- Banners & small buttons ---------- */
+
+.banner {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+}
+.banner.warn {
+  color: var(--warn);
+  background: rgba(var(--data-rgb), 0.1);
+  border-color: rgba(var(--data-rgb), 0.35);
+}
+.banner.error {
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.09);
+  border-color: rgba(var(--danger-rgb), 0.32);
+}
+.btn.small {
+  min-height: 38px;
+  font-size: 13px;
+  padding: 0 13px;
+  flex: none;
+}
+.hint.pad {
+  padding: 10px 4px;
+  line-height: 1.55;
+}
+.footnote {
+  color: var(--faint);
+  border-top: 1px solid var(--hairline);
+  margin-top: 6px;
+}
+
+/* ---------- Controller mapping ---------- */
+
+.bind-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.bind-row:last-child {
+  border-bottom: 0;
+}
+.bind-value {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--muted);
+  min-width: 110px;
+  text-align: right;
+}
+.bind-row.listening {
+  box-shadow: inset 2px 0 0 var(--accent);
+  padding-left: 10px;
+}
+.bind-row.listening .bind-value {
+  color: var(--accent);
+  animation: listening 1.1s var(--ease) infinite;
+}
+@keyframes listening {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.axis-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+.axis-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.axis-row.bound {
+  color: var(--text);
+}
+.axis-idx {
+  width: 18px;
+  text-align: right;
+}
+.axis-val {
+  width: 44px;
+  text-align: right;
+}
+.axis-name {
+  flex: 1;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.axis-track {
+  position: relative;
+  flex: 1;
+  height: 7px;
+  min-width: 80px;
+  background: var(--well);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.axis-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: left 0.08s linear, width 0.08s linear;
+}
+
+.button-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.btn-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--faint);
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  transition: background 0.12s linear, color 0.12s linear;
+}
+.btn-chip.bound {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+.btn-chip.down {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.live-drive {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 2px;
+}
+.live-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.live-row .k {
+  width: 62px;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+.live-row .v {
+  width: 46px;
+  text-align: right;
+}
+
 /* ============ Responsive: portrait / phone / short kiosk ============ */
 
-/* Portrait tablets & phones: both rails become stacked bottom sheets. */
+/* Portrait tablets & phones: rail becomes a bottom sheet, dock floats. */
 @media (max-width: 820px), (orientation: portrait) {
+  /* The sheet runs full width here and the drive pad floats over its top-right
+     corner, so a title row that pushes its right-hand item to the far edge puts
+     that item under the pad. On the kiosk that item is the tape naming which
+     rover you are calling — the one thing that must never be hidden. Group it
+     with its label on the left instead. */
+  .section-title {
+    justify-content: flex-start;
+    gap: 10px;
+  }
   .hud {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr auto auto;
+    grid-template-rows: auto 1fr auto;
     grid-template-areas:
       "top"
       "."
-      "left"
-      "right";
+      "rail";
     gap: 10px;
+  }
+  /* The command dock is a fleet-wide readout, and this layout belongs to the
+     7" panel where the operator is standing next to ONE rover with the sheet
+     already covering half the map. There is no room, and no question it
+     answers that the rail does not. */
+  .cmd-dock {
+    display: none;
+  }
+  .dock {
+    position: absolute;
+    right: calc(14px + var(--sa-r));
+    bottom: calc(150px + var(--sa-b));
+    z-index: 20;
   }
   .rail {
     max-height: 48dvh;
-    box-shadow: var(--inset-hi), 0 -14px 40px -20px rgba(0, 0, 0, 0.85);
+    box-shadow: var(--inset-hi), 0 -14px 40px -22px rgba(var(--shadow-rgb), 0.34);
     transition: transform 0.5s var(--ease);
   }
   .drawer-handle {
@@ -758,8 +2485,67 @@ body {
   }
 }
 
+/* Settings on a narrow screen: the header wraps, and a field's slider gets the
+   full width rather than sharing a row with the number box. */
+@media (max-width: 700px) {
+  /* Two rows: the back button on top (sharing its row with the floating
+     e-stop), the tabs beneath. The spacer reserves the e-stop's corner —
+     padding would shrink the tab row too, and the tabs need the full width. */
+  .settings-head {
+    flex-wrap: wrap;
+    padding-right: 12px;
+    row-gap: 8px;
+  }
+  .settings-head .back {
+    order: 0;
+  }
+  .settings-head::after {
+    content: "";
+    order: 1;
+    flex: 1 0 165px;
+  }
+  .tabs {
+    order: 2;
+    flex: 1 0 100%;
+  }
+  .settings-conn {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+  }
+  .tabs button {
+    flex: 1;
+    padding: 0 8px;
+  }
+  .field-select,
+  .segmented {
+    min-width: 0;
+  }
+  .bind-value {
+    min-width: 84px;
+  }
+}
+
 /* Short landscape kiosk (7" 800x480): compact everything, shrink the pad. */
 @media (max-height: 540px) {
+  /* The 7" 800x480 kiosk. Poster scale is relative to reading distance, and on
+     this panel the operator is closer and has no vertical room to spare. */
+  :root {
+    --display-size: 28px;
+  }
+  .pitboard {
+    padding: 0 0 9px;
+  }
+  .settings-head {
+    padding: 6px 10px;
+    padding-right: 190px;
+  }
+  .tabs button {
+    min-height: 34px;
+  }
+  .group-head {
+    min-height: 44px;
+  }
   .hud {
     gap: 9px;
     padding: calc(9px + var(--sa-t)) calc(9px + var(--sa-r))
@@ -788,4 +2574,899 @@ body {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Document editors: Hardware and Routines.
+
+   These edit a whole document locally and send it on Save, unlike the tuning
+   page's per-field commit, so the controls are plainer — there is no round trip
+   to reflect and nothing to badge as "clamped by the robot". What they do need
+   is density: a six-actuator layout or a ten-state routine has to stay readable
+   on a 360 px rail as well as a landscape tablet.
+--------------------------------------------------------------------------- */
+
+.doc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-block: 10px;
+  min-width: 0;
+}
+
+.doc-field.row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.doc-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.doc-unit,
+.doc-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.doc-hint.full {
+  flex-basis: 100%;
+}
+
+.doc-field.invalid .field-input {
+  border-color: var(--danger);
+}
+
+.doc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0 14px;
+}
+
+.doc-grid.tight {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.chip.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+/* --- actuators and mechanisms --- */
+
+.actuator-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.actuator-card,
+.mech-card {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 12px 14px;
+}
+
+.mech-card {
+  margin-block: 12px;
+}
+
+.actuator-head,
+.mech-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.actuator-head .doc-field,
+.mech-head .doc-field {
+  flex: 1 1 160px;
+}
+
+.preset-editor {
+  margin-top: 12px;
+}
+
+.preset-row {
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+.preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preset-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.preset-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.jog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.btn.jog {
+  touch-action: none; /* a pointer drag off the button must still release it */
+}
+
+/* --- routines --- */
+
+.run-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.run-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-event {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.routine-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.routine-body {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  /* An explicit height, because both children size from content — the canvas is
+     absolutely positioned inside its pane and the inspector is often just a
+     one-line hint, so without this the graph collapses to a letterbox. */
+  height: 64vh;
+  min-height: 380px;
+}
+
+/* The canvas is the interface now, so it gets the room. The inspector is fixed
+   width because its contents are forms — they read badly stretched. */
+.routine-canvas-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.inspector {
+  flex: 0 0 380px;
+  min-width: 0;
+  max-height: 72vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.inspector.empty {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+}
+
+.inspector-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.inspector-title {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.inspector-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Portrait and small panels: the graph goes above the inspector rather than
+   fighting it for width. It stays usable — pan and pinch still work — but the
+   forms get the full column, which is what you actually type into. */
+@media (max-width: 900px) {
+  .routine-body {
+    flex-direction: column;
+    height: auto;
+  }
+  .routine-canvas-pane {
+    flex: 0 0 44vh;
+  }
+  .inspector {
+    flex: 1 1 auto;
+    max-height: none;
+  }
+}
+
+/* ---------- the node canvas ---------- */
+
+/* A column: chrome on top, canvas filling the rest. Deliberately NOT a canvas
+   with floating chrome — a toolbar over a canvas puts invisible dead zones
+   exactly where the auto-layout likes to drop nodes. */
+.canvas-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.canvas-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--panel-2);
+  flex: 0 0 auto;
+}
+
+.canvas-tools {
+  display: flex;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.canvas-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--faint);
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 760px) {
+  .canvas-hint {
+    display: none;
+  }
+}
+
+.routine-canvas {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  display: block;
+  /* The browser must not claim the gestures: one-finger drag pans or moves a
+     node, two fingers pinch. Without this, Safari scrolls the page instead. */
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+
+.routine-canvas:active {
+  cursor: grabbing;
+}
+
+.rc-grid circle {
+  fill: var(--hairline-strong);
+}
+
+/* --- wires --- */
+
+.rc-edge {
+  color: var(--muted); /* the arrow marker inherits this */
+  cursor: pointer;
+}
+
+.rc-edge .rc-hit {
+  stroke: transparent;
+  stroke-width: 20; /* a 2px wire is unhittable with a fingertip */
+  fill: none;
+}
+
+.rc-edge .rc-line {
+  stroke: var(--hairline-strong);
+  stroke-width: 1.75;
+  fill: none;
+  transition: stroke 0.12s var(--ease);
+}
+
+.rc-edge:hover .rc-line {
+  stroke: var(--muted);
+}
+
+.rc-edge.on {
+  color: var(--accent);
+}
+
+.rc-edge.on .rc-line {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.rc-edge.dangling .rc-line {
+  stroke: var(--danger);
+  stroke-dasharray: 4 3;
+}
+
+.rc-label-bg {
+  fill: var(--panel-solid);
+  stroke: var(--hairline);
+}
+
+.rc-edge.on .rc-label-bg {
+  stroke: var(--accent);
+}
+
+.rc-label {
+  fill: var(--muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+.rc-edge.on .rc-label {
+  fill: var(--text);
+}
+
+.rc-linking {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  fill: none;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* --- nodes --- */
+
+.rc-node .rc-body {
+  fill: var(--panel-2);
+  stroke: var(--hairline-strong);
+  stroke-width: 1.5;
+  cursor: grab;
+  transition: stroke 0.12s var(--ease);
+}
+
+.rc-node:hover .rc-body {
+  stroke: var(--muted);
+}
+
+.rc-node.selected .rc-body {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.rc-node.start .rc-body {
+  stroke: var(--accent-deep);
+}
+
+.rc-node.terminal .rc-body {
+  stroke: var(--ok);
+}
+
+.rc-node.problem .rc-body {
+  stroke: var(--danger);
+}
+
+/* The live node is filled, not outlined: at a glance across a field you want a
+   block of colour, not a 2px border. */
+.rc-node.live .rc-body {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+.rc-node .rc-id {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+
+.rc-node .rc-sub {
+  fill: var(--faint);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.rc-node.live .rc-id,
+.rc-node.live .rc-sub {
+  fill: var(--ink);
+}
+
+.rc-badge.start {
+  fill: var(--ink);
+}
+
+.rc-badge.terminal {
+  fill: var(--ok);
+}
+
+.rc-handle {
+  fill: var(--panel-solid);
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  cursor: crosshair;
+  transition: fill 0.12s var(--ease), stroke 0.12s var(--ease);
+}
+
+.rc-node:hover .rc-handle,
+.rc-node.selected .rc-handle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+/* --- canvas chrome --- */
+
+/* State is carried by a tinted fill and a dot, never by a thick coloured left
+   edge — see DESIGN.md. The edge was inherited from the dark system, where it
+   read as a machined gutter; on paper it reads as a sticker, and it puts the
+   only signal on the one part of a card the thumb covers while scrolling. */
+.state-card {
+  position: relative;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  padding: 12px 14px 12px 28px;
+  transition: background 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+/* The dot sits on the card's own baseline row, aligned with the state id. */
+.state-card::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hairline-strong);
+}
+
+/* Live: the tape. This is the one place lime marks a machine condition rather
+   than a selection, and it is deliberate and documented — "the state the
+   machine is in right now" is the subject the operator is tracking, the same
+   channel as the selected rover. Filled, because across a bench you want a
+   block of colour, not a border. */
+.state-card.live {
+  background: var(--accent);
+  border-color: var(--accent-deep);
+}
+.state-card.live::before {
+  background: var(--ink);
+}
+
+.state-card.terminal::before {
+  background: var(--ok);
+}
+
+.state-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.state-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  max-width: 190px;
+}
+
+.pill.live {
+  color: var(--accent);
+}
+
+.state-drive {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+  padding: 8px 0;
+  border-block: 1px solid var(--hairline);
+}
+
+.slot {
+  margin-top: 10px;
+}
+
+.slot-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.action-row,
+.transition-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+.transition-row.chosen {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 6px;
+}
+
+.transition-row.invalid {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.transition-order {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  min-width: 14px;
+}
+
+.transition-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.transition-arrow {
+  color: var(--muted);
+}
+
+.arg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.field-input.tiny,
+.field-select.tiny {
+  font-size: 12px;
+  padding: 5px 8px;
+  max-width: 150px;
+}
+
+.btn.subtle {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.banner.small {
+  font-size: 11px;
+  padding: 5px 9px;
+}
+
+
+/* The selected card is a lime fill, so a lime track bar vanishes into it and a
+   pale track reads as glare. Ink for both; barStyle()'s inline colour has to be
+   overridden, which is the one place !important is the honest tool. */
+.robot.sel .bar-track {
+  background: rgba(var(--shadow-rgb), 0.14);
+  border-color: rgba(var(--shadow-rgb), 0.2);
+}
+.robot.sel .bar-fill {
+  background: var(--ink) !important;
+}
+.robot.sel .bar-label {
+  color: rgba(var(--shadow-rgb), 0.66);
+}
+
+/* ---------- Routine palette: "add a step" ----------
+   A searchable menu of what the robot can do, opened from the canvas bar. It is
+   a sheet in the flow rather than a modal: choosing a step is not an
+   interruption, and a modal over a graph hides the thing you are adding to. */
+.palette {
+  position: absolute;
+  top: 52px;
+  left: 14px;
+  width: min(420px, calc(100% - 28px));
+  max-height: min(60vh, 520px);
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+  background: var(--panel-solid);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--lift-card);
+  overflow: hidden;
+}
+.palette-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px;
+  border-bottom: 1px solid var(--hairline);
+}
+.palette-search {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  min-height: var(--tap);
+  padding: 0 16px;
+}
+.palette-search:focus {
+  outline: none;
+  border-color: var(--ink);
+}
+.palette-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding: 6px;
+}
+.palette-group {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.palette-group:last-of-type {
+  border-bottom: 0;
+}
+.palette-group-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 9px 7px;
+}
+.palette-blurb {
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 62ch;
+}
+.palette-item {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-ui);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  min-height: var(--tap);
+  padding: 9px;
+  cursor: pointer;
+  transition: background 0.25s var(--ease);
+}
+.palette-item:active {
+  background: var(--well);
+}
+.palette-item.subtle .palette-label {
+  color: var(--muted);
+}
+/* Per-group identity, so a graph and its menu read as the same vocabulary.
+   These are category marks, not state — they never use a flag colour, and
+   never the tape. */
+.palette-icon {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 3px;
+  background: var(--faint);
+}
+.palette-icon.g-navigation {
+  background: var(--ink);
+}
+.palette-icon.g-mechanism {
+  background: var(--ink);
+  border-radius: 999px;
+}
+.palette-icon.g-logic {
+  background: transparent;
+  border: 2px solid var(--ink);
+}
+.palette-icon.g-operator,
+.palette-icon.g-timing,
+.palette-icon.g-vision {
+  background: var(--muted);
+}
+.palette-icon.g-blank {
+  background: transparent;
+  border: 1px dashed var(--hairline-strong);
+}
+.palette-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.palette-label {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.palette-help {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 62ch;
+}
+.palette-empty {
+  padding: 16px 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* Node category mark — the palette's shapes, on the graph. Ink, never a flag
+   colour and never the tape: this reports what kind of step a box is, not how
+   the machine is or which one you picked. */
+.rc-kind {
+  fill: var(--ink);
+}
+.rc-kind.quiet {
+  fill: var(--muted);
+}
+.rc-kind.hollow {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+/* On the live node the body is filled lime, so an ink mark still reads. */
+.rc-node.live .rc-kind {
+  fill: var(--ink);
+}
+.rc-node.live .rc-kind.hollow {
+  fill: none;
+  stroke: var(--ink);
+}
+
+/* ---------- Routine templates: the empty state ----------
+   Four working routines to open instead of a blank grid. Cards here are a
+   deliberate exception to "cards are the lazy container": these ARE a set of
+   parallel, independently-choosable things, which is the one shape a card grid
+   is actually right for. */
+.templates {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 0 6px;
+  align-items: flex-start;
+}
+.templates-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.templates-blurb {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 62ch;
+}
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+  width: 100%;
+}
+.template-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-align: left;
+  font-family: var(--font-ui);
+  background: var(--panel-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  cursor: pointer;
+  transition: transform 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+.template-card:active {
+  transform: scale(0.985);
+  border-color: var(--hairline-strong);
+}
+.template-title {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.template-blurb {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.template-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 3px;
+}
+.template-steps {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.template-needs {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--warn);
+}
+
+/* A file input wearing a button. The native control is unstyleable and reads as
+   a foreign object on a kiosk, so it is hidden inside its own label. */
+.file-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+}
+.file-btn input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0;
 }

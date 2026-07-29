@@ -1,18 +1,48 @@
 # RoverSoftware
 
-Modular Python stack for a **tank-drive ground robot** built on a Raspberry Pi
-+ SunFounder **Fusion HAT**, with two ESC-driven motors and an **XBee** radio
+Modular Python stack for a **ground robot** built on a Raspberry Pi
++ SunFounder **Fusion HAT**, with ESC-driven motors and an **XBee** radio
 link to a base station.
 
-Built teleop-first, but structured so the planned autonomy (color-detection
-alignment, GPS waypoint navigation) and the multi-robot base station drop in
-without reworking the core.
+The build is described from the dashboard rather than compiled in: declare as
+many motors and servos as you have, pick a drivetrain (two-motor tank, one motor
+plus a steering servo, a single motor), and group the rest into mechanisms — an
+intake, an arm, a launcher. Then **program it without Python**: the Routines tab
+is a state-machine editor, and the machine runs on the robot itself.
 
-> **Docs:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the whole
-> system works end to end (robot, base station, protocol, GPS, offline maps).
-> [`docs/waypoint-navigation.html`](docs/waypoint-navigation.html)
-> is an interactive walkthrough of the navigation algorithm — open it in a
-> browser.
+Built teleop-first, but structured so the autonomy (object alignment, GPS
+waypoint navigation) and the multi-robot base station drop in without reworking
+the core.
+
+> **📖 The handbook: <https://next-competition.github.io/RoverSoftware/>**
+> — an illustrated walkthrough of running the base station, driving a rover,
+> adding your own motors and mechanisms, and programming a routine without
+> Python. Source is [`docs/`](docs/); build it locally with `just book`.
+>
+> Also in there: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the
+> whole system works end to end (robot, base station, protocol, GPS, offline
+> maps), and
+> [`docs/src/waypoint-navigation.html`](docs/src/waypoint-navigation.html) is an
+> interactive walkthrough of the navigation algorithm.
+
+## Install
+
+Released builds are published as signed Debian packages. On a robot:
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://next-competition.github.io/RoverSoftware/apt/roversoftware-archive-keyring.asc \
+  | sudo tee /etc/apt/keyrings/roversoftware.asc > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/RoverSoftware/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/roversoftware.list > /dev/null
+sudo apt-get update && sudo apt-get install roversoftware-robot
+```
+
+`roversoftware-basestation` is the dashboard. Every release also attaches the
+raw `.deb` files, a desktop base station for macOS/Windows/Linux, and a Python
+wheel — see [Install from apt](docs/src/install/apt.md) and
+[Cutting a release](docs/src/reference/releasing.md). To work from a clone
+instead, read on.
 
 ## How it fits together
 
@@ -22,7 +52,8 @@ without reworking the core.
  (Pi / Mac)                                                │
  PS4 controller                                            ▼
  map + telemetry                                    ┌──────────────┐
- voice → LLM plan                                   │ XBeeLink     │  reader thread → queue
+ voice → local LLM                                  │ XBeeLink     │  reader thread → queue
+ MCP → any AI                                       │              │
                                                     └──────┬───────┘
                                                            ▼
                                                     ┌──────────────┐
@@ -46,12 +77,16 @@ Every controller — teleop today, autonomy tomorrow — emits the same
 ```
 robot/
   config.py             all hardware wiring & tuning
+  layout.py             the hardware layout document (what this build HAS)
   drive/
     motor.py            ESCMotor: throttle [-1,1] -> servo angle (mock if no HAT)
-    tank_drive.py       left/right mixing + slew-rate limiting
+    drivetrain.py       tank / motor+steering servo / single / none
+    tank_drive.py       TankDrive — the name the tools and tests import
+    mechanism.py        intakes, arms, launchers: power and pulse kinds
   comms/
     protocol.py         newline-delimited JSON encode/decode
     xbee_link.py        threaded serial reader (transparent-mode XBee)
+    doc_transfer.py     split/reassemble a whole document across frames
   control/
     commands.py         DriveCommand (tank / arcade / stopped)
     controller.py       Controller base class
@@ -61,6 +96,9 @@ robot/
     object_align.py     object alignment — inject a detection provider
     detection.py        the Detection contract the controller consumes
     waypoint.py         autonomy scaffold — inject a GPS pose provider
+    routine_controller.py  the `routine` mode: runs a UI-authored state machine
+  routine/              the FSM engine: schema, conditions, actions, engine, store
+  tuning.py             whitelist of what the dashboard may change, and its limits
   robot.py              wires it all together; the control loop
 run_robot.py            entry point (run on the Pi)
 tools/
@@ -68,15 +106,26 @@ tools/
   servo_sweep.py        raw servo sweep (the Fusion HAT hello-world)
   xbee_monitor.py       watch/inject XBee frames to verify the radio link
 basestation/            bridge: radio <-> WebSocket + gamepad + tiles — see "Base station"
+  command/              spoken and typed orders -> the same actions a button sends
+    vocabulary.py       what is sayable right now: rovers, places, modes, labels
+    fastpath.py         keyword matching — "stop" never waits on a model
+    llm.py              local gemma via LM Studio, used only to classify
+    intents.py          the whitelist, and which verbs need a human to confirm
+    executor.py         validate -> gate -> dispatch. one throat for every face
+    stt.py              faster-whisper, on this machine, offline
+  mcp_server.py         the same commands as MCP tools, for Claude or any AI
   app.py                FastAPI: internal WebSocket/tiles API, bridge browser<->radio
   fleet.py              FleetManager: tracks every robot from its telemetry
   simulator.py          fake fleet (drop-in for the radio) so it all runs w/o hardware
   controller_input.py   PS4/gamepad reader (pygame, headless) -> selected robot
+  settings.py           gamepad mapping + link/UI rates, editable from the UI
   static/               legacy Leaflet dashboard (kept as internal fallback)
   teleop_sender.py      minimal PS4 -> JSON sender (kept for quick point-to-point tests)
 basestation-ui/         touch-first Deno UI (Vite + Preact) — desktop / iPad / kiosk
   server/               Deno.serve front door: serves the SPA, proxies /ws + /tiles
   src/                  Preact app: MapView, DrivePad joystick, fleet, controls
+    settings/schema.ts  how each tunable is presented (labels, ranges, help)
+    components/settings/ the Settings view: robot / controller / base station
 run_basestation.py      entry point for the bridge
 ```
 
@@ -155,6 +204,7 @@ In the browser:
 - **Gamepad** (R2 = forward, L2 = reverse, right stick = steer) drives the *selected* robot. Buttons e-stop / clear / switch mode.
 - **Map** shows each robot as a heading arrow with a position trail, over **satellite imagery** (Esri World Imagery by default — no API key) so you navigate by visible terrain rather than street names.
 - **Route**: toggle *Add waypoints*, click the map to drop points, **Send route** — the robot switches to waypoint mode and drives it.
+- **Settings** (the gear, top-left) — see below.
 
 Useful flags: `--robots N` (sim count), `--origin lat,lon` (sim start),
 `--no-controller`, `--tiles <url-template>` (point at a local tile server for
@@ -177,6 +227,130 @@ always-visible **E-STOP**, responsive **landscape / portrait (bottom-sheet)**
 layouts with iPad safe-area insets, and locally-bundled map + fonts (no CDN, so
 it works fully offline). Physical gamepads still work via the browser Gamepad
 API, and the server-side gamepad path is unchanged.
+
+### Commanding by voice — the Command tab
+
+Tap the microphone in the command dock (or say nothing and just type into it) to
+open a full screen built for talking: hold **Space**, say the order, and watch
+the transcript, the parsed command and the fleet's reaction in one place.
+
+```bash
+# 1. Speech recognition — runs on the base station, no internet, no API key.
+pip install faster-whisper
+#    Fetch the weights ONCE while you still have signal (~150 MB, cached in
+#    ~/.cache/huggingface). A competition car park is not where you want to
+#    discover this:
+python -c "from faster_whisper import WhisperModel; WhisperModel('base.en')"
+
+# 2. The language model — LM Studio (or any OpenAI-compatible server).
+#    Load google/gemma-3n-e4b, start the local server on :1234. That's it;
+#    nothing to pip install, the base station reaches it over HTTP.
+
+python run_basestation.py --sim          # both are auto-detected
+```
+
+Things that work:
+
+| Say | What happens |
+|---|---|
+| "stop" / "all stop" / "stop rover2" | e-stop, **without the model** — see below |
+| "rover two", "switch to rover three" | selects it, everywhere |
+| "teleop", "put it in waypoint mode" | mode change |
+| "rover1 align to the bucket" | sets `vision.target_label`, *then* enters object align |
+| "send rover2 to bucket A then start" | routes through both saved places |
+| "show me rover3's camera" | selects it and pulls up the FPV |
+| "what is rover2 doing" | answers from live telemetry |
+| "fire" / "arm the shooter" | **asks first** — a card you tap |
+
+**"Stop" never goes through the model.** It is matched on the raw transcript
+before any HTTP request, so LM Studio being closed, slow, or mid-download cannot
+sit between the word and the rover. The same fast path handles rover names,
+modes and the camera, which is why those feel instant while a full sentence takes
+~700 ms.
+
+**Nothing dangerous happens because a 4B model was confident.** Firing, arming,
+jogging and raw drive return a pending card a human taps; it expires after 45 s.
+Everything else is validated against live state first — an unknown rover or an
+unsaved place is refused with a message naming what *does* exist.
+
+Both halves are optional and say so on screen. With no model: keyword commands
+and typing still work. With no faster-whisper: everything except the microphone.
+Flags: `--no-voice`, `--llm-url`, `--llm-model`, `--stt-model`.
+
+### Letting Claude (or any AI) command the fleet — MCP
+
+`basestation/mcp_server.py` is a stdio MCP server. It connects to a **running**
+base station over the same WebSocket the dashboard uses, which is the point: an
+AI gets exactly the dashboard's authority — same whitelist, same confirmation
+gate, same audit log — because it goes through the same front door.
+
+```json
+{"mcpServers": {"rover": {
+  "command": "python", "args": ["-m", "basestation.mcp_server"],
+  "env": {"RS_BASE_WS": "ws://127.0.0.1:8000/ws"}}}}
+```
+
+```bash
+python -m basestation.mcp_server --list-tools   # see exactly what an AI could do
+```
+
+The tool list is *generated* from the same intent registry the voice interface
+uses, so the two can't drift: add an intent and every MCP client gets it, with
+its authority attached. `get_fleet` translates telemetry into words a model can
+reason about ("sees: bucket, centred: true" rather than `ex: 0.03`). Tools whose
+intent needs approval say so in their description and return "waiting for a
+human" — the operator taps the card at the base station.
+
+### Settings
+
+The gear in the top-left opens a full-screen settings view. Changes apply
+immediately and are saved — on the robot for robot settings, on the base station
+for the rest — so field tuning survives the next power cycle.
+
+- **Tuning** — the selected rover's tunables, over the radio and live: PID gains
+  for object alignment and waypoint heading hold, drive limits and per-motor ESC
+  calibration, loop and telemetry rates, vision thresholds, shooter geometry and
+  firing policy, GPS/IMU and FPV. Fetched when you open the tab rather than
+  streamed, because the full set is ~2.4 KB on a link shared with telemetry. On a
+  robot running its own layout, the per-motor groups are the ones *it* declared.
+- **Hardware** — what the robot is built from. Pick a drivetrain (two-motor tank,
+  one motor plus a steering servo, a single motor, or none), add as many motors
+  and servos as the build has, and group the rest into **mechanisms** — an
+  intake, an arm, a second launcher — each with named presets like `in` and
+  `out`. Every actuator has a name, a PWM channel and its own calibration;
+  claiming a channel twice is refused rather than silently making two motors move
+  together. A **Test** control jogs one mechanism from the bench, refused unless
+  the robot is in teleop with no e-stop latched. A layout is saved whole and
+  takes effect on the next start, because actuators are built at start-up.
+- **Routines** — program the robot without Python, by drawing it. A routine is a
+  state machine on a canvas: drag boxes to arrange them, drag from a box's right
+  edge onto another to wire them together, tap a wire to say when it fires. Each
+  state says what drives (stop, a fixed throttle, or *delegate to* object align /
+  shooter align / waypoint), what happens when it is entered, held and left, and
+  what makes it move on — after a delay, when lined up, once the route finishes,
+  after N shots, or when you press a button. Saved routines run **on the robot**,
+  so they survive losing the radio, and the box the robot is actually in lights
+  up as it runs. Transitions are checked in order, one per tick, and a condition
+  can be required to hold continuously before it counts — the same reason the
+  launcher waits half a second before firing.
+- **Controller** — remap the gamepad by *pressing the control you want*, with a
+  live view of every axis and button and the throttle/steer the current mapping
+  produces. Also dead zone, trigger rest value, throttle/steer authority and
+  steering inversion. Indices describe a driver, not a controller — the same pad
+  enumerates differently on macOS, Linux, USB and Bluetooth — so this replaces
+  editing constants and restarting the service.
+- **Base station** — radio airtime budget (`drive_hz`), dashboard refresh, video
+  frame rate, basemap URL, trail length.
+
+Values are **clamped, not refused**: ask for a gain of 500 and you get the
+maximum, echoed back so the field shows what the robot is actually doing. Fields
+badged `restart` (serial ports, PWM channels, enable flags) are saved but only
+take effect on the next start. Everything works against `--sim` — including the
+Hardware and Routines tabs, which the simulator answers with the *real*
+validators and runs with the *real* state-machine engine — so the whole page can
+be exercised with no hardware. A settings page you can only test on a real rover
+is a settings page that ships broken, and that goes double for one that programs
+the robot.
 
 **Easiest — one command** (starts the bridge + UI together, opens the browser,
 one Ctrl+C stops both):
@@ -311,15 +485,45 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 // base station -> robot
 {"type": "drive", "throttle": 0.5, "steer": -0.2, "to": "rover1"}   // arcade
 {"type": "drive", "left": 0.4, "right": 0.6, "to": "rover1"}         // direct tank
-{"type": "mode", "mode": "teleop", "to": "rover1"}                   // or object_align / waypoint
+{"type": "mode", "mode": "teleop", "to": "rover1"}                   // or object_align / waypoint / routine
 {"type": "route", "waypoints": [[lat, lon], ...], "to": "rover1"}    // waypoint mode
 {"type": "estop", "to": "rover1"}                                    // latch motors off
 {"type": "clear_estop", "to": "rover1"}
+{"type": "get_config", "to": "rover1"}                               // every tunable parameter
+{"type": "set_config", "config": {"align.pid.kp": 0.6}, "to": "rover1"}
+
+// documents: structure rather than scalars, sent as numbered fragments
+{"type": "get_layout", "to": "rover1"}     // what this build HAS
+{"type": "get_routines", "to": "rover1"}   // its state machines
+{"type": "put_layout", "txid": "B1", "seq": 0, "n": 3, "part": "{\"vers…", "to": "rover1"}
+{"type": "select_routine", "id": "collect", "to": "rover1"}
+{"type": "routine_cmd", "cmd": "start", "to": "rover1"}   // start | stop | restart
+{"type": "routine_event", "name": "go", "to": "rover1"}   // advance a "when I press" transition
+{"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}   // bench test, teleop only
 
 // robot -> base station (telemetry, ~5 Hz)
 {"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
  "left": 0.4, "right": 0.6, "battery": 87.0, "lat": 37.77, "lon": -122.41, "heading": 30.0}
+{"type": "config", "from": "rover1", "config": {"align.pid.kp": 0.6},
+ "rejected": {}, "restart": [], "save_error": null}
+{"type": "layout_result", "from": "rover1", "ok": true, "errors": [], "restart_required": true}
+{"type": "routines_result", "from": "rover1", "ok": false,
+ "errors": ["state 'shoot': unknown mechanism 'intak'"]}
 ```
+
+`config` frames carry flat dotted paths into `RobotConfig`; `robot/tuning.py`
+decides which exist and clamps every value, so a browser can't reach an
+arbitrary attribute. The payload is a *partial* set the base station merges:
+everything in reply to `get_config`, only the applied fields after a `set_config`
+— a full snapshot is ~0.4 s of airtime at 57600, so it is requested explicitly
+and never polled.
+
+**Documents are not merged.** A `config` payload can be, because it is
+independent scalars — half a snapshot is a valid smaller snapshot. A layout is a
+tree, and half a tree is a robot with one drive motor, so layouts and routines
+are sliced into numbered fragments and nothing is applied until every fragment
+arrives. The robot replies with a verdict and echoes the *stored* copy back,
+since the validator clamps and what was saved is not always what was sent.
 
 Safety built in: teleop stops if commands stop arriving (`command_timeout`), and
 e-stop overrides every mode until cleared. (Position fields appear in telemetry
@@ -358,7 +562,32 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
 - **Base station app** — ✅ done: map view + live multi-robot tracking, PS4
   teleop of the selected robot, mode switching, click-to-route waypoints, and the
   FPV camera feed. Next: offline tile caching and a telemetry/log panel.
-- **Voice → multi-robot planning** — a local LLM turns a high-level spoken order
-  into a plan; a dispatcher agent slices it into per-vehicle chunks and sends
-  them as `mode`/`route`/task messages over XBee, one manageable step at a time.
+- **Any hardware layout** — ✅ done: motors, servos and mechanisms are declared in
+  a layout document written from the dashboard's Hardware tab, not compiled in.
+  `DriveCommand(left, right)` is still the one command type in the system, so a
+  steered chassis reuses object align and waypoint unchanged. (One honest caveat:
+  a steered chassis cannot pivot in place, and those modes ask it to — see
+  `min_pivot_throttle` in `docs/ARCHITECTURE.md` §4.4.)
+- **Program it without code** — ✅ done: the Routines tab is a node-graph editor
+  for state machines. A state says what drives — including *delegating* to object
+  align, shooter align or waypoint, which is how the FSM composes the autonomy
+  that already exists — what it does to the mechanisms, and what makes it move
+  on. Routines run on the robot, so they survive losing the radio.
+- **Voice commanding** — ✅ done: hold a key, say "send rover2 to bucket A" or
+  "rover1 align to the cone", and it happens. Speech is recognised **on the base
+  station** with faster-whisper and classified by a **local Gemma in LM Studio**,
+  so the whole path works with no internet — same constraint that produced the
+  offline tiles. "Stop" is matched by keyword *before* the model is consulted, so
+  it still works with LM Studio closed. Firing, arming and raw drive return a
+  card a human taps rather than executing. See the Command tab, and
+  `docs/ARCHITECTURE.md` §7b.
+- **MCP: any AI can command the fleet** — ✅ done: `python -m
+  basestation.mcp_server` is a stdio MCP server that connects to the running base
+  station over the same WebSocket the dashboard uses, so Claude (or anything else
+  speaking MCP) gets exactly the dashboard's authority — the same whitelist, the
+  same confirmation gate, the same audit log. Its tool list is generated from the
+  intent registry, so voice and MCP can never drift apart.
+- **Voice → multi-robot planning** — still ahead: today an order goes to one
+  rover at a time. Next is a dispatcher that slices "clear the north field" into
+  per-vehicle chunks and sequences them.
 ```

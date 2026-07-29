@@ -76,9 +76,16 @@ export function makeDriveSender() {
   }
 
   return {
-    /** Feed the current stick vector (raw; deadzone + clamp applied here). */
+    /**
+     * Feed the current stick vector, already conditioned by its source.
+     *
+     * Only clamped here, NOT deadzoned: each input applies its own dead zone
+     * (the touch pad uses `deadzone()` below, a gamepad uses the operator's
+     * saved mapping), and a second one at this layer would quietly swallow
+     * small commands from a pad running reduced throttle authority.
+     */
     update(throttle: number, steer: number): void {
-      push(clamp1(deadzone(throttle)), clamp1(deadzone(steer)), false);
+      push(clamp1(throttle), clamp1(steer), false);
     },
     /** Command an immediate stop and reset the keepalive clock. */
     release(): void {

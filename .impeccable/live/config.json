@@ -1,0 +1,6 @@
+{
+  "files": ["basestation-ui/index.html"],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}

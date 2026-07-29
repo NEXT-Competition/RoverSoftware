@@ -1,0 +1,344 @@
+name: release
+
+# Cutting a release is one action: push a tag.
+#
+#     git tag -a v0.2.0 -m "0.2.0" && git push origin v0.2.0
+#
+# That builds the two Debian packages, the desktop base station for macOS,
+# Windows and Linux, and a Python sdist/wheel; attaches all of it to a GitHub
+# Release; and folds the .debs into the apt repository published beside the
+# handbook. See docs/src/reference/releasing.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v (e.g. 0.2.0)"
+        required: true
+        type: string
+      publish_apt:
+        description: "Also publish to the apt repository"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── one place decides what version everything else stamps ────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            v="${{ inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#v}"
+          fi
+          # Debian versions must start with a digit, and a typo here produces a
+          # package nothing can upgrade from. Fail loudly instead.
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.~+-][A-Za-z0-9.~+-]+)?$' || {
+            echo "::error::'$v' is not a usable version (want e.g. 0.2.0 or 0.2.0~rc1)"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "building $v"
+
+  # ── the two .deb packages ────────────────────────────────────────────────
+  debs:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: basestation-ui/package-lock.json
+
+      - name: Build the touch UI
+        working-directory: basestation-ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Build packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          # The UI is already built above; don't let the script rebuild it.
+          BUILD_UI: "0"
+        run: ./packaging/build-deb.sh all
+
+      - name: Show what was produced
+        run: |
+          for f in dist/*.deb; do
+            echo "=== $f"; dpkg-deb --info "$f" | sed -n '1,12p'
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: debs
+          path: dist/*.deb
+          if-no-files-found: error
+
+  # ── the base station as a native desktop app ─────────────────────────────
+  desktop:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: linux-x64 }
+          - { os: macos-13,       target: macos-x64 }
+          - { os: macos-14,       target: macos-arm64 }
+          - { os: windows-latest, target: windows-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: basestation-ui/package-lock.json
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Build the client bundle
+        working-directory: basestation-ui
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Bundle the desktop binary
+        working-directory: basestation-ui
+        run: deno task bundle
+
+      - name: Collect the binary
+        shell: bash
+        working-directory: basestation-ui
+        run: |
+          mkdir -p ../out
+          # `deno desktop build` names its output from deno.json rather than to
+          # a path we choose, so find it instead of guessing.
+          found=$(find . -maxdepth 3 -type f \
+                    \( -perm -u+x -o -name '*.exe' -o -name '*.app' \) \
+                    -newer deno.json \
+                    -not -path './node_modules/*' -not -path './dist/*' \
+                    -not -name '*.ts' -not -name '*.json' -not -name '*.js' | head -n 20)
+          echo "candidates:"; echo "$found"
+          if [ -z "$found" ]; then
+            echo "::error::deno task bundle produced no binary — inspect the tree above"
+            ls -R . | head -60
+            exit 1
+          fi
+          name="roversoftware-basestation-${{ needs.version.outputs.version }}-${{ matrix.target }}"
+          # A .app is a directory; everything else is one file.
+          first=$(echo "$found" | head -n 1)
+          if [ -d "$first" ]; then
+            ( cd "$(dirname "$first")" && zip -qry "$OLDPWD/../out/${name}.zip" "$(basename "$first")" )
+          else
+            cp "$first" "../out/${name}$( [ "${{ matrix.os }}" = 'windows-latest' ] && echo .exe )"
+          fi
+          ls -la ../out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+
+  # ── sdist + wheel ────────────────────────────────────────────────────────
+  python:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Stamp the version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          p = pathlib.Path("pyproject.toml")
+          s = p.read_text()
+          s, n = re.subn(r'^version = ".*"$', f'version = "{os.environ["VERSION"]}"',
+                         s, count=1, flags=re.M)
+          assert n == 1, "no version line found in pyproject.toml"
+          p.write_text(s)
+          PY
+          grep -m1 '^version' pyproject.toml
+
+      - run: pipx run build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python
+          path: dist/*
+          if-no-files-found: error
+
+  # ── one release, everything attached ─────────────────────────────────────
+  release:
+    needs: [version, debs, desktop, python]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Flatten and checksum
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ( cd release && sha256sum * > SHA256SUMS )
+          ls -la release
+
+      - name: Release notes
+        env:
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          cat > NOTES.md <<EOF
+          ## Install
+
+          **On a robot or base station (recommended)** — add the apt repository once,
+          then every future release arrives with \`apt upgrade\`:
+
+          \`\`\`bash
+          sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://next-competition.github.io/RoverSoftware/apt/roversoftware-archive-keyring.asc \\
+            | sudo tee /etc/apt/keyrings/roversoftware.asc > /dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/RoverSoftware/apt stable main" \\
+            | sudo tee /etc/apt/sources.list.d/roversoftware.list > /dev/null
+          sudo apt-get update && sudo apt-get install roversoftware-robot
+          \`\`\`
+
+          **A single package from this release:**
+
+          \`\`\`bash
+          curl -fLO https://github.com/${GITHUB_REPOSITORY}/releases/download/v${V}/roversoftware-robot_${V}_all.deb
+          sudo apt-get install ./roversoftware-robot_${V}_all.deb
+          \`\`\`
+
+          **Desktop base station:** download the binary for your platform below.
+          **Python:** \`pip install roversoftware-${V}-py3-none-any.whl\`
+
+          Verify anything with \`sha256sum -c SHA256SUMS\`.
+
+          Full handbook: <https://next-competition.github.io/RoverSoftware/>
+          EOF
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          body_path: NOTES.md
+          files: release/*
+          draft: false
+          prerelease: ${{ contains(needs.version.outputs.version, '~') || contains(needs.version.outputs.version, '-') }}
+          generate_release_notes: true
+
+  # ── fold the .debs into the published apt repository ─────────────────────
+  apt:
+    needs: [version, debs, release]
+    if: ${{ github.event_name == 'push' || inputs.publish_apt }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Shares a lane with the docs deploy: both push to the same gh-pages branch,
+    # and two concurrent pushes to one branch is a lost commit.
+    concurrency:
+      group: pages-site
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: debs
+          path: debs
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils
+
+      - name: Check out the site branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git clone --depth 1 --branch gh-pages "$remote" site 2>/dev/null; then
+            echo "cloned existing gh-pages"
+          else
+            echo "gh-pages does not exist yet — creating it"
+            mkdir site && git -C site init -q -b gh-pages
+            git -C site remote add origin "$remote"
+          fi
+
+      - name: Import the signing key
+        env:
+          KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::APT_GPG_PRIVATE_KEY is not set — see docs/src/reference/releasing.md"
+            exit 1
+          fi
+          # A short GNUPGHOME: the agent's socket path has a length limit that
+          # the default runner temp dir can exceed.
+          export GNUPGHOME=/tmp/gnupg
+          mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          printf '%s' "$KEY" | gpg --batch --import
+          fpr=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+          echo "GPG_KEY_ID=$fpr" >> "$GITHUB_ENV"
+          echo "imported ${fpr:0:8}…"
+
+      - name: Rebuild the repository over the whole pool
+        run: |
+          # Incremental on purpose: the existing pool comes along, the new
+          # .debs are added, and every index is regenerated over all of it.
+          APT_ROOT="$PWD/site/apt" \
+          GPG_KEY_ID="$GPG_KEY_ID" \
+            ./packaging/apt-repo.sh debs/*.deb
+
+      - name: Sanity-check what apt will see
+        run: |
+          idx="site/apt/dists/stable/main/binary-arm64/Packages"
+          test -s "$idx" || { echo "::error::empty package index"; exit 1; }
+          grep -q "^Package: roversoftware-robot" "$idx" || {
+            echo "::error::roversoftware-robot missing from the index"; exit 1; }
+          test -s "site/apt/dists/stable/InRelease" || {
+            echo "::error::Release was not signed"; exit 1; }
+          echo "index holds $(grep -c '^Package:' "$idx") entries"
+
+      - name: Publish
+        working-directory: site
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          touch .nojekyll
+          git add apt .nojekyll
+          git diff --cached --quiet && { echo "nothing changed"; exit 0; }
+          git commit -q -m "apt: roversoftware ${{ needs.version.outputs.version }}"
+          # The docs job may have pushed between our clone and now.
+          for i in 1 2 3 4 5; do
+            git push -u origin gh-pages && exit 0
+            echo "push rejected, rebasing (attempt $i)"
+            git fetch origin gh-pages && git rebase --autostash origin/gh-pages
+            sleep $((i * 3))
+          done
+          echo "::error::could not push gh-pages after 5 attempts"; exit 1

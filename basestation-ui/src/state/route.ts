@@ -5,12 +5,17 @@
 import { signal } from "@preact/signals";
 import type { LatLon } from "../net/types.ts";
 import { selected, send } from "../net/ws.ts";
+import { placeMode } from "./places.ts";
 
 export const routeMode = signal(false);
 export const routePts = signal<LatLon[]>([]);
 
 export function toggleRouteMode(): void {
   routeMode.value = !routeMode.value;
+  // One tap on the map can only mean one thing. Both modes consume the same
+  // gesture, so turning this on turns place-dropping off rather than leaving
+  // the map to guess (MapView resolves a tie in favour of the route).
+  if (routeMode.value) placeMode.value = false;
 }
 
 export function addWaypoint(lat: number, lon: number): void {

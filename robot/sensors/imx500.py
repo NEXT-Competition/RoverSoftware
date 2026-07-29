@@ -149,6 +149,54 @@ def load_labels(intrinsics, labels_path: str = "") -> List[str]:
     return labels
 
 
+def unpack_edgemdt_nms(outputs) -> Optional[Tuple]:
+    """Recognize and unpack the edge-mdt NMS layout -> (boxes, scores, labels, n).
+
+    This is what a YOLO exported with `tools/imx500_export_yolo.py` emits. The
+    export wraps the network in edge-mdt-cl's `multiclass_nms_with_indices`, so
+    NMS runs ON THE SENSOR and four tensors come out instead of the model-zoo
+    three:
+
+        boxes    (max_det, 4)  corner coords (x_min, y_min, x_max, y_max),
+                               in NETWORK INPUT pixels, not normalized
+        scores   (max_det,)    descending
+        labels   (max_det,)    class index
+        n_valid  (1,)          how many of max_det are real; the rest are
+                               zero-padding, which would otherwise decode into
+                               a pile of degenerate boxes at the origin
+
+    Returns None if `outputs` is not this layout, so the caller can fall through
+    to the model-zoo paths.
+
+    --- Why this identifies tensors by shape instead of by position ---
+    The order picamera2 hands these back is not something this code can verify
+    off-device: the ONNX graph declares them boxes/scores/labels/n_valid, but the
+    converter's own dnnParams.xml lists them in the opposite order, and which one
+    the sensor metadata follows is only observable on a Pi. Shape settles the two
+    that matter without guessing — boxes is the only 2-D tensor and n_valid the
+    only single-element one — and where those two landed then tells us whether
+    the whole list is forward or reversed, which fixes scores vs labels too.
+    """
+    if outputs is None or len(outputs) != 4:
+        return None
+    arrs = [o[0] if getattr(o, "ndim", 0) and o.shape[0] == 1 and o.ndim > 1 else o
+            for o in outputs]
+    box_at = [i for i, a in enumerate(arrs) if a.ndim == 2 and a.shape[-1] == 4]
+    one_at = [i for i, a in enumerate(arrs) if a.size == 1]
+    if len(box_at) != 1 or len(one_at) != 1:
+        return None
+    bi, ni = box_at[0], one_at[0]
+    if bi == 0 and ni == 3:
+        boxes, scores, labels, n_valid = arrs          # as the ONNX graph declares
+    elif bi == 3 and ni == 0:
+        n_valid, labels, scores, boxes = arrs          # as dnnParams.xml lists
+    else:
+        return None
+    n = int(n_valid.reshape(-1)[0])
+    n = max(0, min(n, len(scores)))
+    return boxes[:n], scores[:n], labels[:n], n
+
+
 class Decoder:
     """One frame's libcamera metadata -> full-frame pixel boxes above threshold.
 
@@ -179,6 +227,25 @@ class Decoder:
         return (f"input={iw}x{ih} task={task} post={post} "
                 f"labels={len(self.labels)}")
 
+    def describe_layout(self, metadata: dict) -> str:
+        """Which decode path a real frame actually took — bring-up aid.
+
+        `describe()` reports what the network SAYS it is; a custom .rpk carries
+        no intrinsics, so this reports what the tensors turned out to be. Used by
+        tools/detector_selftest.py, where "which layout am I on" is the first
+        question when no boxes come out.
+        """
+        outputs = self.imx500.get_outputs(metadata, add_batch=True)
+        if outputs is None:
+            return "no inference attached to this frame"
+        nms = unpack_edgemdt_nms(outputs)
+        if nms is not None:
+            return (f"edge-mdt NMS (on-sensor), {len(outputs)} tensors, "
+                    f"{nms[3]} valid detections")
+        if getattr(self.intrinsics, "postprocess", "") == "nanodet":
+            return f"nanodet (NMS on the Pi), {len(outputs)} tensors"
+        return f"model-zoo boxes/scores/classes, {len(outputs)} tensors"
+
     def label_for(self, category) -> str:
         try:
             return self.labels[int(category)]
@@ -188,9 +255,15 @@ class Decoder:
     def parse(self, metadata: dict, frame_w: int, frame_h: int) -> List[Box]:
         """Sensor output tensor -> full-frame pixel boxes above the threshold.
 
-        Two output layouts, both from picamera2's own IMX500 demo: nanodet needs
-        NMS on the Pi, everything else (SSD/YOLO-style `_pp` networks) arrives
-        already post-processed as parallel boxes/scores/classes tensors.
+        Three output layouts:
+
+        * edge-mdt NMS (four tensors) — our own YOLO export, see
+          unpack_edgemdt_nms(). Checked FIRST because it is identified from the
+          tensors themselves; the other two are chosen by intrinsics that a
+          custom .rpk does not carry.
+        * nanodet — NMS has to run here on the Pi.
+        * everything else (SSD/YOLO-style `_pp` model-zoo networks) — arrives
+          already post-processed as parallel boxes/scores/classes tensors.
         """
         import numpy as np
 
@@ -201,7 +274,18 @@ class Decoder:
         input_w, input_h = self.imx500.get_input_size()
         threshold = self.cfg.min_confidence
 
-        if getattr(self.intrinsics, "postprocess", "") == "nanodet":
+        nms = unpack_edgemdt_nms(outputs)
+        if nms is not None:
+            boxes, scores, classes, _n = nms
+            # Corner pixels in network input space -> the normalized (y0, x0, y1,
+            # x1) convert_inference_coords() wants. Done unconditionally rather
+            # than via intrinsics.bbox_normalization/bbox_order: those describe
+            # model-zoo networks and are absent from a custom export, but this
+            # layout's contract is fixed by the exporter, so it is known here.
+            boxes = np.asarray(boxes, dtype=np.float32) / float(input_h)
+            boxes = boxes[:, [1, 0, 3, 2]]
+            boxes = zip(*np.array_split(boxes, 4, axis=1))
+        elif getattr(self.intrinsics, "postprocess", "") == "nanodet":
             from picamera2.devices.imx500 import postprocess_nanodet_detection
             from picamera2.devices.imx500.postprocess import scale_boxes
 

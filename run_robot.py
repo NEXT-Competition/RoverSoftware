@@ -6,7 +6,8 @@
 Defaults are read from the environment first (so the systemd service can be
 configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
 
-    RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_START_MODE, RS_LOOP_HZ,
+    RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_BASE_HOST, RS_BASE_PORT,
+    RS_START_MODE, RS_LOOP_HZ,
     RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD/RATE_MS, RS_HEADING_SOURCE,
     RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
@@ -14,7 +15,24 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_VISION_IMX500_MODEL/LABELS/IOU/MAX_DET,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
-        MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED
+        MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED,
+    RS_ROUTINE_ALLOW_ARM/STATE_TIMEOUT
+
+Two files are read after all of that, in this order:
+
+    RS_LAYOUT_FILE    what actuators this build has, and what they belong to
+                      (robot/layout.py). Structural, so it decides which tuning
+                      paths even exist — `drive.<name>.deadband` is only real
+                      once <name> is. No file leaves the compiled-in two-motor
+                      tank drive exactly as it was.
+    RS_TUNING_FILE    values tuned from the base station's settings page, saved
+                      on the robot and applied LAST (robot/tuning.py). They are
+                      the operator's most recent deliberate decision, and
+                      nothing they can reach has a CLI flag or env var here.
+
+State machines authored in the dashboard live in RS_ROUTINES_FILE and are loaded
+by Robot itself — they are data the engine reads, not wiring, so unlike a layout
+they take effect the moment they arrive.
 
 Without the Fusion HAT / XBee present, the servo layer falls back to a mock so
 you can still exercise the control and comms logic on a laptop. Likewise
@@ -33,6 +51,7 @@ servo is mocked, and every shot still prints:
 import argparse
 import os
 
+from robot import layout, tuning
 from robot.config import RobotConfig
 from robot.robot import Robot
 
@@ -47,8 +66,18 @@ def main():
                         help="XBee serial port")
     parser.add_argument("--baud", type=int,
                         default=int(os.environ.get("RS_XBEE_BAUD", cfg.comms.baud)))
+    # Bulk transfers over WiFi (config snapshots, layouts, routines). Falls back
+    # to the radio whenever the base station isn't reachable, so this is safe to
+    # set permanently; see robot/comms/ip_link.py.
+    parser.add_argument("--base-host",
+                        default=os.environ.get("RS_BASE_HOST", cfg.comms.base_host),
+                        help="base station host for WiFi bulk transfers (blank = radio only)")
+    parser.add_argument("--base-port", type=int,
+                        default=int(os.environ.get("RS_BASE_PORT", cfg.comms.base_port)),
+                        help="base station TCP port for WiFi bulk transfers")
     parser.add_argument("--mode", default=os.environ.get("RS_START_MODE", cfg.start_mode),
-                        choices=["teleop", "object_align", "shooter_align", "waypoint"])
+                        choices=["teleop", "object_align", "shooter_align",
+                                 "waypoint", "routine"])
     parser.add_argument("--hz", type=float,
                         default=float(os.environ.get("RS_LOOP_HZ", cfg.loop_hz)))
     parser.add_argument("--telemetry-hz", type=float,
@@ -132,6 +161,8 @@ def main():
     cfg.robot_id = args.robot_id
     cfg.comms.port = args.port
     cfg.comms.baud = args.baud
+    cfg.comms.base_host = args.base_host
+    cfg.comms.base_port = args.base_port
     cfg.start_mode = args.mode
     cfg.loop_hz = args.hz
     cfg.telemetry_hz = args.telemetry_hz
@@ -182,6 +213,48 @@ def main():
     cfg.shooter.max_shots = int(os.environ.get("RS_SHOOTER_MAX_SHOTS", cfg.shooter.max_shots))
     cfg.shooter.require_arm = os.environ.get("RS_SHOOTER_REQUIRE_ARM", "1").strip().lower() in ("1", "true", "yes", "on")
     cfg.shooter.require_arrived = os.environ.get("RS_SHOOTER_REQUIRE_ARRIVED", "1").strip().lower() in ("1", "true", "yes", "on")
+    # Routine policy. Deliberately env-only and deliberately off by default:
+    # allow_arm is the one thing a UI-authored program can do that makes
+    # something physically launch, so turning it on should be a decision someone
+    # made in a config file rather than a checkbox they clicked past.
+    cfg.routines.allow_arm = os.environ.get("RS_ROUTINE_ALLOW_ARM", "").strip().lower() in ("1", "true", "yes", "on")
+    cfg.routines.state_timeout_default = float(
+        os.environ.get("RS_ROUTINE_STATE_TIMEOUT", cfg.routines.state_timeout_default))
+
+    # The hardware layout, if this build has been given one from the dashboard.
+    # Applied BEFORE tuning because it decides which tuning paths even exist: a
+    # layout names the actuators, and `drive.<name>.deadband` is only a real
+    # parameter once <name> is a real actuator. No layout file leaves the
+    # compiled-in two-motor tank drive exactly as it was.
+    doc = layout.load()
+    if doc is not None:
+        result = layout.apply(cfg, doc)
+        for warning in result.warnings:
+            print(f"[Robot] layout: {warning}")
+        if result.ok:
+            print(f"[Robot] layout: {cfg.drive.kind} drive, "
+                  f"{len(cfg.drive.actuators)} drive actuator(s), "
+                  f"{len(cfg.mechanisms)} mechanism(s) from {layout.layout_path()}")
+        else:
+            # Keep driving on the compiled-in layout rather than refusing to
+            # boot. A rover that won't start is worse than one on last-known-good
+            # wiring, and the errors go out with the next get_layout.
+            for error in result.errors:
+                print(f"[Robot] layout REJECTED: {error}")
+            print("[Robot] layout: falling back to the built-in tank layout")
+
+    # Values tuned from the base station's settings page, saved on this robot.
+    # Applied LAST, on purpose: they are the operator's most recent deliberate
+    # decision, and the paths they can touch (gains, speeds, limits) are
+    # disjoint from the wiring flags above — no CLI flag names a PID gain.
+    # Filtered against THIS robot's parameter surface, so a value saved for an
+    # actuator the layout no longer has is dropped rather than reported.
+    overrides = tuning.load_overrides(known=tuning.by_path_for(cfg))
+    if overrides:
+        applied, rejected = tuning.apply(cfg, overrides)
+        print(f"[Robot] tuning: {len(applied)} saved values from {tuning.overrides_path()}")
+        for path, why in rejected.items():
+            print(f"[Robot] tuning: ignoring {path}: {why}")
 
     motors = "MOCK" if args.mock_motors else "real"
     gps = f"{cfg.gps.port}@{cfg.gps.baud}" if cfg.gps.enabled else "off"
@@ -199,10 +272,12 @@ def main():
             vision += f" [{cfg.vision.target_label}]"
     fpv = f"{cfg.fpv.base_host}:{cfg.fpv.base_port}" if cfg.fpv.enabled else "off"
     shooter = f"ch{cfg.shooter.channel}" if cfg.shooter.enabled else "off"
+    bulk = (f"{cfg.comms.base_host}:{cfg.comms.base_port}"
+            if cfg.comms.base_host else "radio")
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "
           f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} "
           f"heading={cfg.heading_source} vision={vision} "
-          f"fpv={fpv} shooter={shooter}")
+          f"fpv={fpv} shooter={shooter} bulk={bulk}")
     Robot(cfg).run()
 
 
