@@ -13,6 +13,11 @@ import { App } from "./app.tsx";
 import { baseSettings, connect, robotConfigs } from "./net/ws.ts";
 import { releaseDrive, startInputLoop } from "./net/input.ts";
 import { acknowledge } from "./state/settings.ts";
+import { initRendition } from "./state/theme.ts";
+
+// Before anything renders: an operator who chose daylight must not be shown a
+// dark console first, however briefly, on a screen they are reading in the sun.
+initRendition();
 
 connect();
 startInputLoop();
