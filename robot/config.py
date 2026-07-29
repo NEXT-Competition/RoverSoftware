@@ -34,8 +34,8 @@ class MotorConfig:
     # Endpoints/clamps. The usable swing is SYMMETRIC about neutral: the side
     # closer to neutral sets the throw (see the module docstring), so with
     # neutral=5 and these endpoints the effective range is -10..+20 (+/-15).
-    max_angle: float = 20.0  # Full-forward endpoint (upper clamp)
-    min_angle: float = -20.0  # Full-reverse endpoint (lower clamp)
+    max_angle: float = 10.0  # Full-forward endpoint (upper clamp)
+    min_angle: float = -10.0  # Full-reverse endpoint (lower clamp)
     deadband: float = 0.03  # |throttle| below this => treat as neutral
     max_forward: float = 1.0  # Safety cap on forward throttle, [0..1]
     max_reverse: float = 1.0  # Safety cap on reverse throttle, [0..1]
@@ -348,7 +348,7 @@ class ShooterConfig:
     # How long to HOLD the fire angle. Too short and the servo never reaches it;
     # too long and it stalls against the mechanical stop. Find it with
     # tools/servo_sweep.py, then add a little margin.
-    fire_seconds: float = 0.35
+    fire_seconds: float = 1.0
     retract_seconds: float = 0.35  # settle at rest before another shot may start
 
     # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
