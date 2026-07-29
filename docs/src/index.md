@@ -43,3 +43,9 @@ Nothing here needs a robot until step 9. Start the simulator and click along:
 ```bash
 ./start-basestation.sh
 ```
+
+---
+
+*This handbook is one half of the site. The other half —
+what RoverSoftware is, and how to install the Debian packages — is at
+[next-competition.github.io](https://next-competition.github.io/).*
