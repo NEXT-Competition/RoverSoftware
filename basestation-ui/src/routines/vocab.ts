@@ -8,7 +8,20 @@
 export interface ArgSpec {
   key: string;
   label: string;
-  kind: "number" | "text" | "mech" | "preset" | "actuator" | "state" | "counter";
+  kind:
+    | "number"
+    | "text"
+    | "mech"
+    | "preset"
+    | "actuator"
+    | "state"
+    | "counter"
+    // Saved field positions (state/places.ts). `route` is an ordered list of
+    // them, `place` is one. Both write plain lat/lon into the document
+    // ALONGSIDE the ids — the robot only ever reads the coordinates, and the
+    // ids are what lets the editor still show a name after a round trip.
+    | "route"
+    | "place";
   min?: number;
   max?: number;
   step?: number;
@@ -101,9 +114,10 @@ export const CONDITIONS: VerbSpec[] = [
     group: "navigation",
     label: "when near a point",
     chip: "near point",
+    help:
+      "Distance from a saved place, in metres. Pick the place rather than typing coordinates — then moving the place moves every routine that refers to it.",
     args: [
-      { key: "lat", label: "latitude", kind: "number", step: 0.000001, fallback: 0 },
-      { key: "lon", label: "longitude", kind: "number", step: 0.000001, fallback: 0 },
+      { key: "place", label: "place", kind: "place" },
       { key: "at_most", label: "within", kind: "number", min: 0.5, max: 500, step: 0.5, unit: "m", fallback: 2 },
     ],
   },
@@ -211,8 +225,8 @@ export const ACTIONS: VerbSpec[] = [
     group: "navigation",
     label: "load a GPS route",
     help:
-      "Hands a list of waypoints to the waypoint controller, so a state that drives with Waypoint route follows them. This is what makes a fully autonomous run possible from the graph alone — pair it with “when the route is finished”. Draw the route on the map, then paste it here.",
-    args: [{ key: "waypoints", label: "waypoints (lat,lon per line)", kind: "text", fallback: "" }],
+      "Hands a list of waypoints to the waypoint controller, so a state that drives with Waypoint route follows them. This is what makes a fully autonomous run possible from the graph alone — pair it with “when the route is finished”. Pick saved places in the order you want them driven.",
+    args: [{ key: "places", label: "route", kind: "route" }],
   },
   {
     key: "pulse",

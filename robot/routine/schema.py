@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import RoutineConfig
-from .actions import ARMING_ACTIONS, Effect, compile_action
+from .actions import ARMING_ACTIONS, Effect, compile_action, parse_waypoints
 from .conditions import Predicate, compile_condition
 
 VERSION = 1
@@ -186,6 +186,17 @@ def _parse_actions(raw: Any, slot: str, state_id: str, allow_arm: bool,
                     "drives with shooter_align, which is what enforces dwell, "
                     "cooldown and the magazine")
                 continue
+        if verb == "set_route" and not problems and warnings is not None:
+            # Legal, and what the starter template ships, but worth saying out
+            # loud: an empty route makes `route_done` true on the first tick,
+            # so a state that waits for the drive to finish falls straight
+            # through and the rover never moves.
+            points, _ = parse_waypoints(spec.get("waypoints"))
+            if not points:
+                warnings.append(
+                    f"state {state_id!r}: 'set_route' has no waypoints, so the "
+                    "route is finished the moment it loads — pick the places "
+                    "this route should visit")
         if (verb in _ONCE_PER_VISIT_ACTIONS and slot == "on_tick"
                 and warnings is not None):
             warnings.append(

@@ -8,6 +8,7 @@ import { FleetPanel } from "./components/FleetPanel.tsx";
 import { FPV } from "./components/FPV.tsx";
 import { ModeControls } from "./components/ModeControls.tsx";
 import { PitBoard } from "./components/PitBoard.tsx";
+import { PlacesPanel } from "./components/PlacesPanel.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
 import { ShooterControls } from "./components/ShooterControls.tsx";
 import { Telemetry } from "./components/Telemetry.tsx";
@@ -74,6 +75,10 @@ function ControlSection() {
       <div style="height:14px" />
       {/* Renders nothing unless the robot is in shooter_align (see the component). */}
       <ShooterControls />
+      {/* Places before Route: you save the buckets once, then build a run out
+          of them every match. The panel above is the noun, the one below the verb. */}
+      <PlacesPanel />
+      <div style="height:12px" />
       <RouteControls />
       <div style="height:12px" />
       <Telemetry />

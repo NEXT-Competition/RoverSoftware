@@ -31,6 +31,7 @@ import uvicorn
 
 from basestation.app import build_app
 from basestation.fleet import FleetManager
+from basestation.places import PlaceStore
 from basestation.settings import SettingsStore
 
 # Aerial/satellite imagery is the useful basemap for driving a rover: you steer
@@ -120,6 +121,10 @@ def main():
         "base.tiles": args.tiles,
     })
 
+    # Named field positions ("bucket A", "start"), captured from the map. Owned
+    # by the base station and shared by the whole fleet — see basestation/places.py.
+    places = PlaceStore()
+
     def on_msg(msg):
         fleet.handle(msg, time.monotonic())
 
@@ -168,7 +173,8 @@ def main():
                      "tiles_upstream": args.tiles_upstream,
                      "tiles_offline": args.tiles_offline,
                      "tiles": args.tiles},
-                    video_rx=video_rx, settings=settings, ip_server=ip_server)
+                    video_rx=video_rx, settings=settings, ip_server=ip_server,
+                    places=places)
     print(f"[base] dashboard -> http://{args.host}:{args.web_port}")
     uvicorn.run(app, host=args.host, port=args.web_port, log_level="warning")
 

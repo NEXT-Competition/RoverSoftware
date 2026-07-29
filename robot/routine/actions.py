@@ -20,7 +20,7 @@ costs nothing after the first tick.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .conditions import RoutineContext
 
@@ -127,14 +127,77 @@ def _disarm(spec) -> Effect:
     return run
 
 
-def _set_route(spec) -> Effect:
-    raw = spec.get("waypoints", [])
+# A route is bounded like everything else that crosses the radio. Sixty-four
+# legs is a far longer run than a battery lasts; the doc size cap in schema.py
+# would stop a runaway list anyway, but not with a message about the route.
+MAX_WAYPOINTS = 64
+
+
+def _one_waypoint(item: Any) -> Optional[Tuple[float, float]]:
+    """One waypoint out of any of the shapes a document might carry it in.
+
+    Three, because three exist in the wild: the editor writes `[lat, lon]`, a
+    hand-written or hand-edited document tends to use `{"lat":…, "lon":…}`, and
+    text pasted out of a spreadsheet arrives as `"lat,lon"`. Returns None if it
+    isn't a waypoint at all — the caller decides what that means.
+    """
+    if isinstance(item, str):
+        item = item.replace(";", ",").split(",")
+    elif isinstance(item, dict):
+        item = [item.get("lat"), item.get("lon")]
+    try:
+        lat, lon = float(item[0]), float(item[1])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    # NaN fails every comparison, which is how it gets past a range check and
+    # into haversine_m as a distance that is never <= arrive_radius_m — a leg
+    # the rover can never finish.
+    if lat != lat or lon != lon or not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        return None
+    return (lat, lon)
+
+
+def parse_waypoints(raw: Any) -> Tuple[List[Tuple[float, float]], str]:
+    """(points, problem). A problem means the value is not a route at all.
+
+    A BAD LEG IS AN ERROR, not something to skip past. Dropping the one
+    waypoint with a typo in it leaves a route that still loads, still runs, and
+    quietly drives a different shape than the one on the operator's screen —
+    which is discovered by watching the rover go the wrong way. Refusing the
+    document is discovered in the editor.
+
+    An EMPTY route is not an error, because `[]` is what an honest starter
+    template ships (coordinates cannot be guessed for someone else's field).
+    The caller warns about it; see schema.py.
+    """
+    if raw is None:
+        return [], ""
+    if isinstance(raw, str):
+        # "lat,lon" per line, which is what pasting out of a spreadsheet gives.
+        raw = [line for line in raw.replace("\r", "\n").split("\n") if line.strip()]
+    if not isinstance(raw, (list, tuple)):
+        return [], ("'waypoints' must be a list of [lat, lon] pairs "
+                    f"(got {type(raw).__name__})")
+    if len(raw) > MAX_WAYPOINTS:
+        return [], f"{len(raw)} waypoints, at most {MAX_WAYPOINTS} allowed"
     points: List[Tuple[float, float]] = []
-    for pair in raw if isinstance(raw, list) else []:
-        try:
-            points.append((float(pair[0]), float(pair[1])))
-        except (TypeError, ValueError, IndexError):
-            continue
+    for index, item in enumerate(raw):
+        point = _one_waypoint(item)
+        if point is None:
+            return [], (f"waypoint {index + 1} is not a [lat, lon] pair "
+                        f"on the planet: {item!r}")
+        points.append(point)
+    return points, ""
+
+
+def _set_route(spec) -> Effect:
+    points, problem = parse_waypoints(spec.get("waypoints"))
+    if problem:
+        # compile_action turns this into a parse error, so the document is
+        # refused in the editor rather than arming with a route that silently
+        # holds nothing — an empty route reads as `route_done` immediately, so
+        # the failure would look like the rover skipping its own drive state.
+        raise ValueError(problem)
 
     def run(ctx):
         wp = ctx.controllers.get("waypoint")
@@ -194,7 +257,11 @@ BUILDERS: Dict[str, Tuple[Callable[[dict], Effect], Tuple[str, ...]]] = {
     "fire": (_pulse, ("mech",)),  # the launcher's word for the same thing
     "arm": (_arm, ()),
     "disarm": (_disarm, ()),
-    "set_route": (_set_route, ("waypoints",)),
+    # No required field: a route with no waypoints yet is the state a freshly
+    # dropped node is in, and it is reported as a WARNING (schema.py) rather
+    # than an error so the editor can show it inline instead of refusing to
+    # save a graph that is still being drawn.
+    "set_route": (_set_route, ()),
     "log": (_log, ("message",)),
     "count": (_count, ("name",)),
     "count_set": (_count_set, ("name", "to")),

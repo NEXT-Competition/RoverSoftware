@@ -900,6 +900,240 @@ body {
   display: none;
 }
 
+/* ---------- Saved places ----------
+   Deliberately NOT the route's colour. A place is a fact about the field that
+   outlives the match; a route waypoint is this run's plan. An operator has to
+   tell them apart at a glance on a bright screen outdoors, so they differ in
+   hue and in shape, not in shade. */
+
+.place-icon .pin {
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--on-accent);
+  background: var(--accent-deep);
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  box-shadow: var(--lift-cap);
+  transition: transform 0.18s var(--ease-out);
+}
+.place-icon.k-hazard .pin {
+  background: var(--danger);
+  color: #fff;
+}
+.place-icon.k-start .pin {
+  background: var(--ok);
+  color: #fff;
+}
+.place-icon.k-marker .pin {
+  background: var(--paper);
+  color: var(--ink);
+}
+/* The open row's pin, so selecting in the list finds it on the map. */
+.place-icon.sel .pin {
+  transform: scale(1.25);
+  box-shadow: 0 0 0 4px rgba(204, 242, 74, 0.45), var(--lift-cap);
+}
+.place-icon .tag {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--paper);
+  background: rgba(20, 22, 15, 0.62);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+/* Drop mode changes what a tap MEANS, which is the kind of mode you forget you
+   are in. The cursor is the standing reminder. */
+.map.dropping {
+  cursor: crosshair;
+}
+
+.place-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.place-row {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--panel-2);
+}
+.place-row.open {
+  border-color: var(--hairline-strong);
+}
+.place-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 8px;
+}
+.place-id {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.place-glyph {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  border-radius: 50%;
+  color: var(--on-accent);
+  background: var(--accent-deep);
+}
+.place-glyph.k-marker {
+  background: var(--well);
+  color: var(--muted);
+}
+.place-glyph.k-start {
+  background: var(--ok);
+  color: #fff;
+}
+.place-glyph.k-hazard {
+  background: var(--danger);
+  color: #fff;
+}
+.place-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.place-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Tabular figures: a column of coordinates that jitters as digits change is
+   unreadable, and these are read as a column. */
+.place-coords {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.place-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px 9px;
+}
+.place-edit .segmented {
+  align-self: flex-start;
+}
+
+/* The primary action in a rail otherwise full of equals. Only ever one. */
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent-deep);
+  color: var(--on-accent);
+}
+.btn.primary:disabled {
+  background: var(--well);
+  border-color: var(--hairline);
+  color: var(--faint);
+}
+
+/* ---------- Route chips (routine editor) ---------- */
+
+.arg-route {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.route-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.route-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px 3px 6px;
+  border-radius: 9px;
+  background: var(--well);
+  font-size: 12.5px;
+}
+/* A leg pointing at a deleted place is silently dropped on save, so it has to
+   look wrong here — this is the only place it is visible before the rover
+   drives a shorter route than the one on screen. */
+.route-chip.missing {
+  background: rgba(212, 25, 42, 0.1);
+  color: var(--danger);
+}
+.route-n {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-deep);
+  color: var(--on-accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+.route-chip.missing .route-n {
+  background: var(--danger);
+  color: #fff;
+}
+.route-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.route-btn {
+  appearance: none;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.route-btn:active {
+  background: var(--hairline);
+}
+
 /* ============================ Settings sheet ============================ */
 
 /* Full-screen over the map, but under the e-stop dock (z 1001) — changing a

@@ -21,6 +21,7 @@ import type {
   TransitionSpec,
 } from "../net/types.ts";
 import { robotDocuments, selectedRobot, send } from "../net/ws.ts";
+import { missingPlaces, placeById, resolvePlaces } from "./places.ts";
 import { layout } from "./hardware.ts";
 import { targetRobot } from "./settings.ts";
 
@@ -98,10 +99,48 @@ export function refreshRoutines(): void {
   if (rid) send({ action: "get_routines", robot_id: rid });
 }
 
+/** Re-resolve every place reference into the coordinates the robot will drive.
+ *
+ * Done at SAVE time, not at edit time, and this is the whole reason places are
+ * worth having: a bucket that was re-taken after somebody moved it updates
+ * every routine that points at it, without anyone opening those routines to
+ * re-type a latitude. The `places`/`place` ids are editor-only — the robot
+ * reads `waypoints` and `lat`/`lon` and has never heard of a place — and they
+ * survive the round trip because the schema preserves keys it doesn't know
+ * (robot/routine/schema.py).
+ *
+ * A deleted place resolves to nothing and is dropped from the route. That is
+ * flagged in `problems` before it gets here; the save still goes through
+ * because refusing it would strand a graph the operator can no longer fix.
+ */
+function resolveRoutePlaces(doc: RoutineDoc): RoutineDoc {
+  const next: RoutineDoc = JSON.parse(JSON.stringify(doc));
+  for (const routine of next.routines) {
+    for (const state of routine.states) {
+      for (const slot of [state.on_enter, state.on_tick, state.on_exit]) {
+        for (const action of slot ?? []) {
+          if (action?.do === "set_route" && Array.isArray(action.places)) {
+            action.waypoints = resolvePlaces(action.places as string[]);
+          }
+        }
+      }
+      for (const transition of state.transitions ?? []) {
+        const id = typeof transition.place === "string" ? transition.place : "";
+        const place = id ? placeById.value[id] : undefined;
+        if (place) {
+          transition.lat = place.lat;
+          transition.lon = place.lon;
+        }
+      }
+    }
+  }
+  return next;
+}
+
 export function saveRoutines(): void {
   const rid = targetRobot.value;
   if (!rid) return;
-  send({ action: "set_routines", robot_id: rid, doc: routines.value });
+  send({ action: "set_routines", robot_id: rid, doc: resolveRoutePlaces(routines.value) });
 }
 
 export function routinesAccepted(): void {
@@ -524,6 +563,34 @@ export const problems = computed<Problem[]>(() => {
   for (const state of routine.states) {
     if (!reachable.has(state.id)) {
       found.push({ state: state.id, message: "This state can never be reached." });
+    }
+  }
+
+  // Routes, mirroring the warnings robot/routine/schema.py raises. Worth
+  // catching here because both failures are SILENT on the robot: an empty
+  // route finishes the instant it loads, so the rover skips its own drive
+  // state and looks like it ignored the routine.
+  for (const state of routine.states) {
+    for (const slot of [state.on_enter, state.on_tick, state.on_exit]) {
+      for (const action of slot ?? []) {
+        if (action?.do !== "set_route") continue;
+        const ids = Array.isArray(action.places) ? (action.places as string[]) : [];
+        const gone = missingPlaces(ids);
+        if (gone.length) {
+          found.push({
+            state: state.id,
+            message: `This route uses ${gone.length === 1 ? "a place that has" : "places that have"} ` +
+              `been deleted (${gone.join(", ")}), so ${gone.length === 1 ? "that leg" : "those legs"} ` +
+              "will be skipped.",
+          });
+        } else if (!ids.length && !(action.waypoints as unknown[])?.length) {
+          found.push({
+            state: state.id,
+            message: "This route has no places, so it finishes the moment it " +
+              "loads — pick where the rover should drive.",
+          });
+        }
+      }
     }
   }
   return found;
