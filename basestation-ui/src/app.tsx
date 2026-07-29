@@ -1,9 +1,11 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { robots, selected } from "./net/ws.ts";
-import { showView, view } from "./state/view.ts";
+import { showView, showViewByName, view } from "./state/view.ts";
+import { setViewSwitcher } from "./state/command.ts";
 import { rendition, toggleRendition } from "./state/theme.ts";
 import { MapView } from "./components/MapView.tsx";
 import { CommandDock } from "./components/CommandDock.tsx";
+import { CommandPage } from "./components/command/CommandPage.tsx";
 import { ConnectionPill } from "./components/ConnectionPill.tsx";
 import { ControllerStatus } from "./components/ControllerStatus.tsx";
 import { FleetPanel } from "./components/FleetPanel.tsx";
@@ -130,15 +132,21 @@ function ControlSection() {
 export function App() {
   // Portrait bottom-sheet collapse (ignored by the landscape layout).
   const [collapsed, setCollapsed] = useState(false);
-  const settings = view.value === "settings";
+  const current = view.value;
+  const ops = current === "ops";
+
+  // A spoken "open settings" has to be able to move this screen. The command
+  // state can't import view.ts directly (view.ts pulls in net/input.ts, and the
+  // cycle breaks the module graph), so the switch is handed over here.
+  useEffect(() => setViewSwitcher(showViewByName), []);
 
   return (
     <>
-      {/* The map stays mounted under the settings sheet: Leaflet re-initialises
-          slowly and loses its viewport, and returning to a re-centred map after
-          changing a setting is disorienting. */}
+      {/* The map stays mounted under the settings and command sheets: Leaflet
+          re-initialises slowly and loses its viewport, and returning to a
+          re-centred map after giving an order is disorienting. */}
       <MapView />
-      {!settings && (
+      {ops && (
         <div class="hud">
           <TopBar />
 
@@ -175,10 +183,12 @@ export function App() {
         </div>
       )}
 
-      {settings && <SettingsPage />}
+      {current === "command" && <CommandPage />}
+      {current === "settings" && <SettingsPage />}
 
       {/* Outside the view switch on purpose: the stop button stays reachable on
-          every screen, including the one where drive limits are being changed. */}
+          every screen, including the one where drive limits are being changed
+          and the one where orders are given by voice. */}
       <EstopBar />
     </>
   );

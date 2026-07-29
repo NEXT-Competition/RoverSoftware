@@ -108,6 +108,26 @@ def main():
                    help="disable the WiFi bulk-transfer listener (everything on the radio)")
     p.add_argument("--bulk-port", type=int, default=int(_env("RS_BULK_PORT", 5006)),
                    help="TCP port robots connect to for config/layout/routine transfers")
+    # ---- commanding in words (basestation/command/) ----
+    # All optional. With no model server and no faster-whisper installed, the
+    # command view still recognises stop, rover names, modes and the camera by
+    # keyword — so none of these flags gate the base station starting.
+    p.add_argument("--no-voice", dest="voice", action="store_false",
+                   default=os.environ.get("RS_VOICE", "1").strip().lower()
+                   in ("1", "true", "yes", "on"),
+                   help="start with the command language model switched off "
+                        "(the keyword fast path still works, and it can be "
+                        "turned back on from the command view)")
+    p.add_argument("--llm-url", default=_env("RS_LLM_URL", "http://127.0.0.1:1234/v1"),
+                   help="OpenAI-compatible endpoint for the local command model "
+                        "(LM Studio's default is http://127.0.0.1:1234/v1)")
+    p.add_argument("--llm-model", default=_env("RS_LLM_MODEL", None),
+                   help="model id to use; default is whichever loaded model "
+                        "looks like a Gemma, else the first one")
+    p.add_argument("--stt-model", default=_env("RS_STT_MODEL", "base.en"),
+                   help="faster-whisper model for speech recognition "
+                        "(tiny.en | base.en | small.en). base.en is the default "
+                        "because tiny.en starts confusing rover numbers")
     args = p.parse_args()
 
     fleet = FleetManager()
@@ -168,14 +188,26 @@ def main():
     # web_cfg now carries only what is fixed for the process's lifetime (the
     # tile cache is opened once); the live rates and the basemap URL come from
     # `settings`, which the dashboard can edit.
+    # The local command model. Constructed unconditionally and never contacted
+    # here: it is a separate application the operator may not have launched yet,
+    # and the base station coming up must not depend on it. The first health
+    # check happens in the background after startup (see build_app).
+    from basestation.command.llm import LMStudio
+    from basestation.command.stt import Transcriber
+    llm = LMStudio(args.llm_url, model=args.llm_model)
+    transcriber = Transcriber(model_name=args.stt_model)
+
     app = build_app(fleet, link, controller,
                     {"tiles_mbtiles": args.tiles_mbtiles,
                      "tiles_upstream": args.tiles_upstream,
                      "tiles_offline": args.tiles_offline,
-                     "tiles": args.tiles},
+                     "tiles": args.tiles,
+                     "voice": args.voice},
                     video_rx=video_rx, settings=settings, ip_server=ip_server,
-                    places=places)
+                    places=places, llm=llm, transcriber=transcriber)
     print(f"[base] dashboard -> http://{args.host}:{args.web_port}")
+    print(f"[base] voice: model {args.llm_url} ({'on' if args.voice else 'off'}), "
+          f"speech {args.stt_model}")
     uvicorn.run(app, host=args.host, port=args.web_port, log_level="warning")
 
 

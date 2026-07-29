@@ -67,5 +67,37 @@ pygame>=2.5          # PS4 controller input, cross-platform
 # object_align can only turn to face the target, never approach it.
 # Verify the whole chain with tools/detector_selftest.py.
 
+# -----------------------------------------------------------------------------
+# Voice commanding (BASE STATION ONLY — nothing on the robot imports this)
+# -----------------------------------------------------------------------------
+# Optional. Without it the command view still works: you can type orders, MCP
+# clients still connect, and the keyword fast path still recognises stop, rover
+# names, modes and the camera. All that is missing is the microphone.
+#
+#   pip install faster-whisper
+#
+# Kept OUT of pyproject.toml deliberately, the same way the Pi hardware stack is:
+# it pulls ctranslate2 and onnxruntime (~200 MB of wheels), and a laptop that
+# only wants to run the tests should not have to download them.
+#
+# The model itself is fetched from HuggingFace on first use and cached in
+# ~/.cache/huggingface — so DO THIS ONCE WHILE YOU STILL HAVE INTERNET. A base
+# station that has to download 150 MB of weights the first time somebody holds
+# the microphone button at a competition will not get them. Pre-warm with:
+#   python -c "from faster_whisper import WhisperModel; WhisperModel('base.en')"
+#
+# base.en is the default (--stt-model). tiny.en is ~2x faster and starts
+# confusing rover numbers, which is the one thing this has to get right;
+# small.en is noticeably better in a loud pit but roughly 3x the CPU.
+#
+# There is NO ffmpeg/PyAV dependency here and that is deliberate: the browser
+# sends raw 16 kHz PCM, so nothing on this side has to decode a container.
+# See basestation/command/stt.py.
+
+# The language model is NOT a Python dependency at all. It runs in LM Studio
+# (or any OpenAI-compatible server) as a separate application, reached over
+# HTTP with urllib — see basestation/command/llm.py. Load google/gemma-3n-e4b,
+# start LM Studio's local server, and point --llm-url at it.
+
 # --- Optional / future ---
 # digi-xbee>=1.4     # if you switch the XBee to API mode

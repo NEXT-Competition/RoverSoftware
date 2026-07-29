@@ -7,6 +7,7 @@
 import { batch, computed, signal } from "@preact/signals";
 import type {
   Action,
+  CommandMessage,
   ConnState,
   ControllerStatus,
   FleetMessage,
@@ -20,6 +21,7 @@ import type {
   SettingsMessage,
   SettingValue,
 } from "./types.ts";
+import { applyCommandFrame } from "../state/command.ts";
 
 export const conn = signal<ConnState>("connecting");
 export const robots = signal<Robot[]>([]);
@@ -99,10 +101,14 @@ export function connect(): void {
   };
 
   ws.onmessage = (ev) => {
-    let msg: FleetMessage | SettingsMessage | GamepadMessage;
+    let msg: FleetMessage | SettingsMessage | GamepadMessage | CommandMessage;
     try {
       msg = JSON.parse(ev.data);
     } catch {
+      return;
+    }
+    if (msg.type === "command") {
+      applyCommandFrame(msg);
       return;
     }
     if (msg.type === "settings") {
@@ -140,6 +146,23 @@ export function connect(): void {
 export function send(action: Action): void {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(action));
+  }
+}
+
+/**
+ * Send a chunk of microphone PCM (net/audio.ts) up the same socket.
+ *
+ * Binary rather than a second connection, so audio and the `mic` on/off actions
+ * that bracket it stay ordered — a separate socket could deliver the release
+ * before the last frame of speech.
+ *
+ * Dropped rather than buffered when the socket is busy: `bufferedAmount` grows
+ * when the link can't keep up, and queued *old* audio is worse than a gap. The
+ * threshold is roughly a second of PCM at 16 kHz.
+ */
+export function sendAudio(pcm: ArrayBuffer): void {
+  if (ws && ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 32000) {
+    ws.send(pcm);
   }
 }
 

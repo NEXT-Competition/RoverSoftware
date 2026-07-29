@@ -28,7 +28,8 @@ the core.
  (Pi / Mac)                                                │
  PS4 controller                                            ▼
  map + telemetry                                    ┌──────────────┐
- voice → LLM plan                                   │ XBeeLink     │  reader thread → queue
+ voice → local LLM                                  │ XBeeLink     │  reader thread → queue
+ MCP → any AI                                       │              │
                                                     └──────┬───────┘
                                                            ▼
                                                     ┌──────────────┐
@@ -81,6 +82,14 @@ tools/
   servo_sweep.py        raw servo sweep (the Fusion HAT hello-world)
   xbee_monitor.py       watch/inject XBee frames to verify the radio link
 basestation/            bridge: radio <-> WebSocket + gamepad + tiles — see "Base station"
+  command/              spoken and typed orders -> the same actions a button sends
+    vocabulary.py       what is sayable right now: rovers, places, modes, labels
+    fastpath.py         keyword matching — "stop" never waits on a model
+    llm.py              local gemma via LM Studio, used only to classify
+    intents.py          the whitelist, and which verbs need a human to confirm
+    executor.py         validate -> gate -> dispatch. one throat for every face
+    stt.py              faster-whisper, on this machine, offline
+  mcp_server.py         the same commands as MCP tools, for Claude or any AI
   app.py                FastAPI: internal WebSocket/tiles API, bridge browser<->radio
   fleet.py              FleetManager: tracks every robot from its telemetry
   simulator.py          fake fleet (drop-in for the radio) so it all runs w/o hardware
@@ -194,6 +203,79 @@ always-visible **E-STOP**, responsive **landscape / portrait (bottom-sheet)**
 layouts with iPad safe-area insets, and locally-bundled map + fonts (no CDN, so
 it works fully offline). Physical gamepads still work via the browser Gamepad
 API, and the server-side gamepad path is unchanged.
+
+### Commanding by voice — the Command tab
+
+Tap the microphone in the command dock (or say nothing and just type into it) to
+open a full screen built for talking: hold **Space**, say the order, and watch
+the transcript, the parsed command and the fleet's reaction in one place.
+
+```bash
+# 1. Speech recognition — runs on the base station, no internet, no API key.
+pip install faster-whisper
+#    Fetch the weights ONCE while you still have signal (~150 MB, cached in
+#    ~/.cache/huggingface). A competition car park is not where you want to
+#    discover this:
+python -c "from faster_whisper import WhisperModel; WhisperModel('base.en')"
+
+# 2. The language model — LM Studio (or any OpenAI-compatible server).
+#    Load google/gemma-3n-e4b, start the local server on :1234. That's it;
+#    nothing to pip install, the base station reaches it over HTTP.
+
+python run_basestation.py --sim          # both are auto-detected
+```
+
+Things that work:
+
+| Say | What happens |
+|---|---|
+| "stop" / "all stop" / "stop rover2" | e-stop, **without the model** — see below |
+| "rover two", "switch to rover three" | selects it, everywhere |
+| "teleop", "put it in waypoint mode" | mode change |
+| "rover1 align to the bucket" | sets `vision.target_label`, *then* enters object align |
+| "send rover2 to bucket A then start" | routes through both saved places |
+| "show me rover3's camera" | selects it and pulls up the FPV |
+| "what is rover2 doing" | answers from live telemetry |
+| "fire" / "arm the shooter" | **asks first** — a card you tap |
+
+**"Stop" never goes through the model.** It is matched on the raw transcript
+before any HTTP request, so LM Studio being closed, slow, or mid-download cannot
+sit between the word and the rover. The same fast path handles rover names,
+modes and the camera, which is why those feel instant while a full sentence takes
+~700 ms.
+
+**Nothing dangerous happens because a 4B model was confident.** Firing, arming,
+jogging and raw drive return a pending card a human taps; it expires after 45 s.
+Everything else is validated against live state first — an unknown rover or an
+unsaved place is refused with a message naming what *does* exist.
+
+Both halves are optional and say so on screen. With no model: keyword commands
+and typing still work. With no faster-whisper: everything except the microphone.
+Flags: `--no-voice`, `--llm-url`, `--llm-model`, `--stt-model`.
+
+### Letting Claude (or any AI) command the fleet — MCP
+
+`basestation/mcp_server.py` is a stdio MCP server. It connects to a **running**
+base station over the same WebSocket the dashboard uses, which is the point: an
+AI gets exactly the dashboard's authority — same whitelist, same confirmation
+gate, same audit log — because it goes through the same front door.
+
+```json
+{"mcpServers": {"rover": {
+  "command": "python", "args": ["-m", "basestation.mcp_server"],
+  "env": {"RS_BASE_WS": "ws://127.0.0.1:8000/ws"}}}}
+```
+
+```bash
+python -m basestation.mcp_server --list-tools   # see exactly what an AI could do
+```
+
+The tool list is *generated* from the same intent registry the voice interface
+uses, so the two can't drift: add an intent and every MCP client gets it, with
+its authority attached. `get_fleet` translates telemetry into words a model can
+reason about ("sees: bucket, centred: true" rather than `ex: 0.03`). Tools whose
+intent needs approval say so in their description and return "waiting for a
+human" — the operator taps the card at the base station.
 
 ### Settings
 
@@ -467,7 +549,21 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   align, shooter align or waypoint, which is how the FSM composes the autonomy
   that already exists — what it does to the mechanisms, and what makes it move
   on. Routines run on the robot, so they survive losing the radio.
-- **Voice → multi-robot planning** — a local LLM turns a high-level spoken order
-  into a plan; a dispatcher agent slices it into per-vehicle chunks and sends
-  them as `mode`/`route`/task messages over XBee, one manageable step at a time.
+- **Voice commanding** — ✅ done: hold a key, say "send rover2 to bucket A" or
+  "rover1 align to the cone", and it happens. Speech is recognised **on the base
+  station** with faster-whisper and classified by a **local Gemma in LM Studio**,
+  so the whole path works with no internet — same constraint that produced the
+  offline tiles. "Stop" is matched by keyword *before* the model is consulted, so
+  it still works with LM Studio closed. Firing, arming and raw drive return a
+  card a human taps rather than executing. See the Command tab, and
+  `docs/ARCHITECTURE.md` §7b.
+- **MCP: any AI can command the fleet** — ✅ done: `python -m
+  basestation.mcp_server` is a stdio MCP server that connects to the running base
+  station over the same WebSocket the dashboard uses, so Claude (or anything else
+  speaking MCP) gets exactly the dashboard's authority — the same whitelist, the
+  same confirmation gate, the same audit log. Its tool list is generated from the
+  intent registry, so voice and MCP can never drift apart.
+- **Voice → multi-robot planning** — still ahead: today an order goes to one
+  rover at a time. Next is a dispatcher that slices "clear the north field" into
+  per-vehicle chunks and sequences them.
 ```

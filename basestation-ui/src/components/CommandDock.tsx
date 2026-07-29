@@ -1,25 +1,33 @@
 // The commander's dock: what every rover is doing, and where an order goes.
 //
-// This is the SHELL for the voice/LLM layer, built ahead of it deliberately —
-// the hard part of commanding a fleet by voice is not the model, it is having
-// one place that answers "what is each rover doing right now" without selecting
-// them one at a time. That readout is useful today, on its own, and it is the
-// context an order would be issued against tomorrow.
+// This began as the SHELL for the voice/LLM layer, built ahead of it
+// deliberately — the hard part of commanding a fleet by voice is not the model,
+// it is having one place that answers "what is each rover doing right now"
+// without selecting them one at a time. That readout is the context an order is
+// issued against, and it was worth having on its own.
 //
-// --- What it does NOT do ---
-// There is no model behind the input. It says so, plainly, and the field is
-// disabled rather than accepting text it would silently drop. An input that
-// looks live and does nothing is worse than no input: at a competition somebody
-// will talk into it while a rover is moving. Everything else on this dock is
-// real telemetry off the fleet frame — no placeholder rows, no invented status.
+// The model is here now (basestation/command/), so the input is live. What it
+// does NOT do is grow into the command screen: an order given by voice needs
+// the transcript, the parsed intent and the approval card beside it, and this
+// strip has room for none of those. Typing here sends; talking happens one tap
+// away, on the view this dock's mic button opens.
 //
-// The vocabulary an order will use is already on screen: rover ids from the
-// fleet, place names from the map (state/places.ts), and mode names from
-// ModeControls. That is the actual reason places were worth building as a named
-// table — "send rover2 to bucket A" has to resolve against something.
+// The old comment on this file argued that an input which looks live and does
+// nothing is worse than no input, because at a competition somebody will talk
+// into it while a rover is moving. That rule still holds and is why the mic
+// button navigates rather than pretending to listen — the microphone lives on
+// the command view, where what it heard can actually be shown.
+//
+// The vocabulary an order uses is already on screen: rover ids from the fleet,
+// place names from the map (state/places.ts), and mode names from ModeControls.
+// That is the actual reason places were worth building as a named table —
+// "send rover2 to bucket A" has to resolve against something.
 
-import { robots, selected, selectRobot } from "../net/ws.ts";
+import { useState } from "preact/hooks";
+import { robots, selected, selectRobot, send } from "../net/ws.ts";
 import { placeList } from "../state/places.ts";
+import { lastOutcome, outcomeTone, pending } from "../state/command.ts";
+import { showView } from "../state/view.ts";
 import type { Robot } from "../net/types.ts";
 
 /** What this rover is doing, in the operator's words rather than the wire's. */
@@ -57,32 +65,68 @@ export function CommandDock() {
   const fleet = robots.value;
   const sel = selected.value;
   const places = placeList.value;
+  const [text, setText] = useState("");
+  const outcome = lastOutcome.value;
+  const waiting = pending.value.length;
 
   if (!fleet.length) return null;
 
+  const submit = (e: Event) => {
+    e.preventDefault();
+    const value = text.trim();
+    if (!value) return;
+    send({ action: "command_text", text: value, source: "text" });
+    setText("");
+  };
+
   return (
     <div class="cmd-dock">
-      <div class="cmd-order">
-        <span class="cmd-mic" aria-hidden="true">
+      <form class="cmd-order" onSubmit={submit}>
+        {/* Opens the command view rather than recording here. The microphone
+            belongs where the transcript can be shown — see the file header. */}
+        <button
+          type="button"
+          class="cmd-mic"
+          title="Open the command screen and talk"
+          aria-label="Open the command screen and talk"
+          onClick={() => showView("command")}
+        >
           <MicIcon />
-        </span>
+        </button>
         <input
           class="cmd-input"
           type="text"
-          disabled
+          value={text}
           // Short enough to survive the dock's width at 1280 — a placeholder
           // that ellipsizes mid-example teaches nothing.
           placeholder={places.length
             ? `e.g. “send ${fleet[0].robot_id} to ${places[0].name}”`
-            : "e.g. “send rover1 to bucket A” — save a place first"}
-          aria-label="Fleet order (not yet available)"
+            : `e.g. “${fleet[0].robot_id} align to the bucket”`}
+          aria-label="Fleet order"
+          onInput={(e) => setText((e.target as HTMLInputElement).value)}
         />
-        {/* The honest label. This dock looks like somewhere you can talk, so it
-            has to say plainly that nothing is listening yet. */}
-        <span class="cmd-state" title="No command model is connected yet">
-          not wired up
-        </span>
-      </div>
+        {/* What came of the last order, in the operator's words. A command
+            given from here has to report back here — the command view may not
+            be open, and an order that vanished silently is one nobody trusts. */}
+        {waiting > 0
+          ? (
+            <button
+              type="button"
+              class="cmd-state plan"
+              title="A command is waiting for your approval"
+              onClick={() => showView("command")}
+            >
+              {waiting} to approve
+            </button>
+          )
+          : outcome
+          ? (
+            <span class={`cmd-state ${outcomeTone(outcome.status)}`} title={outcome.say}>
+              {outcome.say}
+            </span>
+          )
+          : <span class="cmd-state">ready</span>}
+      </form>
 
       {/* The readout that earns the dock its space today. Every rover, what it
           is doing, without selecting them one at a time. */}
