@@ -53,12 +53,6 @@ from .places import PlaceStore
 from .settings import SettingsStore
 from .tiles import TileStore, attribution_for, content_type
 
-# Document fragments handed to the radio per broadcast cycle (30 Hz by default,
-# so ~60 frames a second of headroom). Sized to empty a layout in well under a
-# second without ever giving the link more than it can write.
-DOC_FRAMES_PER_CYCLE = 2
-
-
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None,
               settings: SettingsStore | None = None, ip_server=None,
               places: PlaceStore | None = None, llm=None,
@@ -99,25 +93,37 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             link.send({**msg, "to": robot_id})
 
     def dispatch_bulk(robot_id, msg: dict) -> bool:
-        """Send a bulk frame over WiFi if that robot is on it; else the radio.
+        """Offer one bulk frame to a link. False means "not now, keep it".
 
-        Returns True when WiFi took it, which is also the signal that there is
-        no airtime to pace against — see drain_documents. A robot at the far end
-        of the field simply isn't in `ip_server`, so it keeps getting documents
-        over the radio with no special handling here.
+        WiFi first: a robot on the LAN costs no airtime at all, so its fragments
+        go as fast as we can hand them over. Otherwise the radio, which takes a
+        frame only when it has the airtime for it (robot/comms/airtime.py). A
+        robot at the far end of the field simply isn't in `ip_server`, so it
+        keeps getting documents over the radio with no special handling here.
+
+        The False-means-keep-it rule is the whole point. Half a layout is not a
+        smaller layout, and a fragment dropped because the radio was busy is one
+        nobody re-requests.
         """
         if not robot_id:
-            return False
+            return True  # nowhere to send it; drop it rather than queue forever
         if ip_server is not None and ip_server.send({**msg, "to": robot_id}):
             return True
-        dispatch(robot_id, msg)
-        return False
+        send_bulk = getattr(link, "send_bulk", None)
+        if send_bulk is None:
+            # The simulator and any other in-process link: no wire, no pacing.
+            link.send({**msg, "to": robot_id})
+            return True
+        return bool(send_bulk({**msg, "to": robot_id}))
 
-    # Outbound document fragments, paced rather than dispatched in a loop. The
+    # Outbound document fragments, metered rather than dispatched in a loop. The
     # robot's own outbox does this in the other direction and for the same
-    # reason: XBeeLink drops a frame the radio isn't draining, so a 10-fragment
-    # layout fired at once is the shape that arrives incomplete.
-    _doc_queue: "deque[tuple]" = deque()
+    # reason: a radio handed more than it can write drops frames, and a
+    # 10-fragment layout fired at once is the shape that arrives incomplete.
+    # Bounded for the same reason the robot's outbox is: a link that has stopped
+    # taking frames must not turn a queue into a leak. The oldest go first —
+    # they belong to a save the operator has long since given up on.
+    _doc_queue: "deque[tuple]" = deque(maxlen=512)
     _txid = {"n": 0}
 
     def send_document(robot_id, action: str, doc: dict, save: bool) -> None:
@@ -129,15 +135,12 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             _doc_queue.append((robot_id, frame))
 
     async def drain_documents() -> None:
-        # The pacing exists to protect radio airtime. A fragment that went over
-        # WiFi cost none, so it doesn't count against the budget and the next
-        # one goes immediately — a layout push over WiFi completes in one cycle
-        # instead of being metered out over a second.
-        budget = DOC_FRAMES_PER_CYCLE
-        while _doc_queue and budget > 0:
-            robot_id, frame = _doc_queue.popleft()
-            if not dispatch_bulk(robot_id, frame):
-                budget -= 1
+        # Frames leave the queue only once a link has taken them, so a cycle
+        # where the radio has no airtime left simply defers the rest to the next
+        # one. Over WiFi nothing is ever refused and a whole layout goes in a
+        # single cycle.
+        while _doc_queue and dispatch_bulk(*_doc_queue[0]):
+            _doc_queue.popleft()
 
     # ---- gamepad -> currently selected robot ----
     # Rate-limit drive frames so we don't flood a slow XBee link (at 9600 baud a

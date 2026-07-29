@@ -37,7 +37,17 @@ def rover(monkeypatch, tmp_path):
     bot = Robot(cfg)
     # Capture what the robot would put on the radio instead of opening a port.
     sent = []
-    bot.link.send = sent.append
+
+    def take(message):
+        sent.append(message)
+        return True
+
+    bot.link.send = take
+    # Bulk frames are metered against the radio's real byte rate, so the real
+    # link would refuse most of a snapshot on any one tick. A test isn't waiting
+    # 0.7 s of wall clock for that; the pacing itself is exercised in
+    # tests/test_airtime.py.
+    bot.link.send_bulk = take
     bot.sent = sent
     return bot
 
@@ -274,6 +284,37 @@ def test_wifi_dropping_mid_transfer_falls_back_to_the_radio(rover):
     total = len(rover.ip_link.sent) + len(rover.sent)
     params = {k for f in (rover.ip_link.sent + rover.sent) for k in f["config"]}
     assert total > 2 and params == set(tuning.snapshot(rover.cfg))
+
+
+def test_a_frame_the_radio_cannot_take_yet_stays_queued(rover):
+    """The bug the whole outbox exists for.
+
+    A `False` from send_bulk means the radio has no airtime this tick, not that
+    the frame is gone. Popping it anyway loses one fragment of a document — and
+    a document is all-or-nothing, so that loses the whole thing, silently, with
+    nothing on either side that knows to ask again.
+    """
+    refused = []
+
+    def full(msg):
+        refused.append(msg)
+        return False
+
+    rover.link.send_bulk = full
+    rover._inbox.put({"type": "get_config"})
+    rover._drain_inbox()
+    queued = len(rover._outbox)
+    assert queued > 1
+
+    rover._drain_outbox()
+    assert len(rover._outbox) == queued  # nothing was dropped on the floor
+    assert len(refused) == 1  # and it stopped asking after the first refusal
+
+    # Airtime frees up on a later tick and the transfer simply continues.
+    rover.link.send_bulk = rover.link.send
+    while rover._outbox:
+        rover._drain_outbox()
+    assert {k for f in rover.sent for k in f["config"]} == set(tuning.snapshot(rover.cfg))
 
 
 def test_telemetry_never_leaves_the_radio(rover):

@@ -247,9 +247,15 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # --- FPV ---
     _i("fpv.fps", 1, 60),
     _i("fpv.jpeg_quality", 1, 100),
+    # Whether there is a feed at all is decided at boot, because it decides
+    # whether the camera device is opened. WHERE the feed goes is not: the
+    # address belongs to whichever laptop is running the base station today, the
+    # robot only learns it over the radio, and needing a service restart to
+    # change it is how you end up with a rover you cannot see out of. The
+    # streamer rebuilds its socket on the next frame — see sensors/fpv.py.
     _b("fpv.enabled", live=False),
-    _t("fpv.base_host", live=False),
-    _i("fpv.base_port", 1, 65535, live=False),
+    _t("fpv.base_host"),
+    _i("fpv.base_port", 1, 65535),
 )
 
 # The stock robot's parameter surface: everything above, plus the two track

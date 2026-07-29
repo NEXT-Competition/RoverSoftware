@@ -383,15 +383,28 @@ export const ROBOT_GROUPS: Group[] = [
   },
   {
     title: "FPV video",
-    blurb: "Needs shared WiFi — the XBee radio cannot carry video.",
+    blurb:
+      "The picture needs shared WiFi — the XBee radio cannot carry video. " +
+      "Setting the address does not: that goes over the radio and the feed " +
+      "moves on the next frame.",
     fields: [
+      t("fpv.base_host", "Base station host", {
+        help:
+          "Hostname or IP of the machine running this base station — the one " +
+          "the robot fires video at. Change it here and the rover re-aims " +
+          "without a restart.",
+      }),
+      i("fpv.base_port", "UDP port", 1, 65535),
       i("fpv.fps", "Frame rate", 1, 60, { unit: "fps" }),
       i("fpv.jpeg_quality", "JPEG quality", 1, 100, {
         help: "Lower is smaller packets and less bandwidth.",
       }),
-      b("fpv.enabled", "Streaming enabled", { live: false }),
-      t("fpv.base_host", "Base station host", { live: false }),
-      i("fpv.base_port", "UDP port", 1, 65535, { live: false }),
+      b("fpv.enabled", "Streaming enabled", {
+        live: false,
+        help:
+          "Whether the camera is opened at all is decided when the robot " +
+          "service starts, so turning this on takes a restart.",
+      }),
     ],
   },
   {

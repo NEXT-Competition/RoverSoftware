@@ -7,6 +7,12 @@ needs only a camera and a JPEG encoder (OpenCV or Pillow).
 
 Like the other sensor threads it never blocks the control loop and degrades
 gracefully: no camera, or the base unreachable, just means no feed.
+
+Where it streams TO is settable while it runs (`retarget`), which is what makes
+`fpv.base_host` a live parameter in robot/tuning.py. It has to be: the address
+is a property of wherever the operator happens to be sitting today, the robot
+learns it over the radio, and a rover that needed a service restart to point its
+camera at a new laptop is a rover you can't get video from in the pit.
 """
 
 from __future__ import annotations
@@ -29,9 +35,34 @@ class FPVStreamer:
         self._sender = None
         self._thread = None
         self._running = False
+        # Where to stream. Held apart from cfg and behind a lock because it is
+        # written by the control loop (a config frame off the radio) and read by
+        # the sender thread — and read as a PAIR, so a half-applied edit can't
+        # aim the feed at a new host on the old port.
+        self._lock = threading.Lock()
+        self._target = (cfg.base_host, cfg.base_port)
 
     def set_overlay_provider(self, provider) -> None:
         self.overlay_provider = provider
+
+    def retarget(self, host: str, port: int) -> bool:
+        """Point the feed at a different base station. True if it moved.
+
+        Takes effect on the next frame: the sender is rebuilt rather than
+        adjusted, because it resolves the hostname once at construction — which
+        also means retargeting is how a name that only started resolving later
+        (the laptop joined the network after the rover booted) gets picked up.
+        """
+        with self._lock:
+            if (host, port) == self._target:
+                return False
+            self._target = (host, port)
+        print(f"[fpv] now streaming to {host}:{port}")
+        return True
+
+    def target(self) -> tuple:
+        with self._lock:
+            return self._target
 
     def start(self) -> None:
         if not self.cfg.enabled:
@@ -46,14 +77,27 @@ class FPVStreamer:
     def _loop(self) -> None:
         from ..comms.video_udp import VideoSender
 
-        self._sender = VideoSender(self.cfg.base_host, self.cfg.base_port, self.robot_id)
-        print(f"[fpv] streaming to {self.cfg.base_host}:{self.cfg.base_port} "
+        aimed_at = self.target()
+        sender = VideoSender(aimed_at[0], aimed_at[1], self.robot_id)
+        self._sender = sender
+        print(f"[fpv] streaming to {aimed_at[0]}:{aimed_at[1]} "
               f"@ up to {self.cfg.fps}fps q{self.cfg.jpeg_quality}")
 
-        period = 1.0 / max(self.cfg.fps, 1)
         last_stamp = -1.0
         while self._running:
             t0 = time.monotonic()
+            # Rebuild the sender when the target moves. Done here rather than in
+            # retarget() so the socket is only ever touched by this thread.
+            target = self.target()
+            if target != aimed_at:
+                sender.close()
+                sender = VideoSender(target[0], target[1], self.robot_id)
+                self._sender = sender
+                aimed_at = target
+            # Read from cfg every pass: fps and quality are live parameters, and
+            # a rate captured once would ignore the slider that was moved to get
+            # the feed through a congested link.
+            period = 1.0 / max(self.cfg.fps, 1)
             frame, stamp = self.camera.frame_and_stamp()
             # Only encode+send a genuinely new frame. Re-sending the same image
             # would burn a core on JPEG encoding and airtime for no visible gain.
@@ -66,7 +110,7 @@ class FPVStreamer:
                         frame = draw_boxes(frame, boxes)
                 jpeg = encode_jpeg(frame, self.cfg.jpeg_quality)
                 if jpeg:
-                    self._sender.send_frame(jpeg)
+                    sender.send_frame(jpeg)
             sleep_for = period - (time.monotonic() - t0)
             if sleep_for > 0:
                 time.sleep(sleep_for)

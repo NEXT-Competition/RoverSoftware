@@ -316,7 +316,16 @@ def rover(monkeypatch, tmp_path):
         presets={"in": {"roller": 1.0}})}
     bot = Robot(cfg)
     sent = []
-    bot.link.send = sent.append
+
+    def take(message):
+        sent.append(message)
+        return True
+
+    bot.link.send = take
+    # Bulk frames are metered against the radio's real byte rate, so the real
+    # link would refuse most of a multi-frame reply on any one tick. A test
+    # isn't waiting out that pacing; tests/test_airtime.py exercises it.
+    bot.link.send_bulk = take
     bot.sent = sent
     return bot
 

@@ -2281,6 +2281,16 @@ kbd {
   padding: 10px 4px;
   line-height: 1.55;
 }
+/* A tab that asked the robot for something and gave up waiting. The button is
+   the point of the block, so it is left-aligned under the explanation rather
+   than stretched: this is a retry, not the primary action of the page. */
+.waiting-stalled {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+}
 .footnote {
   color: var(--faint);
   border-top: 1px solid var(--hairline);

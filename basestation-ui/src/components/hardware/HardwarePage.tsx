@@ -9,7 +9,7 @@
 // the drivetrain armed is how an ESC ends up holding an undefined pulse.
 
 import { useEffect } from "preact/hooks";
-import { conn, robotDocuments, robots, selectedRobot } from "../../net/ws.ts";
+import { robotDocuments, robots, selectedRobot } from "../../net/ws.ts";
 import {
   addDriveActuator,
   addMechanism,
@@ -28,7 +28,9 @@ import {
   setSteerActuator,
   toggleRole,
 } from "../../state/hardware.ts";
+import { useRadioFetch } from "../../state/fetch.ts";
 import { configTarget, targetRobot } from "../../state/settings.ts";
+import { Waiting } from "../settings/Waiting.tsx";
 import { ActuatorCard } from "./ActuatorCard.tsx";
 import { MechanismCard } from "./MechanismCard.tsx";
 import { ChipPicker, NumberField, SelectField, ToggleField } from "./fields.tsx";
@@ -171,10 +173,14 @@ export function HardwarePage() {
   const result = layoutResult.value;
   const clashes = channelConflicts.value;
 
-  // Ask once per robot, like the config next door: this crosses the radio.
-  useEffect(() => {
-    if (rid && !documents?.layout_rev && conn.value === "live") refreshLayout();
-  }, [rid, conn.value]);
+  // Ask per robot, like the config next door: this crosses the radio, so it is
+  // requested rather than polled — and re-requested if the answer doesn't come
+  // back, because a document that loses a fragment loses all of it.
+  const fetch = useRadioFetch(
+    rid && `${rid}:layout`,
+    !!documents?.layout_rev,
+    refreshLayout,
+  );
 
   // Drop the draft once the robot has accepted it, so the form starts showing
   // the robot's own copy again — including anything it clamped on the way in.
@@ -249,11 +255,17 @@ export function HardwarePage() {
 
       {!doc
         ? (
-          <p class="hint pad">
-            Fetching {rid}'s layout… If it stays empty, the robot is offline or
-            running a build from before layouts existed — it will be a two-motor
-            tank drive on channels 0 and 1.
-          </p>
+          <Waiting
+            what="layout"
+            robot={rid}
+            fetch={fetch}
+            note={
+              <p class="hint">
+                A build from before layouts existed answers nothing here. It is
+                a two-motor tank drive on channels 0 and 1.
+              </p>
+            }
+          />
         )
         : (
           <>
