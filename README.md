@@ -14,11 +14,35 @@ Built teleop-first, but structured so the autonomy (object alignment, GPS
 waypoint navigation) and the multi-robot base station drop in without reworking
 the core.
 
-> **Docs:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the whole
-> system works end to end (robot, base station, protocol, GPS, offline maps).
-> [`docs/waypoint-navigation.html`](docs/waypoint-navigation.html)
-> is an interactive walkthrough of the navigation algorithm — open it in a
-> browser.
+> **📖 The handbook: <https://next-competition.github.io/roversoftware/>**
+> — an illustrated walkthrough of running the base station, driving a rover,
+> adding your own motors and mechanisms, and programming a routine without
+> Python. Source is [`docs/`](docs/); build it locally with `just book`.
+>
+> Also in there: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the
+> whole system works end to end (robot, base station, protocol, GPS, offline
+> maps), and
+> [`docs/src/waypoint-navigation.html`](docs/src/waypoint-navigation.html) is an
+> interactive walkthrough of the navigation algorithm.
+
+## Install
+
+Released builds are published as signed Debian packages. On a robot:
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://next-competition.github.io/roversoftware/apt/roversoftware-archive-keyring.asc \
+  | sudo tee /etc/apt/keyrings/roversoftware.asc > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/roversoftware/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/roversoftware.list > /dev/null
+sudo apt-get update && sudo apt-get install roversoftware-robot
+```
+
+`roversoftware-basestation` is the dashboard. Every release also attaches the
+raw `.deb` files, a desktop base station for macOS/Windows/Linux, and a Python
+wheel — see [Install from apt](docs/src/install/apt.md) and
+[Cutting a release](docs/src/reference/releasing.md). To work from a clone
+instead, read on.
 
 ## How it fits together
 

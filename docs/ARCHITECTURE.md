@@ -2,7 +2,7 @@
 
 How the whole system works, end to end: the tank-drive robot, the base-station
 dashboard, the radio protocol, GPS waypoint autonomy, and offline maps. For
-usage/quick-start see the top-level [`README.md`](../README.md); for a visual
+usage/quick-start see the top-level [`README.md`](https://github.com/NEXT-Competition/RoverSoftware/blob/main/README.md); for a visual
 walkthrough of the navigation algorithm open
 [`docs/waypoint-navigation.html`](./waypoint-navigation.html).
 
