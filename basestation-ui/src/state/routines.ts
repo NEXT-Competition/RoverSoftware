@@ -528,3 +528,133 @@ export const problems = computed<Problem[]>(() => {
   }
   return found;
 });
+
+/** Add a state that already does something.
+ *
+ * `addState` drops a blank box, which is the moment a newcomer stalls: the box
+ * is legal, does nothing, and gives no hint what it could do. The palette picks
+ * a verb FIRST and this builds the state around it — pre-filled with that
+ * verb's own fallbacks, named after it, and selected so the inspector is
+ * already showing the thing you just chose.
+ */
+export function addStateFrom(
+  verb: { key: string; label: string; args: { key: string; fallback?: number | string }[] },
+  kind: "action" | "drive",
+  at?: { x: number; y: number },
+): void {
+  const spot = at ? freeSpotNear(at.x, at.y) : null;
+  editCurrent((routine) => {
+    const taken = new Set(routine.states.map((s) => s.id));
+    const id = uniqueId(taken, slugFor(verb.key));
+    const state: RoutineStateSpec = { id, drive: { mode: "stop" }, transitions: [] };
+    if (kind === "drive") {
+      state.drive = { mode: verb.key };
+    } else {
+      const action: Record<string, unknown> = { do: verb.key };
+      for (const arg of verb.args) {
+        if (arg.fallback !== undefined) action[arg.key] = arg.fallback;
+      }
+      state.on_enter = [action as ActionSpec];
+    }
+    if (spot) {
+      state.x = Math.round(spot.x);
+      state.y = Math.round(spot.y);
+    }
+    routine.states.push(state);
+    selectedState.value = id;
+  });
+}
+
+/** A short, legal id stem from a verb key: `mech_preset` -> `preset`. Ids are
+ *  what the graph labels boxes with, so they want to be readable, not exact. */
+function slugFor(key: string): string {
+  const tail = key.replace(/^mech_/, "").replace(/^count_/, "count");
+  return tail.slice(0, 12) || "state";
+}
+
+/** Open a starter routine as an editable draft.
+ *
+ * Copied, never referenced: a template is a starting point, and an operator who
+ * edits one must not be surprised to find the next new routine carries their
+ * changes. The id is uniqued against what is already there, so opening the same
+ * template twice gives two independent routines rather than a silent overwrite.
+ */
+export function addRoutineFromTemplate(spec: RoutineSpec): void {
+  edit((doc) => {
+    const copy: RoutineSpec = JSON.parse(JSON.stringify(spec));
+    copy.id = uniqueId(new Set(doc.routines.map((r) => r.id)), spec.id);
+    doc.routines.push(copy);
+    editing.value = copy.id;
+  });
+  selectedState.value = null;
+  selectedEdge.value = null;
+}
+
+/** Download the whole routine document as JSON.
+ *
+ * Saving already puts routines on the ROBOT, which is what makes them survive a
+ * power cycle. This is the other half a competition needs: a file you can put in
+ * git, diff, hand to another team, or restore onto a rover whose SD card died.
+ *
+ * Built from a Blob rather than a data: URL — the kiosk is offline and a data
+ * URL large enough for a full routine set trips Chromium's URL length limits.
+ */
+export function exportRoutines(): void {
+  const doc = routines.value;
+  const blob = new Blob([JSON.stringify(doc, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `routines-${targetRobot.value ?? "robot"}.json`;
+  a.click();
+  // Revoke on the next frame, not immediately: Chromium reads the blob
+  // asynchronously and a same-tick revoke races the download to nothing.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** Merge a routine document from a file into the draft.
+ *
+ * Deliberately a MERGE, not a replace: an operator importing one team's routine
+ * onto a rover that already carries three of their own should not silently lose
+ * the three. Same-id routines are renamed rather than overwritten, for the same
+ * reason.
+ *
+ * Only the shape is checked here. The ROBOT is the authority on whether a
+ * routine is legal — it clamps and refuses on save, and echoes back why — so
+ * duplicating its validator in the browser would be a second, subtly different
+ * answer that drifts. What this must catch is the file that isn't a routine
+ * document at all, because that would corrupt the draft rather than be refused.
+ */
+export function importRoutines(text: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return "That file isn't JSON.";
+  }
+  const doc = parsed as Partial<RoutineDoc>;
+  if (!doc || typeof doc !== "object" || !Array.isArray(doc.routines)) {
+    return "That JSON isn't a routine document — it has no “routines” list.";
+  }
+  const incoming = doc.routines.filter(
+    (r): r is RoutineSpec =>
+      !!r && typeof r === "object" && typeof (r as RoutineSpec).id === "string" &&
+      Array.isArray((r as RoutineSpec).states),
+  );
+  if (incoming.length === 0) {
+    return "No routines in that file.";
+  }
+  edit((target) => {
+    const taken = new Set(target.routines.map((r) => r.id));
+    for (const spec of incoming) {
+      const copy: RoutineSpec = JSON.parse(JSON.stringify(spec));
+      copy.id = uniqueId(taken, spec.id);
+      taken.add(copy.id);
+      target.routines.push(copy);
+      editing.value = copy.id;
+    }
+  });
+  return null;
+}

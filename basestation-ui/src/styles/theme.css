@@ -1,43 +1,75 @@
-/* RoverSoftware base station — control-HUD theme.
-   Adapts an OLED-dark, glass-instrument aesthetic to a dense teleop console:
-   the map is the hero, controls float above it in machined-glass panels. */
+/* RoverSoftware base station — "The Pit Board".
+ *
+ * THESIS: A pit board over live terrain. The category ships a dark glass cockpit
+ *   and puts its type at 17px; this refuses both. Paper cards over the map, and
+ *   the poster-scale numeral goes to the MEASUREMENT, not to a brand wordmark —
+ *   an operator reads this at arm's length in sun, not leaning into a monitor.
+ * OWN-WORLD: Warm paper (#fbfbf8) cards on a live satellite map, ink near-black
+ *   with a green cast, ONE fluorescent lime that only ever means "the rover you
+ *   are calling", and three deep marshal's-flag colours that only ever mean how
+ *   a machine is. Archivo 800 for numerals, JetBrains Mono for anything measured.
+ *   26 -> 16 -> 12 -> 9 radii; controls grouped in 999px capsules.
+ * STORY: The operator sees which rover is theirs before reading a word, reads its
+ *   condition at distance, and reaches the stop without looking for it.
+ * FIRST VIEWPORT: Full-bleed terrain. Top-left a pill capsule (brand, link state,
+ *   gear). Left rail of paper cards, the selected rover filled lime. Bottom-right
+ *   the drive pad; top-right the red E-STOP, above everything at z-index 1001.
+ * FORM: Pit board / pace notes — brief-pinned by the user's reference, so no
+ *   direction roll was dealt; the reference supplied light + lime + display type
+ *   + pill nav + generous radii, and the pit board is what makes those true here.
+ */
 
 :root {
-  /* Surface */
-  --bg: #07090d;
-  --panel: rgba(19, 24, 33, 0.72);
-  --panel-solid: #131821;
-  --panel-2: rgba(31, 38, 48, 0.7);
-  --hairline: rgba(255, 255, 255, 0.08);
-  --hairline-strong: rgba(255, 255, 255, 0.14);
-  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* Surface — warm paper, never #fff (pure white beside a sunlit tile is glare) */
+  --bg: #d9dbd4;
+  --paper: #fbfbf8;
+  --panel: rgba(251, 251, 248, 0.82);
+  --panel-solid: #fbfbf8;
+  --panel-2: rgba(255, 255, 255, 0.74);
+  --well: #e7e8e1;
+  --hairline: rgba(20, 22, 15, 0.1);
+  --hairline-strong: rgba(20, 22, 15, 0.2);
+  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 
   /* Ink */
-  --text: #e9edf4;
-  --muted: #8b95a5;
-  --faint: #5c6675;
+  --ink: #14160f;
+  --text: #14160f;
+  --muted: #5b6053;
+  --faint: #767b6e;
 
-  /* Signal colors */
-  --accent: #4c9eff;
-  --accent-deep: #2f7fe0;
-  --ok: #35c46b;
-  --warn: #f0a53a;
-  --danger: #ff4d5a;
+  /* The tape: selection and engagement. Never a state, never type. */
+  --accent: #ccf24a;
+  --accent-deep: #b2d92f;
+  --accent-lift: #ddf87e;
+  --on-accent: #14160f;
+
+  /* The flags: how a machine is. Deep on purpose — never confusable with lime. */
+  --ok: #0f7a4a;
+  --warn: #b0600a;
+  --danger: #d4192a;
 
   /* Type */
-  --font-ui: "Space Grotesk Variable", system-ui, -apple-system, "Segoe UI",
+  --font-ui: "Archivo Variable", system-ui, -apple-system, "Segoe UI",
     "Noto Sans", "DejaVu Sans", sans-serif, "Noto Color Emoji",
     "Apple Color Emoji", "Segoe UI Emoji";
   --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular",
     "DejaVu Sans Mono", monospace;
+  --display-size: 38px;
+
+  /* Depth — offset ink shadows. A black shadow on paper reads as dirt. */
+  --lift-card: 0 14px 34px -20px rgba(20, 22, 15, 0.36);
+  --lift-pad: 0 18px 40px -18px rgba(20, 22, 15, 0.42);
+  --lift-cap: 0 6px 14px -4px rgba(20, 22, 15, 0.4),
+    inset 0 1px 2px rgba(255, 255, 255, 0.6);
 
   /* Motion — real-world mass, never linear/ease-in-out */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* Geometry */
-  --radius: 20px;
-  --radius-sm: 13px;
+  --radius: 26px;
+  --radius-sm: 16px;
+  --radius-input: 12px;
   --tap: 52px;
 
   /* Safe-area shorthands (iPad home indicator / notch) */
@@ -46,7 +78,7 @@
   --sa-b: env(safe-area-inset-bottom, 0px);
   --sa-l: env(safe-area-inset-left, 0px);
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -84,7 +116,7 @@ body {
 .map {
   position: absolute;
   inset: 0;
-  background: #0a0d12;
+  background: #cfd2ca;
 }
 
 /* The overlay is transparent to pointers; individual panels re-enable them.
@@ -182,9 +214,9 @@ body {
   background: var(--panel);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  box-shadow: var(--inset-hi), 0 18px 50px -24px rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(20px) saturate(1.3);
-  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  box-shadow: var(--inset-hi), var(--lift-card);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
 }
 .panel-pad {
   padding: 14px;
@@ -192,19 +224,22 @@ body {
 
 .eyebrow {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.18em;
   color: var(--faint);
 }
 
 /* ---------- Topbar ---------- */
 
+/* One capsule, internally divided — brand, fleet health, link, settings all act
+   on the same subject (this station), so they share a single object. */
 .topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 10px 16px;
+  gap: 12px;
+  padding: 7px 7px 7px 15px;
+  border-radius: 999px;
 }
 .brand {
   display: flex;
@@ -214,20 +249,104 @@ body {
 .brand img {
   width: 26px;
   height: 26px;
-  border-radius: 8px;
+  border-radius: 999px;
 }
 .brand .name {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 16px;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.02em;
 }
 .brand .name small {
   display: block;
   font-size: 9px;
-  letter-spacing: 0.24em;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--faint);
-  font-weight: 600;
+  font-weight: 700;
+}
+
+/* The tape, as a lozenge: which rover you are calling. */
+.tape {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--accent-deep);
+}
+
+/* ---------- Pit-board readout (signature component) ----------
+   The identity of the whole system: the numbers an operator reads standing over
+   a bench, at poster scale, in mono because a robot measured them. Three at
+   most — a pit board with ten numbers is a spreadsheet. */
+.pitboard-section {
+  padding-top: 3px;
+}
+.pitboard {
+  display: grid;
+  /* minmax(0,1fr) not 1fr: a grid track's default min-content floor lets a wide
+     numeral push its neighbour out of its own column. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  align-items: end;
+}
+.pb-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.pb-key {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4em;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--faint);
+}
+.pb-val {
+  font-family: var(--font-mono);
+  font-size: var(--display-size);
+  font-weight: 800;
+  line-height: 0.88;
+  letter-spacing: -0.045em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  /* Never wrap a numeral: a value broken across two lines is unreadable at the
+     distance this component exists for. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The unit rides the label, not the numeral. An inline superscript beside a
+   38px digit is a collision waiting to happen and reads as a footnote mark. */
+.pb-unit {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--faint);
+}
+/* A value the robot has never reported is shown, but visibly not real. It does
+   NOT hold display scale: an em-dash at 56px reads as a redaction bar, and a
+   headline-sized placeholder claims importance the absent number hasn't got. */
+.pb-none {
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding-bottom: 0.42em;
 }
 
 .pill {
@@ -249,7 +368,7 @@ body {
   height: 8px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 8px currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 20%, transparent);
 }
 .pill.ok {
   color: var(--ok);
@@ -333,9 +452,24 @@ body {
 .robot:active {
   transform: scale(0.985);
 }
+/* The tape. On a pit board the car you are calling is MARKED, not outlined —
+   a tinted border is something you have to look for. */
 .robot.sel {
-  border-color: var(--accent);
-  background: rgba(76, 158, 255, 0.1);
+  border-color: var(--accent-deep);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.robot.sel .mode,
+.robot.sel .meta {
+  color: rgba(20, 22, 15, 0.68);
+}
+/* Flag colours have to survive the lime fill they sit on. */
+.robot.sel .dot.online {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(20, 22, 15, 0.16);
+}
+.robot.sel .estop-flag {
+  color: #8c0714;
 }
 .robot .top {
   display: flex;
@@ -358,7 +492,7 @@ body {
 }
 .dot.online {
   background: var(--ok);
-  box-shadow: 0 0 9px var(--ok);
+  box-shadow: 0 0 0 3px rgba(15, 122, 74, 0.18);
 }
 .dot.offline {
   background: var(--danger);
@@ -401,7 +535,7 @@ body {
 }
 .bar-track {
   height: 7px;
-  background: #0c0f15;
+  background: var(--well);
   border-radius: 4px;
   overflow: hidden;
   position: relative;
@@ -438,15 +572,15 @@ body {
 .btn.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #06131f;
+  color: var(--on-accent);
 }
 .btn.ghost {
   background: transparent;
 }
 .btn.danger {
   color: var(--danger);
-  background: rgba(255, 77, 90, 0.1);
-  border-color: rgba(255, 77, 90, 0.4);
+  background: rgba(212, 25, 42, 0.09);
+  border-color: rgba(212, 25, 42, 0.38);
 }
 .btn.danger:active {
   background: var(--danger);
@@ -525,11 +659,11 @@ body {
   width: 5px;
   height: 11px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.13);
+  background: rgba(20, 22, 15, 0.1);
 }
 .pip.on {
   background: var(--ok);
-  box-shadow: 0 0 6px rgba(53, 196, 107, 0.5);
+  box-shadow: 0 0 0 3px rgba(15, 122, 74, 0.18);
 }
 
 /* ---------- E-STOP ---------- */
@@ -550,13 +684,13 @@ body {
   font-size: 17px;
   letter-spacing: 0.14em;
   color: #fff;
-  background: linear-gradient(180deg, #ff5b67, #e0313e);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(180deg, #e8394a, #b8101f);
+  border: 1px solid rgba(20, 22, 15, 0.22);
   border-radius: 16px;
   min-height: 60px;
   padding: 0 26px;
   cursor: pointer;
-  box-shadow: 0 10px 30px -8px rgba(255, 60, 76, 0.6), var(--inset-hi);
+  box-shadow: 0 10px 30px -8px rgba(212, 25, 42, 0.5), var(--inset-hi);
   transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
 }
 .estop:active {
@@ -567,10 +701,10 @@ body {
 }
 @keyframes estop-pulse {
   0%, 100% {
-    box-shadow: 0 10px 30px -8px rgba(255, 60, 76, 0.55), var(--inset-hi);
+    box-shadow: 0 10px 30px -8px rgba(212, 25, 42, 0.45), var(--inset-hi);
   }
   50% {
-    box-shadow: 0 10px 42px -4px rgba(255, 60, 76, 0.95), var(--inset-hi);
+    box-shadow: 0 10px 42px -4px rgba(212, 25, 42, 0.72), var(--inset-hi);
   }
 }
 .estop-clear {
@@ -588,14 +722,14 @@ body {
   border-radius: 50%;
   background: radial-gradient(
       circle at 50% 38%,
-      rgba(76, 158, 255, 0.14),
+      rgba(204, 242, 74, 0.30),
       transparent 60%
     ),
     var(--panel);
   border: 1px solid var(--hairline-strong);
-  box-shadow: var(--inset-hi), 0 20px 50px -20px rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(20px) saturate(1.3);
-  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  box-shadow: var(--inset-hi), var(--lift-pad);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
   touch-action: none;
   overflow: hidden;
 }
@@ -630,7 +764,7 @@ body {
   position: absolute;
   inset: 16%;
   border-radius: 50%;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border: 1px dashed rgba(20, 22, 15, 0.14);
   pointer-events: none;
 }
 .drivepad .nub {
@@ -641,10 +775,9 @@ body {
   height: 74px;
   margin: -37px 0 0 -37px;
   border-radius: 50%;
-  background: linear-gradient(180deg, #7cc0ff, var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  box-shadow: 0 8px 20px -6px rgba(0, 0, 0, 0.7),
-    inset 0 1px 2px rgba(255, 255, 255, 0.4);
+  background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: var(--lift-cap);
   transition: transform 0.18s var(--ease-out);
   will-change: transform;
 }
@@ -703,7 +836,7 @@ body {
   border-left: 9px solid transparent;
   border-right: 9px solid transparent;
   border-bottom: 20px solid var(--accent);
-  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.7));
+  filter: drop-shadow(0 1px 3px rgba(20, 22, 15, 0.45));
   transform-origin: 50% 65%;
   transition: transform 0.25s var(--ease-out);
 }
@@ -712,7 +845,7 @@ body {
   opacity: 0.6;
 }
 .robot-icon.sel .arrow {
-  border-bottom-color: #fff;
+  border-bottom-color: var(--accent);
 }
 .robot-icon .tag {
   position: absolute;
@@ -723,7 +856,7 @@ body {
   font-family: var(--font-mono);
   white-space: nowrap;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.62);
+  background: rgba(20, 22, 15, 0.5);
   padding: 2px 6px;
   border-radius: 5px;
 }
@@ -740,12 +873,12 @@ body {
 }
 .leaflet-bar {
   border: none !important;
-  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.8);
+  box-shadow: 0 12px 30px -18px rgba(20, 22, 15, 0.34);
 }
 /* Basemap credit: required by the imagery licence, so it stays visible — but
    small and dim enough not to compete with telemetry on the kiosk. */
 .leaflet-control-attribution {
-  background: rgba(0, 0, 0, 0.45) !important;
+  background: rgba(251, 251, 248, 0.72) !important;
   color: var(--muted);
   font-size: 10px;
   padding: 1px 6px;
@@ -777,7 +910,7 @@ body {
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  background: rgba(7, 9, 13, 0.9);
+  background: rgba(251, 251, 248, 0.92);
   backdrop-filter: blur(26px) saturate(1.2);
   -webkit-backdrop-filter: blur(26px) saturate(1.2);
   padding: calc(14px + var(--sa-t)) calc(14px + var(--sa-r))
@@ -812,32 +945,36 @@ body {
   margin-left: auto;
 }
 
+/* A capsule of pills: one object with internal divisions, per the
+   Cluster-Is-A-Capsule rule. */
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 4px;
-  background: #0c0f15;
+  gap: 3px;
+  padding: 5px;
+  background: var(--well);
   border: 1px solid var(--hairline);
-  border-radius: 14px;
+  border-radius: 999px;
 }
 .tabs button {
   appearance: none;
   font-family: var(--font-ui);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   color: var(--muted);
   background: transparent;
   border: 0;
-  border-radius: 10px;
+  border-radius: 999px;
   min-height: 38px;
   padding: 0 16px;
   cursor: pointer;
   transition: background 0.25s var(--ease), color 0.25s var(--ease);
 }
+/* Ink, not paper: this tab is simply ON — it is not the rover you are calling,
+   so it must not wear the tape. */
 .tabs button.on {
-  background: var(--panel-2);
-  color: var(--text);
-  box-shadow: var(--inset-hi);
+  background: var(--ink);
+  color: var(--paper);
 }
 
 .settings-body {
@@ -1015,7 +1152,7 @@ body {
   font-family: var(--font-mono);
   font-size: 14px;
   color: var(--text);
-  background: #0c0f15;
+  background: var(--well);
   border: 1px solid var(--hairline);
   border-radius: 10px;
   min-height: 38px;
@@ -1065,13 +1202,13 @@ body {
 .field-range::-webkit-slider-runnable-track {
   height: 5px;
   border-radius: 3px;
-  background: #0c0f15;
+  background: var(--well);
   border: 1px solid var(--hairline);
 }
 .field-range::-moz-range-track {
   height: 5px;
   border-radius: 3px;
-  background: #0c0f15;
+  background: var(--well);
   border: 1px solid var(--hairline);
 }
 .field-range::-webkit-slider-thumb {
@@ -1080,16 +1217,16 @@ body {
   height: 26px;
   margin-top: -11px;
   border-radius: 50%;
-  background: linear-gradient(180deg, #7cc0ff, var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  box-shadow: 0 4px 12px -3px rgba(0, 0, 0, 0.7);
+  background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow: 0 4px 12px -5px rgba(20, 22, 15, 0.42);
 }
 .field-range::-moz-range-thumb {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: linear-gradient(180deg, #7cc0ff, var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
+  border: 1px solid rgba(255, 255, 255, 0.55);
 }
 
 /* Toggle */
@@ -1100,7 +1237,7 @@ body {
   height: 32px;
   flex: none;
   border-radius: 999px;
-  background: #0c0f15;
+  background: var(--well);
   border: 1px solid var(--hairline);
   cursor: pointer;
   transition: background 0.28s var(--ease), border-color 0.28s var(--ease);
@@ -1117,12 +1254,12 @@ body {
   height: 24px;
   border-radius: 50%;
   background: #cdd7e4;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 2px 6px rgba(20, 22, 15, 0.28);
   transition: transform 0.28s var(--ease);
 }
 .toggle.on .knob {
   transform: translateX(24px);
-  background: #fff;
+  background: var(--paper);
 }
 
 /* Segmented enum */
@@ -1130,7 +1267,7 @@ body {
   display: flex;
   gap: 3px;
   padding: 3px;
-  background: #0c0f15;
+  background: var(--well);
   border: 1px solid var(--hairline);
   border-radius: 11px;
   flex: none;
@@ -1150,7 +1287,7 @@ body {
 }
 .segmented button.on {
   background: var(--accent);
-  color: #06131f;
+  color: var(--on-accent);
 }
 
 /* ---------- Banners & small buttons ---------- */
@@ -1170,8 +1307,8 @@ body {
 }
 .banner.error {
   color: var(--danger);
-  background: rgba(255, 77, 90, 0.1);
-  border-color: rgba(255, 77, 90, 0.35);
+  background: rgba(212, 25, 42, 0.09);
+  border-color: rgba(212, 25, 42, 0.32);
 }
 .btn.small {
   min-height: 38px;
@@ -1261,7 +1398,7 @@ body {
   flex: 1;
   height: 7px;
   min-width: 80px;
-  background: #0c0f15;
+  background: var(--well);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -1288,7 +1425,7 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--faint);
-  background: #0c0f15;
+  background: var(--well);
   border: 1px solid var(--hairline);
   transition: background 0.12s linear, color 0.12s linear;
 }
@@ -1299,7 +1436,7 @@ body {
 .btn-chip.down {
   background: var(--accent);
   border-color: var(--accent);
-  color: #06131f;
+  color: var(--on-accent);
 }
 
 .live-drive {
@@ -1331,6 +1468,15 @@ body {
 
 /* Portrait tablets & phones: rail becomes a bottom sheet, dock floats. */
 @media (max-width: 820px), (orientation: portrait) {
+  /* The sheet runs full width here and the drive pad floats over its top-right
+     corner, so a title row that pushes its right-hand item to the far edge puts
+     that item under the pad. On the kiosk that item is the tape naming which
+     rover you are calling — the one thing that must never be hidden. Group it
+     with its label on the left instead. */
+  .section-title {
+    justify-content: flex-start;
+    gap: 10px;
+  }
   .hud {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr auto;
@@ -1348,7 +1494,7 @@ body {
   }
   .rail {
     max-height: 48dvh;
-    box-shadow: var(--inset-hi), 0 -14px 40px -20px rgba(0, 0, 0, 0.85);
+    box-shadow: var(--inset-hi), 0 -14px 40px -22px rgba(20, 22, 15, 0.34);
     transition: transform 0.5s var(--ease);
   }
   .drawer-handle {
@@ -1414,6 +1560,14 @@ body {
 
 /* Short landscape kiosk (7" 800x480): compact everything, shrink the pad. */
 @media (max-height: 540px) {
+  /* The 7" 800x480 kiosk. Poster scale is relative to reading distance, and on
+     this panel the operator is closer and has no vertical room to spare. */
+  :root {
+    --display-size: 28px;
+  }
+  .pitboard {
+    padding: 0 0 9px;
+  }
   .settings-head {
     padding: 6px 10px;
     padding-right: 190px;
@@ -1534,9 +1688,9 @@ body {
 }
 
 .chip.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
 }
 
 /* --- actuators and mechanisms --- */
@@ -1905,11 +2059,11 @@ body {
 
 .rc-node.live .rc-id,
 .rc-node.live .rc-sub {
-  fill: #fff;
+  fill: var(--ink);
 }
 
 .rc-badge.start {
-  fill: var(--accent);
+  fill: var(--ink);
 }
 
 .rc-badge.terminal {
@@ -1932,21 +2086,45 @@ body {
 
 /* --- canvas chrome --- */
 
+/* State is carried by a tinted fill and a dot, never by a thick coloured left
+   edge — see DESIGN.md. The edge was inherited from the dark system, where it
+   read as a machined gutter; on paper it reads as a sticker, and it puts the
+   only signal on the one part of a card the thumb covers while scrolling. */
 .state-card {
+  position: relative;
   border: 1px solid var(--hairline);
-  border-left: 3px solid var(--hairline-strong);
   border-radius: var(--radius-sm);
   background: var(--panel-2);
-  padding: 12px 14px;
+  padding: 12px 14px 12px 28px;
+  transition: background 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+/* The dot sits on the card's own baseline row, aligned with the state id. */
+.state-card::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hairline-strong);
 }
 
+/* Live: the tape. This is the one place lime marks a machine condition rather
+   than a selection, and it is deliberate and documented — "the state the
+   machine is in right now" is the subject the operator is tracking, the same
+   channel as the selected rover. Filled, because across a bench you want a
+   block of colour, not a border. */
 .state-card.live {
-  border-left-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent) inset;
+  background: var(--accent);
+  border-color: var(--accent-deep);
+}
+.state-card.live::before {
+  background: var(--ink);
 }
 
-.state-card.terminal {
-  border-left-color: var(--ok);
+.state-card.terminal::before {
+  background: var(--ok);
 }
 
 .state-head {
@@ -2051,3 +2229,276 @@ body {
   padding: 5px 9px;
 }
 
+
+/* The selected card is a lime fill, so a lime track bar vanishes into it and a
+   pale track reads as glare. Ink for both; barStyle()'s inline colour has to be
+   overridden, which is the one place !important is the honest tool. */
+.robot.sel .bar-track {
+  background: rgba(20, 22, 15, 0.14);
+  border-color: rgba(20, 22, 15, 0.2);
+}
+.robot.sel .bar-fill {
+  background: var(--ink) !important;
+}
+.robot.sel .bar-label {
+  color: rgba(20, 22, 15, 0.66);
+}
+
+/* ---------- Routine palette: "add a step" ----------
+   A searchable menu of what the robot can do, opened from the canvas bar. It is
+   a sheet in the flow rather than a modal: choosing a step is not an
+   interruption, and a modal over a graph hides the thing you are adding to. */
+.palette {
+  position: absolute;
+  top: 52px;
+  left: 14px;
+  width: min(420px, calc(100% - 28px));
+  max-height: min(60vh, 520px);
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+  background: var(--panel-solid);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--lift-card);
+  overflow: hidden;
+}
+.palette-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px;
+  border-bottom: 1px solid var(--hairline);
+}
+.palette-search {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  min-height: var(--tap);
+  padding: 0 16px;
+}
+.palette-search:focus {
+  outline: none;
+  border-color: var(--ink);
+}
+.palette-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding: 6px;
+}
+.palette-group {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.palette-group:last-of-type {
+  border-bottom: 0;
+}
+.palette-group-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px 9px 7px;
+}
+.palette-blurb {
+  font-size: 12.5px;
+  color: var(--muted);
+  max-width: 62ch;
+}
+.palette-item {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-ui);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  min-height: var(--tap);
+  padding: 9px;
+  cursor: pointer;
+  transition: background 0.25s var(--ease);
+}
+.palette-item:active {
+  background: var(--well);
+}
+.palette-item.subtle .palette-label {
+  color: var(--muted);
+}
+/* Per-group identity, so a graph and its menu read as the same vocabulary.
+   These are category marks, not state — they never use a flag colour, and
+   never the tape. */
+.palette-icon {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 3px;
+  background: var(--faint);
+}
+.palette-icon.g-navigation {
+  background: var(--ink);
+}
+.palette-icon.g-mechanism {
+  background: var(--ink);
+  border-radius: 999px;
+}
+.palette-icon.g-logic {
+  background: transparent;
+  border: 2px solid var(--ink);
+}
+.palette-icon.g-operator,
+.palette-icon.g-timing,
+.palette-icon.g-vision {
+  background: var(--muted);
+}
+.palette-icon.g-blank {
+  background: transparent;
+  border: 1px dashed var(--hairline-strong);
+}
+.palette-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.palette-label {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.palette-help {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 62ch;
+}
+.palette-empty {
+  padding: 16px 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* Node category mark — the palette's shapes, on the graph. Ink, never a flag
+   colour and never the tape: this reports what kind of step a box is, not how
+   the machine is or which one you picked. */
+.rc-kind {
+  fill: var(--ink);
+}
+.rc-kind.quiet {
+  fill: var(--muted);
+}
+.rc-kind.hollow {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+/* On the live node the body is filled lime, so an ink mark still reads. */
+.rc-node.live .rc-kind {
+  fill: var(--ink);
+}
+.rc-node.live .rc-kind.hollow {
+  fill: none;
+  stroke: var(--ink);
+}
+
+/* ---------- Routine templates: the empty state ----------
+   Four working routines to open instead of a blank grid. Cards here are a
+   deliberate exception to "cards are the lazy container": these ARE a set of
+   parallel, independently-choosable things, which is the one shape a card grid
+   is actually right for. */
+.templates {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 0 6px;
+  align-items: flex-start;
+}
+.templates-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.templates-blurb {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 62ch;
+}
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+  width: 100%;
+}
+.template-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-align: left;
+  font-family: var(--font-ui);
+  background: var(--panel-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  cursor: pointer;
+  transition: transform 0.25s var(--ease), border-color 0.25s var(--ease);
+}
+.template-card:active {
+  transform: scale(0.985);
+  border-color: var(--hairline-strong);
+}
+.template-title {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.template-blurb {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.template-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 3px;
+}
+.template-steps {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.template-needs {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--warn);
+}
+
+/* A file input wearing a button. The native control is unstyleable and reads as
+   a foreign object on a kiosk, so it is hidden inside its own label. */
+.file-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+}
+.file-btn input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 0;
+}

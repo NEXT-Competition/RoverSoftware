@@ -137,6 +137,16 @@ class CommsConfig:
     command_timeout: float = (
         0.5  # Failsafe: stop if no drive command arrives within this many seconds
     )
+    # Bulk transfers (config snapshots, layouts, routine documents) over WiFi
+    # instead of the radio — see robot/comms/ip_link.py. The robot dials OUT to
+    # the base station, same as the FPV video path, so this is the base's
+    # hostname or IP. Empty (the default) disables it and everything stays on
+    # the radio exactly as before; when it's set but unreachable, every transfer
+    # still falls back to the radio, so this is safe to leave configured.
+    # Realtime traffic (drive, telemetry, mode, e-stop) NEVER moves here: the
+    # radio is what has the range.
+    base_host: str = ""
+    base_port: int = 5006
 
 
 @dataclass

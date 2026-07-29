@@ -44,7 +44,7 @@ DOC_FRAMES_PER_CYCLE = 2
 
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None,
-              settings: SettingsStore | None = None) -> FastAPI:
+              settings: SettingsStore | None = None, ip_server=None) -> FastAPI:
     app = FastAPI(title="RoverSoftware base station")
     clients: Set[WebSocket] = set()
     # Clients with the gamepad mapping editor open (see watch_gamepad).
@@ -76,6 +76,21 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         if robot_id:
             link.send({**msg, "to": robot_id})
 
+    def dispatch_bulk(robot_id, msg: dict) -> bool:
+        """Send a bulk frame over WiFi if that robot is on it; else the radio.
+
+        Returns True when WiFi took it, which is also the signal that there is
+        no airtime to pace against — see drain_documents. A robot at the far end
+        of the field simply isn't in `ip_server`, so it keeps getting documents
+        over the radio with no special handling here.
+        """
+        if not robot_id:
+            return False
+        if ip_server is not None and ip_server.send({**msg, "to": robot_id}):
+            return True
+        dispatch(robot_id, msg)
+        return False
+
     # Outbound document fragments, paced rather than dispatched in a loop. The
     # robot's own outbox does this in the other direction and for the same
     # reason: XBeeLink drops a frame the radio isn't draining, so a 10-fragment
@@ -92,11 +107,15 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             _doc_queue.append((robot_id, frame))
 
     async def drain_documents() -> None:
-        for _ in range(DOC_FRAMES_PER_CYCLE):
-            if not _doc_queue:
-                return
+        # The pacing exists to protect radio airtime. A fragment that went over
+        # WiFi cost none, so it doesn't count against the budget and the next
+        # one goes immediately — a layout push over WiFi completes in one cycle
+        # instead of being metered out over a second.
+        budget = DOC_FRAMES_PER_CYCLE
+        while _doc_queue and budget > 0:
             robot_id, frame = _doc_queue.popleft()
-            dispatch(robot_id, frame)
+            if not dispatch_bulk(robot_id, frame):
+                budget -= 1
 
     # ---- gamepad -> currently selected robot ----
     # Rate-limit drive frames so we don't flood a slow XBee link (at 9600 baud a
@@ -304,6 +323,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     @app.on_event("startup")
     async def _startup():
         link.start()
+        if ip_server is not None:
+            ip_server.start()
         if controller is not None:
             controller.start()
         if video_rx is not None:
@@ -319,6 +340,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             controller.stop()
         if video_rx is not None:
             video_rx.stop()
+        if ip_server is not None:
+            ip_server.stop()
         link.stop()
 
     @app.websocket("/ws")

@@ -7,6 +7,7 @@ import { ControllerStatus } from "./components/ControllerStatus.tsx";
 import { FleetPanel } from "./components/FleetPanel.tsx";
 import { FPV } from "./components/FPV.tsx";
 import { ModeControls } from "./components/ModeControls.tsx";
+import { PitBoard } from "./components/PitBoard.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
 import { ShooterControls } from "./components/ShooterControls.tsx";
 import { Telemetry } from "./components/Telemetry.tsx";
@@ -66,8 +67,8 @@ function ControlSection() {
   return (
     <section class="rail-section">
       <div class="section-title" style="margin-bottom:10px">
-        <span class="eyebrow">Selected</span>
-        <span class="eyebrow" style="color:var(--accent)">{sel ?? "—"}</span>
+        <span class="eyebrow">Control</span>
+        <span class="eyebrow">{sel ?? "—"}</span>
       </div>
       <ModeControls />
       <div style="height:14px" />
@@ -98,6 +99,16 @@ export function App() {
           <aside class={`rail panel${collapsed ? " collapsed" : ""}`}>
             <div class="drawer-handle" onClick={() => setCollapsed((c) => !c)} />
             <div class="rail-body">
+              {/* The board leads. These are the numbers an operator reads from
+                  across a bench, so they get the first viewport; the fleet list
+                  below is how you change which rover they are about. */}
+              <div class="rail-section pitboard-section">
+                <div class="section-title" style="margin-bottom:9px">
+                  <span class="eyebrow">Calling</span>
+                  <span class="tape">{selected.value ?? "—"}</span>
+                </div>
+                <PitBoard />
+              </div>
               <FleetPanel />
               <FPV />
               <ControlSection />

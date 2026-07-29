@@ -145,6 +145,41 @@ def _set_route(spec) -> Effect:
     return run
 
 
+def _int(spec: dict, key: str, default: int) -> int:
+    """A whole number out of a spec, or the default. Never raises: a routine
+    mid-run must not take the robot down over a typo in one field."""
+    try:
+        return int(float(spec.get(key, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _count(spec) -> Effect:
+    """Add to a named counter — the other half of the bounded loop.
+
+    Belongs in `on_enter`: a counter incremented `on_tick` climbs at the control
+    rate and turns "do this three times" into "do this for three ticks", which
+    is the mistake this action exists to make hard to write by accident. The
+    schema warns when it lands in the tick slot.
+    """
+    name = str(spec.get("name", ""))
+    by = _int(spec, "by", 1)
+
+    def run(ctx: RoutineContext) -> None:
+        ctx.counters[name] = ctx.counters.get(name, 0) + by
+    return run
+
+
+def _count_set(spec) -> Effect:
+    """Set a counter outright. `to: 0` is how a loop is re-armed."""
+    name = str(spec.get("name", ""))
+    to = _int(spec, "to", 0)
+
+    def run(ctx: RoutineContext) -> None:
+        ctx.counters[name] = to
+    return run
+
+
 def _log(spec) -> Effect:
     message = str(spec.get("message", ""))
     return lambda ctx: print(f"[routine] {message}")
@@ -161,6 +196,8 @@ BUILDERS: Dict[str, Tuple[Callable[[dict], Effect], Tuple[str, ...]]] = {
     "disarm": (_disarm, ()),
     "set_route": (_set_route, ("waypoints",)),
     "log": (_log, ("message",)),
+    "count": (_count, ("name",)),
+    "count_set": (_count_set, ("name", "to")),
 }
 
 ACTIONS = tuple(sorted(BUILDERS))
