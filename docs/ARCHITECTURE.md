@@ -560,10 +560,10 @@ the first document push.
 `False` means "not connected — you send it". So `comms.base_host` being blank, a
 base station that isn't up, and a rover driving out of WiFi range all degrade to
 exactly the pre-existing radio behaviour, decided per frame. Only the pacing
-changes with it — `Robot._drain_outbox` meters frames onto the radio at
-`OUTBOX_PER_TICK`, but empties the whole queue over WiFi, because there's no
-airtime to protect. A config snapshot that took ~100 ms of paced ticks lands in
-one.
+changes with it — `Robot._drain_outbox` meters frames onto the radio at the
+radio's own byte rate, but empties the whole queue over WiFi, because there's no
+airtime to protect. A config snapshot that takes the better part of a second on
+the radio lands in one tick.
 
 ### 4.6 Sensors
 
@@ -630,18 +630,30 @@ motor; partially applying it is exactly how two motors end up on one channel. So
 `comms/doc_transfer.py` slices the JSON text into numbered fragments and applies
 nothing until every fragment is in hand. The receiver is bounded: one transfer at
 a time, a 5 s timeout, a 32 KB cap. Acking is whole-document — the robot replies
-`layout_result` / `routines_result` after validating, and the base station
-retries the entire document once after 3 s of silence. No per-part NAKs: a save
-is a rare deliberate action, and whole-doc retry is a tenth of the code for the
-same reliability at this scale.
+`layout_result` / `routines_result` after validating. No per-part NAKs: a save is
+a rare deliberate action, and the editor holds its draft until the ack arrives,
+so a save that got lost is visible as a Save button that stayed dirty.
 
-**Multi-frame replies are paced, not burst.** `XBeeLink.send` drops the frame and
-flushes when the radio isn't draining inside its 0.2 s write timeout, so firing
-ten frames inside one tick is precisely the shape that arrives incomplete.
-`Robot` queues them and drains two per control tick; the base station does the
-same in the other direction. Telemetry still goes direct — it is one small frame,
-it is what an operator most needs to be current, and delaying it behind a config
-dump is the wrong trade.
+**Multi-frame traffic is metered against the line, not counted in frames.**
+`comms/airtime.py` is a token bucket denominated in bytes and refilled at the
+link's own baud rate. Both ends used to pace in *frames per tick*, which reads
+like pacing and isn't: the robot's two frames per 50 Hz tick is 100 frames a
+second, and at ~430 bytes a frame that is 43 kB/s offered to a link that carries
+5.8. The buffer fills, `serial.write` hits its 0.2 s timeout, and the frame is
+dropped to keep the control loop alive — and what gets dropped is a fragment of
+a document, which is all-or-nothing, so the settings page stays blank forever.
+
+So `XBeeLink` has two doors. `send()` is realtime (drive, telemetry, e-stop):
+it goes now and is *charged* afterwards, so bulk gives way to it rather than
+competing. `send_bulk()` answers whether the caller is **done with the frame** —
+`False` means the link is merely busy and the frame stays at the head of the
+queue, `True` means written *or* unwritable (a dead port never will take it, and
+hoarding it would turn a queue into a leak). Both `Robot._drain_outbox` and the
+base station's `drain_documents` pop only on `True`.
+
+The dashboard closes the loop from the other side: `state/fetch.ts` re-asks a
+document that hasn't arrived, three times over eight seconds, and then says so
+with a button instead of leaving "Fetching…" on screen forever.
 
 The base station rate-limits `drive` frames it sends (see [§7](#7-the-base-station))
 so a fast gamepad stream doesn't back up a slow radio.
@@ -836,7 +848,29 @@ robot wins) and `app.py` relays them as browser-native MJPEG at
 `/video/{robot_id}.mjpg`, which the dashboard shows in an `<img>`. FPV is
 independent of the model — it needs only a camera and OpenCV, so live view works
 with no `.eim` at all. Off by default (`RS_FPV_ENABLED`), since it needs the base
-station's IP.
+station's IP — but that is a starting position, not a commitment; see below.
+
+Whether it streams and where it streams are both **live**, driven from the
+Tuning tab over the radio. `_push_live_config` hands `fpv.base_host` /
+`fpv.base_port` to `FPVStreamer.retarget()`, which rebuilds its `VideoSender` on
+the next frame, and `fpv.enabled` to `start()` / `stop(wait=False)`. This matters
+more than it sounds: the address belongs to whichever laptop is running the base
+station today, the robot only ever learns it over the radio, and a rover that
+needed a service restart to switch its camera on or re-aim it is one you cannot
+see out of at exactly the moment you cannot go and get it. Rebuilding rather
+than adjusting is also how a hostname that only started resolving later gets
+picked up — `VideoSender` resolves once, in its constructor.
+
+Three details make the switch safe. The `Camera` is *constructed* whenever one
+is configured but only *opened* by its first consumer, so a robot that booted
+with no detector and no feed leaves the device shut and still gets a picture
+when you ask for one an hour later — `Camera.start()` is idempotent and opens on
+its own thread, so the control loop never blocks on it. The off switch does not
+join: the streamer sleeps up to a frame interval, and waiting that out would
+stall a control tick to save nothing, so the loop notices the flag and closes
+its own socket in a `finally`. And `start()` on a loop that is still winding
+down re-arms the flag instead of spawning a second one, which is what makes
+flipping the switch off and straight back on harmless.
 
 When a model *is* running, the streamer draws the detection boxes onto each
 frame before encoding (green for the tracked target, amber for the rest). The

@@ -5,9 +5,10 @@
 // Refresh button). Until then the page says so rather than rendering a form
 // full of zeroes that would look like real values.
 
-import { useEffect, useState } from "preact/hooks";
-import { conn, robotConfigs, robotDocuments, robots } from "../../net/ws.ts";
+import { useState } from "preact/hooks";
+import { robotConfigs, robotDocuments, robots } from "../../net/ws.ts";
 import { robotGroupsFor } from "../../settings/schema.ts";
+import { useRadioFetch } from "../../state/fetch.ts";
 import {
   configTarget,
   refreshRobotConfig,
@@ -15,6 +16,7 @@ import {
   targetRobot,
 } from "../../state/settings.ts";
 import { SettingField } from "./Field.tsx";
+import { Waiting } from "./Waiting.tsx";
 
 function GroupCard(
   { title, blurb, children, open, onToggle }: {
@@ -58,19 +60,19 @@ export function RobotSettings() {
     [groups[0].title]: true,
   });
 
-  // Ask once per robot when the tab mounts, the target changes, or the socket
-  // comes back. Guarded on having no cached config so revisiting the tab
-  // doesn't spend radio airtime re-fetching something we already have. The
-  // field descriptors ride along on the same trigger: without them a custom
-  // layout's actuators would arrive as values with nothing to render them.
-  useEffect(() => {
-    if (rid && !entry && conn.value === "live") refreshRobotConfig();
-  }, [rid, conn.value]);
-  useEffect(() => {
-    if (rid && !documents?.fields_rev && conn.value === "live") {
-      refreshRobotFields();
-    }
-  }, [rid, conn.value]);
+  // Ask per robot when the tab mounts, the target changes, or the socket comes
+  // back. Guarded on having no cached config so revisiting the tab doesn't
+  // spend radio airtime re-fetching something we already have, and retried a
+  // couple of times because the snapshot arrives in pieces and a piece lost to
+  // a busy radio otherwise leaves this page blank for good. The field
+  // descriptors ride along: without them a custom layout's actuators would
+  // arrive as values with nothing to render them.
+  const fetch = useRadioFetch(rid && `${rid}:config`, !!entry, refreshRobotConfig);
+  useRadioFetch(
+    rid && `${rid}:fields`,
+    !!documents?.fields_rev,
+    refreshRobotFields,
+  );
 
   if (!rid) {
     return <p class="hint pad">No robot selected — pick one on the driving view first.</p>;
@@ -112,10 +114,16 @@ export function RobotSettings() {
 
       {!entry
         ? (
-          <p class="hint pad">
-            Fetching {rid}'s configuration… If it stays empty, the robot is
-            offline or running a build without live tuning.
-          </p>
+          <Waiting
+            what="configuration"
+            robot={rid}
+            fetch={fetch}
+            note={
+              <p class="hint">
+                A build without live tuning also answers nothing here.
+              </p>
+            }
+          />
         )
         : groups.map((group) => (
           <GroupCard

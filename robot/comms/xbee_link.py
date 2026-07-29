@@ -11,6 +11,19 @@ interface (start / stop / send + on_message callback) stays the same.
 Threading note: on_message runs on the reader thread. The Robot wires it to a
 thread-safe queue and processes messages on the main control loop, so no
 controller state is touched from two threads.
+
+Two ways to send, because the traffic is two different things:
+
+    send(msg)       realtime — drive, telemetry, mode, e-stop. Goes now.
+                    Best-effort: a frame the radio can't take is dropped,
+                    because the next one supersedes it anyway.
+    send_bulk(msg)  a fragment of a config snapshot, a layout, a routine.
+                    Goes only if the link has the airtime (see airtime.py),
+                    and a False means "keep it queued", not "it's gone".
+
+Mixing the two was the bug: bulk frames sent at realtime speed overran the
+line, and the drop that kept the control loop responsive silently deleted a
+fragment of a document nobody would ever re-request.
 """
 
 from __future__ import annotations
@@ -24,6 +37,13 @@ except Exception:  # pragma: no cover
     serial = None
 
 from . import protocol
+from .airtime import Airtime
+
+# What became of one write. BUSY is the only one worth offering again: the port
+# is fine, it just can't take this frame yet.
+SENT = "sent"
+BUSY = "busy"
+DEAD = "dead"
 
 
 class XBeeLink:
@@ -35,6 +55,7 @@ class XBeeLink:
         self._thread = None
         self._running = False
         self._write_lock = threading.Lock()
+        self.airtime = Airtime(baud)
 
     def start(self) -> None:
         if serial is None:
@@ -71,24 +92,64 @@ class XBeeLink:
             except Exception as e:
                 print(f"[XBeeLink] handler error: {e}")
 
-    def send(self, message: dict) -> None:
+    def send(self, message: dict) -> bool:
+        """Put a realtime frame on the radio now. True if it went out.
+
+        Charged against the airtime budget afterwards rather than checked
+        against it first: a drive command or an e-stop must never wait behind a
+        layout transfer. The charge is what makes the bulk sender back off for
+        the interval this frame occupies.
+        """
+        data = protocol.encode(message)
+        self.airtime.debit(len(data))
+        return self._write(data, "telemetry") is SENT
+
+    def send_bulk(self, message: dict) -> bool:
+        """Offer a non-realtime frame to the radio.
+
+        Returns whether the caller is DONE with this frame — not whether it was
+        transmitted. The two differ in the case that matters:
+
+            True   written, or there is no port to write it to and there never
+                   will be. Either way, forget it.
+            False  the link is busy this instant. Keep the frame at the head of
+                   the queue and offer it again next tick.
+
+        The distinction is the whole design. Half a document is not a smaller
+        document (see comms/doc_transfer.py), so a fragment dropped because the
+        radio was momentarily full is a settings page that never fills — while a
+        fragment held forever against a dead port is a queue that never drains.
+        """
+        data = protocol.encode(message)
+        if not self.airtime.take(len(data)):
+            return False
+        return self._write(data, "bulk") is not BUSY
+
+    def _write(self, data: bytes, what: str) -> str:
         if self._serial is None or not self._serial.is_open:
-            return
+            return DEAD
         try:
             with self._write_lock:
-                self._serial.write(protocol.encode(message))
+                self._serial.write(data)
+            return SENT
         except serial.SerialTimeoutException:
-            # The radio isn't draining the buffer. Telemetry is best-effort, so
-            # drop this frame and clear the backlog rather than stalling the
-            # control loop — the next frame writes fresh instead of queueing
-            # behind a stuck one.
+            # The radio isn't draining the buffer. Clear the backlog rather than
+            # stalling the control loop — but the write may have got part of a
+            # line out before it timed out, and the next frame would then be
+            # read as a continuation of that garbage and lost with it. A bare
+            # newline terminates the wreckage so whatever comes next parses.
             try:
                 self._serial.reset_output_buffer()
+                self._serial.write(b"\n")
             except Exception:
                 pass
-            print("[XBeeLink] telemetry write timed out; dropped frame")
+            print(f"[XBeeLink] {what} write timed out; frame not sent")
+            return BUSY
         except Exception as e:
+            # Anything else is a fault, not congestion. Retrying it every tick
+            # would spin the loop and fill the log without ever succeeding.
             print(f"[XBeeLink] write error: {e}")
+            return DEAD
 
     def stop(self) -> None:
         self._running = False

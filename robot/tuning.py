@@ -247,9 +247,18 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # --- FPV ---
     _i("fpv.fps", 1, 60),
     _i("fpv.jpeg_quality", 1, 100),
-    _b("fpv.enabled", live=False),
-    _t("fpv.base_host", live=False),
-    _i("fpv.base_port", 1, 65535, live=False),
+    # All live. The feed is the one thing an operator wants to change from the
+    # far side of a field: switch it on to see what the rover is looking at,
+    # switch it off when the WiFi is the thing that is struggling, and re-aim it
+    # at whichever laptop is running the base station today — an address the
+    # robot can only learn over the radio. Needing a service restart for any of
+    # that is how you end up with a rover you cannot see out of, at exactly the
+    # moment you cannot go and get it. `fpv.enabled` reaches
+    # `FPVStreamer.start()`/`stop()`, which opens the camera on demand; the host
+    # and port rebuild the socket on the next frame. See sensors/fpv.py.
+    _b("fpv.enabled"),
+    _t("fpv.base_host"),
+    _i("fpv.base_port", 1, 65535),
 )
 
 # The stock robot's parameter surface: everything above, plus the two track

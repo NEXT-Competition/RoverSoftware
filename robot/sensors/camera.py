@@ -342,7 +342,14 @@ class Camera:
         self._ok = False
 
     def start(self) -> None:
-        if not self.cfg.enabled:
+        """Open the device, unless it is already open.
+
+        Idempotent because consumers arrive at different times: the detector
+        wants frames from boot, but FPV can be switched on from the base station
+        an hour later, and it is the second consumer's job to make sure the
+        device is running without knowing whether the first one already did.
+        """
+        if not self.cfg.enabled or self._running:
             return
         self._running = True
         # Open the device on the thread, not here: a wedged camera would

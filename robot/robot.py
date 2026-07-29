@@ -39,11 +39,12 @@ from .sensors.pose import PoseEstimator
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
 SLOW_TICK_S = 0.1
 
-# Frames drained from the outbox per control tick. At 50 Hz this is 100 frames
-# a second of headroom, which empties a ~10-frame config snapshot in 100 ms
-# while never handing the radio more than it can write inside one tick. See
-# Robot._queue for why bursting is the failure mode worth designing against.
-OUTBOX_PER_TICK = 2
+# Ceiling on queued bulk frames. The outbox is only ever fed by an explicit
+# request from the base station, so in normal use it holds one document; this
+# exists so a robot whose radio has died doesn't grow a queue for the rest of
+# the match. The oldest frames go first, which is the right end to lose — they
+# belong to a transfer the other side has long since given up on.
+OUTBOX_MAX = 256
 
 # How long a bench jog runs before it stops itself. The Hardware tab repeats the
 # command while the control is held, so this is the same shape as teleop's
@@ -101,9 +102,9 @@ class Robot:
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
         # Multi-frame replies (a config snapshot, a layout, a routine set) are
-        # drained a couple of frames per tick rather than burst at the radio.
-        # See _queue.
-        self._outbox: "collections.deque[dict]" = collections.deque()
+        # metered onto the radio at the rate it can actually carry rather than
+        # burst at it. See _queue.
+        self._outbox: "collections.deque[dict]" = collections.deque(maxlen=OUTBOX_MAX)
 
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
@@ -211,9 +212,11 @@ class Robot:
         # something actually wants frames; it reads on its own thread so the
         # 50 Hz loop never touches the device.
         mock_det = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on")
-        need_camera = config.camera.enabled and (
-            (config.vision.enabled and not mock_det) or config.fpv.enabled
-        )
+        # Constructing a Camera opens nothing — start() does, on its own thread —
+        # so one is built whenever the robot has a camera configured, even if
+        # nothing wants frames yet. That is what lets FPV be switched on from the
+        # base station later: the first consumer to arrive opens the device.
+        self._detector_wants_frames = config.vision.enabled and not mock_det
         # Which detector we run also decides which capture backend to open (an
         # IMX500 detector needs the camera that loaded the sensor's network), so
         # resolve it BEFORE constructing the camera. Skipped entirely for the
@@ -223,7 +226,7 @@ class Robot:
             if (config.vision.enabled and not mock_det) else "mock" if mock_det else "off"
         )
         self.camera: Optional[Camera] = (
-            Camera(config.camera, config.vision) if need_camera else None
+            Camera(config.camera, config.vision) if config.camera.enabled else None
         )
 
         # Object detection feeds object_align. Either backend reads from the
@@ -246,9 +249,12 @@ class Robot:
         # see what was detected — keyed on the overlays() capability rather than
         # a backend type, so both real detectors qualify and the mock (which has
         # no real frames to annotate) doesn't.
-        self.fpv: Optional[FPVStreamer] = (
-            FPVStreamer(config.fpv, self.camera, config.robot_id) if config.fpv.enabled else None
-        )
+        # Built whether or not the feed is currently on, so the base station can
+        # switch it on later — there is nothing to construct at that point, and a
+        # streamer that only existed when it was already running would make
+        # `fpv.enabled` a restart-only setting for no reason but this line.
+        self.fpv: Optional[FPVStreamer] = FPVStreamer(
+            config.fpv, self.camera, config.robot_id)
         overlays = getattr(self.detector, "overlays", None)
         if self.fpv is not None and overlays is not None:
             self.fpv.set_overlay_provider(overlays)
@@ -374,13 +380,14 @@ class Robot:
     def _queue(self, msg: dict) -> None:
         """Hand a frame to the paced outbox instead of the radio directly.
 
-        XBeeLink.send drops the frame and flushes when the radio isn't draining
-        within its 0.2 s write timeout, so firing a whole multi-frame reply
-        inside one tick is exactly the shape that vanishes under congestion —
-        leaving the settings page permanently blank. The outbox spreads them
-        over ticks instead. Telemetry still goes direct: it is one small frame,
-        it is the thing an operator most needs to be current, and delaying it
-        behind a config dump is the wrong trade.
+        A multi-frame reply written all at once overruns the radio: the write
+        blocks, hits XBeeLink's 0.2 s timeout, and the frame is dropped to keep
+        the control loop alive — which is exactly how a settings page ends up
+        permanently blank, because a fragment of a document is not something the
+        other side knows to ask for again. The outbox meters them out at the
+        line rate instead (comms/airtime.py). Telemetry still goes direct: it is
+        one small frame, it is the thing an operator most needs to be current,
+        and delaying it behind a config dump is the wrong trade.
 
         This queue is also exactly the traffic that moves to WiFi when there is
         any — bulk, non-realtime, and too big for the shared channel. See
@@ -393,16 +400,20 @@ class Robot:
 
         On WiFi there is no airtime to protect and no write timeout to lose
         frames to, so the whole queue goes at once — a config snapshot that took
-        ~100 ms of paced radio ticks lands in one. If the link drops mid-drain,
-        send() declines and the remainder simply waits for the radio path below.
+        the better part of a second on the radio lands in one tick. If the link
+        drops mid-drain, send() declines and the remainder simply waits for the
+        radio path below.
+
+        Either way a frame is only removed once a link has accepted it. A `False`
+        from send_bulk means the radio has no airtime this tick, not that the
+        frame is gone, and popping it anyway is the bug this whole path exists
+        to avoid.
         """
         if self.ip_link is not None and self.ip_link.is_connected():
             while self._outbox and self.ip_link.send(self._outbox[0]):
                 self._outbox.popleft()
-        for _ in range(OUTBOX_PER_TICK):
-            if not self._outbox:
-                return
-            self.link.send(self._outbox.popleft())
+        while self._outbox and self.link.send_bulk(self._outbox[0]):
+            self._outbox.popleft()
 
     def _set_config(self, msg: dict) -> None:
         applied, rejected = tuning.apply(self.cfg, msg.get("config") or {})
@@ -633,6 +644,22 @@ class Robot:
         # Safe to assign directly: tuning.py restricts this to the same enum
         # PoseEstimator validates against.
         self.pose_estimator.heading_source = cfg.heading_source
+        # The camera feed: whether it runs, and where it goes. Both are settable
+        # from the Tuning tab, over the radio, with no service restart — which is
+        # the whole point, since the address belongs to whichever laptop is
+        # running the base station today and the robot only learns it over the
+        # radio. The streamer resolves the host once when it builds its socket,
+        # so a new one is handed over rather than read out of cfg; and start() is
+        # idempotent and opens the camera itself, so switching the feed on works
+        # even on a robot that booted with nothing wanting frames.
+        if self.fpv is not None:
+            self.fpv.retarget(cfg.fpv.base_host, cfg.fpv.base_port)
+            if cfg.fpv.enabled:
+                self.fpv.start()
+            else:
+                # Not joined: this is the control loop, and waiting out a frame
+                # interval to save nothing would stall a tick.
+                self.fpv.stop(wait=False)
         if self.imu is not None:
             self.imu.heading_offset_deg = cfg.imu.heading_offset_deg
             self.imu.invert = cfg.imu.invert
@@ -706,8 +733,10 @@ class Robot:
             self.imu.start()
         # Camera before its consumers (detector, FPV) so frames are flowing when
         # they start; the detector is heaviest (it spawns the .eim subprocess, or
-        # waits on the sensor's network upload).
-        if self.camera is not None:
+        # waits on the sensor's network upload). Only opened for a consumer that
+        # actually wants frames — FPV starts it itself if it is switched on, now
+        # or later, so a robot with no detector and no feed leaves the device shut.
+        if self.camera is not None and self._detector_wants_frames:
             self.camera.start()
         if self.detector is not None:
             self.detector.start()

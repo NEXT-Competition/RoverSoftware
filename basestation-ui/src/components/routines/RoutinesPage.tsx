@@ -8,9 +8,11 @@
 // this from an editor into something you can debug a match with.
 
 import { useEffect, useState } from "preact/hooks";
-import { conn, robotDocuments, robots, selectedRobot } from "../../net/ws.ts";
+import { robotDocuments, robots, selectedRobot } from "../../net/ws.ts";
+import { useRadioFetch } from "../../state/fetch.ts";
 import { refreshLayout } from "../../state/hardware.ts";
 import { configTarget, targetRobot } from "../../state/settings.ts";
+import { Waiting } from "../settings/Waiting.tsx";
 import {
   addRoutine,
   exportRoutines,
@@ -114,16 +116,18 @@ export function RoutinesPage() {
     input.value = "";
   }
 
-  useEffect(() => {
-    if (rid && !documents?.routines_rev && conn.value === "live") refreshRoutines();
-  }, [rid, conn.value]);
+  const fetch = useRadioFetch(
+    rid && `${rid}:routines`,
+    !!documents?.routines_rev,
+    refreshRoutines,
+  );
 
   // The layout too, even though this tab doesn't edit it: the action pickers
   // offer this robot's mechanisms and their presets by name, and without it
-  // every "which mechanism?" menu is empty for no visible reason.
-  useEffect(() => {
-    if (rid && !documents?.layout_rev && conn.value === "live") refreshLayout();
-  }, [rid, conn.value]);
+  // every "which mechanism?" menu is empty for no visible reason. It gets the
+  // same retry — a silently empty menu is worse here than a blank page, because
+  // it looks like an answer.
+  useRadioFetch(rid && `${rid}:layout`, !!documents?.layout_rev, refreshLayout);
 
   useEffect(() => {
     if (result?.ok && routinesDirty.value) routinesAccepted();
@@ -252,7 +256,7 @@ export function RoutinesPage() {
         ? (
           documents?.routines_rev
             ? <TemplatePicker />
-            : <p class="hint pad">Fetching {rid}'s routines…</p>
+            : <Waiting what="routines" robot={rid} fetch={fetch} />
         )
         : (
           <>
