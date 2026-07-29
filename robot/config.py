@@ -46,15 +46,15 @@ class DriveConfig:
     left_1: MotorConfig = field(
         default_factory=lambda: MotorConfig(channel=0, inverted=False)
     )
-    left_2: MotorConfig = field(
-        default_factory=lambda: MotorConfig(channel=1, inverted=False)
-    )
+    # left_2: MotorConfig = field(
+    #     default_factory=lambda: MotorConfig(channel=1, inverted=False)
+    # )
     right_1: MotorConfig = field(
-        default_factory=lambda: MotorConfig(channel=2, inverted=True)
+        default_factory=lambda: MotorConfig(channel=1, inverted=True)
     )
-    right_2: MotorConfig = field(
-        default_factory=lambda: MotorConfig(channel=3, inverted=True)
-    )
+    # right_2: MotorConfig = field(
+    #     default_factory=lambda: MotorConfig(channel=3, inverted=True)
+    # )
     arm_seconds: float = 2.0  # Hold neutral this long so the ESCs arm on boot
     slew_rate: float = 4.0  # Max throttle change per second (0 disables limiting)
 
