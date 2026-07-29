@@ -1,0 +1,316 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Install from apt - RoverSoftware</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="Operator handbook: run the base station, drive a rover, declare your motors and mechanisms, and program a robot without writing Python.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="../highlight.css">
+        <link rel="stylesheet" href="../tomorrow-night.css">
+        <link rel="stylesheet" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/custom.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "coal" : "coal";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">RoverSoftware</a></li><li class="chapter-item expanded affix "><a href="../shape.html">The shape of the system</a></li><li class="chapter-item expanded affix "><li class="part-title">Install</li><li class="chapter-item expanded "><a href="../install/apt.html" class="active">Install from apt</a></li><li class="chapter-item expanded "><a href="../install/packages.html">What each package puts where</a></li><li class="chapter-item expanded affix "><li class="part-title">Bring-up</li><li class="chapter-item expanded "><a href="../bringup/simulator.html">1 · Run it, no hardware</a></li><li class="chapter-item expanded "><a href="../bringup/driving-view.html">2 · Read the driving view</a></li><li class="chapter-item expanded "><a href="../bringup/drive.html">3 · Drive a rover</a></li><li class="chapter-item expanded "><a href="../bringup/places-routes.html">4 · Places and routes</a></li><li class="chapter-item expanded "><a href="../bringup/hardware.html">5 · Add motors and mechanisms</a></li><li class="chapter-item expanded "><a href="../bringup/routines.html">6 · Program a routine</a></li><li class="chapter-item expanded "><a href="../bringup/tuning.html">7 · Tune it in the field</a></li><li class="chapter-item expanded "><a href="../bringup/command.html">8 · Command it by voice</a></li><li class="chapter-item expanded "><a href="../bringup/deploy.html">9 · Put it on the robot</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/wiring.html">Wiring and calibration</a></li><li class="chapter-item expanded "><a href="../reference/python.html">Extending it in Python</a></li><li class="chapter-item expanded "><a href="../reference/protocol.html">The radio protocol</a></li><li class="chapter-item expanded "><a href="../reference/troubleshooting.html">When it misbehaves</a></li><li class="chapter-item expanded "><a href="../reference/releasing.html">Cutting a release</a></li><li class="chapter-item expanded affix "><li class="part-title">Deep dives</li><li class="chapter-item expanded "><a href="../architecture.html">Architecture, end to end</a></li><li class="chapter-item expanded "><a href="../model-conversion.html">Training and converting a detector</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">RoverSoftware</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware/edit/main/docs/src/install/apt.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="install-from-apt"><a class="header" href="#install-from-apt">Install from apt</a></h1>
+<p>Every tagged release publishes signed Debian packages to an APT repository
+hosted alongside this book. Add it once and a rover picks up every future
+release through the ordinary <code>apt upgrade</code> it already runs.</p>
+<h2 id="add-the-repository"><a class="header" href="#add-the-repository">Add the repository</a></h2>
+<p>Run this on each robot and each base station. It is the same three lines
+everywhere — the packages are <code>Architecture: all</code>, so one build serves a Pi
+Zero, a Pi 5 and an amd64 laptop alike.</p>
+<pre><code class="language-bash"># 1. Trust the signing key.
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://next-competition.github.io/RoverSoftware/apt/roversoftware-archive-keyring.asc \
+  | sudo tee /etc/apt/keyrings/roversoftware.asc &gt; /dev/null
+
+# 2. Point apt at the repository.
+echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/RoverSoftware/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/roversoftware.list &gt; /dev/null
+
+# 3. Fetch the index.
+sudo apt-get update
+</code></pre>
+<h2 id="install"><a class="header" href="#install">Install</a></h2>
+<p>On a <strong>robot</strong>:</p>
+<pre><code class="language-bash">sudo apt-get install roversoftware-robot
+</code></pre>
+<p>On a <strong>base station</strong> (a laptop, or a Pi with a screen for the kiosk):</p>
+<pre><code class="language-bash">sudo apt-get install roversoftware-basestation
+</code></pre>
+<p>Both packages start their systemd services on install, so a rover that comes up
+after this is already listening on the radio. Set its identity before you power
+it down:</p>
+<pre><code class="language-bash">sudo nano /etc/roversoftware/robot.env    # RS_ROBOT_ID, RS_XBEE_PORT, RS_MODE
+sudo systemctl restart roversoftware-robot
+</code></pre>
+<h2 id="upgrade"><a class="header" href="#upgrade">Upgrade</a></h2>
+<p>Nothing special — the packages ride the machine's normal update cycle.</p>
+<pre><code class="language-bash">sudo apt-get update &amp;&amp; sudo apt-get upgrade
+</code></pre>
+<p>Your edits to <code>/etc/roversoftware/robot.env</code> and
+<code>/etc/roversoftware/basestation.env</code> survive: both are declared as dpkg
+<strong>conffiles</strong>, so an upgrade that changes the shipped defaults asks you what to
+do rather than overwriting your radio port.</p>
+<h2 id="pin-a-version"><a class="header" href="#pin-a-version">Pin a version</a></h2>
+<p>Useful the week before an event, when you want every rover on exactly the build
+you tested.</p>
+<pre><code class="language-bash">apt-cache madison roversoftware-robot            # what is available
+sudo apt-get install roversoftware-robot=0.2.0   # take that one
+sudo apt-mark hold roversoftware-robot           # and stop it moving
+</code></pre>
+<p><code>sudo apt-mark unhold roversoftware-robot</code> when the event is over.</p>
+<h2 id="two-things-apt-will-not-do-for-you"><a class="header" href="#two-things-apt-will-not-do-for-you">Two things apt will not do for you</a></h2>
+<p>The Fusion HAT library and the Deno runtime are not in any Debian archive, so
+neither package can depend on them. Both degrade rather than fail:</p>
+<div class="table-wrapper"><table><thead><tr><th>Missing</th><th>What happens</th><th>Fix</th></tr></thead><tbody>
+<tr><td>SunFounder <code>fusion_hat</code></td><td>The motor layer falls back to a mock — the service starts, telemetry flows, nothing moves</td><td><code>just bootstrap</code>, or SunFounder's install script</td></tr>
+<tr><td><code>deno</code></td><td>The Python bridge still runs on its internal port; the touch UI does not</td><td><code>just bs_host=... bootstrap-deno</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="if-you-would-rather-not-add-a-repository"><a class="header" href="#if-you-would-rather-not-add-a-repository">If you would rather not add a repository</a></h2>
+<p>Every release also attaches the raw <code>.deb</code> files. Download and install one
+directly:</p>
+<pre><code class="language-bash">VERSION=0.2.0
+curl -fLO https://github.com/NEXT-Competition/RoverSoftware/releases/download/v${VERSION}/roversoftware-robot_${VERSION}_all.deb
+sudo apt-get install ./roversoftware-robot_${VERSION}_all.deb
+</code></pre>
+<p>Using <code>apt-get install ./file.deb</code> rather than <code>dpkg -i</code> matters: apt resolves
+the dependencies, dpkg leaves you to find them yourself.</p>
+<h2 id="verify-what-you-installed"><a class="header" href="#verify-what-you-installed">Verify what you installed</a></h2>
+<pre><code class="language-bash">apt-cache policy roversoftware-robot     # installed version and where it came from
+systemctl status roversoftware-robot     # is it running
+journalctl -u roversoftware-robot -f     # what is it saying
+</code></pre>
+<h2 id="building-the-repository-yourself"><a class="header" href="#building-the-repository-yourself">Building the repository yourself</a></h2>
+<p>The APT tree is generated by <code>packaging/apt-repo.sh</code> and published by the
+release workflow. You can run it locally against any set of <code>.deb</code> files —
+useful for an offline field repo on a USB stick or a laptop on the pit LAN:</p>
+<pre><code class="language-bash">VERSION=0.2.0 ./packaging/build-deb.sh all
+GPG_KEY_ID=&lt;your-key&gt; ./packaging/apt-repo.sh dist/*.deb
+python3 -m http.server -d dist/apt 8080
+</code></pre>
+<p>Then point a rover at <code>http://&lt;laptop-ip&gt;:8080</code> instead of the GitHub Pages URL.
+See <a href="../reference/releasing.html">Cutting a release</a> for how the hosted one is
+produced.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../shape.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../install/packages.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../shape.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../install/packages.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

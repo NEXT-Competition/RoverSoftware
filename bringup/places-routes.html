@@ -1,0 +1,273 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>4 · Places and routes - RoverSoftware</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="Operator handbook: run the base station, drive a rover, declare your motors and mechanisms, and program a robot without writing Python.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="../highlight.css">
+        <link rel="stylesheet" href="../tomorrow-night.css">
+        <link rel="stylesheet" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/custom.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "coal" : "coal";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">RoverSoftware</a></li><li class="chapter-item expanded affix "><a href="../shape.html">The shape of the system</a></li><li class="chapter-item expanded affix "><li class="part-title">Install</li><li class="chapter-item expanded "><a href="../install/apt.html">Install from apt</a></li><li class="chapter-item expanded "><a href="../install/packages.html">What each package puts where</a></li><li class="chapter-item expanded affix "><li class="part-title">Bring-up</li><li class="chapter-item expanded "><a href="../bringup/simulator.html">1 · Run it, no hardware</a></li><li class="chapter-item expanded "><a href="../bringup/driving-view.html">2 · Read the driving view</a></li><li class="chapter-item expanded "><a href="../bringup/drive.html">3 · Drive a rover</a></li><li class="chapter-item expanded "><a href="../bringup/places-routes.html" class="active">4 · Places and routes</a></li><li class="chapter-item expanded "><a href="../bringup/hardware.html">5 · Add motors and mechanisms</a></li><li class="chapter-item expanded "><a href="../bringup/routines.html">6 · Program a routine</a></li><li class="chapter-item expanded "><a href="../bringup/tuning.html">7 · Tune it in the field</a></li><li class="chapter-item expanded "><a href="../bringup/command.html">8 · Command it by voice</a></li><li class="chapter-item expanded "><a href="../bringup/deploy.html">9 · Put it on the robot</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/wiring.html">Wiring and calibration</a></li><li class="chapter-item expanded "><a href="../reference/python.html">Extending it in Python</a></li><li class="chapter-item expanded "><a href="../reference/protocol.html">The radio protocol</a></li><li class="chapter-item expanded "><a href="../reference/troubleshooting.html">When it misbehaves</a></li><li class="chapter-item expanded "><a href="../reference/releasing.html">Cutting a release</a></li><li class="chapter-item expanded affix "><li class="part-title">Deep dives</li><li class="chapter-item expanded "><a href="../architecture.html">Architecture, end to end</a></li><li class="chapter-item expanded "><a href="../model-conversion.html">Training and converting a detector</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">RoverSoftware</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware/edit/main/docs/src/bringup/places-routes.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="4--save-places-then-send-a-route"><a class="header" href="#4--save-places-then-send-a-route">4 · Save places, then send a route</a></h1>
+<p><em>Name the field once; build a run out of it every match.</em></p>
+<p>A <strong>place</strong> is a named position on the field, saved on the base station and
+shared by every rover. The best way to make one is to drive a rover until it is
+standing on the thing and press <em>Save rover position</em> — that is more accurate
+than any amount of squinting at imagery, and it is the reason the button sits
+next to the driving controls rather than behind a menu.</p>
+<p><img src="../img/places-panel.webp" alt="The Places panel listing bucket A, bucket B, cone stack, start pad and ditch with coordinates, each with an arrow button to add it to a route, above the Route controls." /></p>
+<p>Places carry a <strong>kind</strong> — bucket, marker, start, hazard — which is what the
+glyph on the map means. Tap <code>→</code> on a row to push it onto the pending route.</p>
+<h2 id="dropping-a-route-on-the-map"><a class="header" href="#dropping-a-route-on-the-map">Dropping a route on the map</a></h2>
+<ol>
+<li>Press <strong>Add waypoints</strong> under <em>Route</em>.</li>
+<li>Tap the map where you want the rover to go. Points are numbered as you drop
+them.</li>
+<li>Press <strong>Send</strong>. The rover switches to waypoint mode and starts driving it.</li>
+</ol>
+<p>Waypoints are amber because they are a <em>plan</em> — proposed, not yet done. As the
+rover reaches each one, its own trail is drawn in teal behind it. <strong>Clear</strong>
+discards a route you have not sent.</p>
+<p><img src="../img/route-drawing.webp" alt="The dashboard mid-draw: the Add waypoints button is active and four numbered amber points have been dropped on the map, not yet sent." /></p>
+<p>Mid-draw. Four points dropped, <strong>nothing sent yet</strong> — the route is still a plan
+you can add to or clear, and the rover is still in whatever mode it was already
+in.</p>
+<p><img src="../img/route-sent.webp" alt="The dashboard with a four-point amber route drawn across the map, numbered 1 to 4, saved places marked with glyphs, and rover trails behind each vehicle." /></p>
+<p>A sent route. The rail shows the mode has flipped to <code>waypoint</code>, and the command
+dock at the bottom reports what every rover is doing at once — <em>driving route</em>,
+<em>aligning on target</em> — so you can see the fleet without changing selection.</p>
+<blockquote>
+<p><strong>Navigation needs a heading</strong></p>
+<p>With no compass the robot uses the GPS module's <em>track angle</em> — true North, no
+calibration — which is meaningless standing still, so a BNO085 IMU is
+preferred when one is fitted. Pick with <code>--heading-source auto|gps|imu</code>.</p>
+</blockquote>
+<h2 id="why-places-rather-than-coordinates"><a class="header" href="#why-places-rather-than-coordinates">Why places, rather than coordinates</a></h2>
+<p>A routine that refers to a <em>place</em> follows it when you move it. Re-survey
+"bucket A" on the morning of the event and every routine that drives to it is
+correct, with nothing re-edited. Coordinates typed into a state machine are
+correct exactly once.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../bringup/drive.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../bringup/hardware.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../bringup/drive.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../bringup/hardware.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

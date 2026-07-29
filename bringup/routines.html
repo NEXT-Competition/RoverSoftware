@@ -1,0 +1,321 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>6 · Program a routine - RoverSoftware</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="Operator handbook: run the base station, drive a rover, declare your motors and mechanisms, and program a robot without writing Python.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="../highlight.css">
+        <link rel="stylesheet" href="../tomorrow-night.css">
+        <link rel="stylesheet" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/custom.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "coal" : "coal";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">RoverSoftware</a></li><li class="chapter-item expanded affix "><a href="../shape.html">The shape of the system</a></li><li class="chapter-item expanded affix "><li class="part-title">Install</li><li class="chapter-item expanded "><a href="../install/apt.html">Install from apt</a></li><li class="chapter-item expanded "><a href="../install/packages.html">What each package puts where</a></li><li class="chapter-item expanded affix "><li class="part-title">Bring-up</li><li class="chapter-item expanded "><a href="../bringup/simulator.html">1 · Run it, no hardware</a></li><li class="chapter-item expanded "><a href="../bringup/driving-view.html">2 · Read the driving view</a></li><li class="chapter-item expanded "><a href="../bringup/drive.html">3 · Drive a rover</a></li><li class="chapter-item expanded "><a href="../bringup/places-routes.html">4 · Places and routes</a></li><li class="chapter-item expanded "><a href="../bringup/hardware.html">5 · Add motors and mechanisms</a></li><li class="chapter-item expanded "><a href="../bringup/routines.html" class="active">6 · Program a routine</a></li><li class="chapter-item expanded "><a href="../bringup/tuning.html">7 · Tune it in the field</a></li><li class="chapter-item expanded "><a href="../bringup/command.html">8 · Command it by voice</a></li><li class="chapter-item expanded "><a href="../bringup/deploy.html">9 · Put it on the robot</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/wiring.html">Wiring and calibration</a></li><li class="chapter-item expanded "><a href="../reference/python.html">Extending it in Python</a></li><li class="chapter-item expanded "><a href="../reference/protocol.html">The radio protocol</a></li><li class="chapter-item expanded "><a href="../reference/troubleshooting.html">When it misbehaves</a></li><li class="chapter-item expanded "><a href="../reference/releasing.html">Cutting a release</a></li><li class="chapter-item expanded affix "><li class="part-title">Deep dives</li><li class="chapter-item expanded "><a href="../architecture.html">Architecture, end to end</a></li><li class="chapter-item expanded "><a href="../model-conversion.html">Training and converting a detector</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">RoverSoftware</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware/edit/main/docs/src/bringup/routines.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="6--program-it-without-writing-python"><a class="header" href="#6--program-it-without-writing-python">6 · Program it without writing Python</a></h1>
+<p><em>Settings → Routines. A state machine you draw, that runs on the robot.</em></p>
+<p>A <strong>routine</strong> is a state machine on a canvas. Each box is a step: it says what
+drives, what happens when the robot enters, holds and leaves it, and what makes
+it move on. Saved routines run <em>on the robot</em>, so they survive losing the radio —
+and the box the robot is actually in lights up as it runs, which is what turns
+the editor into something you can debug a match with.</p>
+<p><img src="../img/routines-templates.webp" alt="The Routines tab showing five starting templates: Drive a GPS route, Find and approach a target, Drive to a bucket line up and shoot, Repeat a step three times, and Wait for the operator then go — each with a description and a step count." /></p>
+<p>Start from a template rather than an empty canvas. Each one is a complete
+routine you can run and then edit; they are copied when opened, so changing one
+never affects the next. Amber text on a card names a <strong>prerequisite</strong> — a saved
+place you need before it will do anything.</p>
+<h2 id="the-canvas"><a class="header" href="#the-canvas">The canvas</a></h2>
+<ul>
+<li><strong>Drag a box</strong> to move it. <strong>Tidy</strong> re-lays out the whole graph.</li>
+<li><strong>Drag from a box's right edge onto another box</strong> to wire them together.</li>
+<li><strong>Tap a wire</strong> to say when it fires.</li>
+<li><strong>Tap a box</strong> to open the inspector and edit what it does.</li>
+</ul>
+<p><img src="../img/routines-canvas.webp" alt="A state machine on the canvas: drive_to_bucket (waypoint, 1 action) wired by &#39;route done&#39; to line_up (object align), which forks — &#39;all of · 0.3s&#39; to shoot (stop, 1 action) and &#39;not · 5s&#39; to gave_up — with shoot leading &#39;after 4s&#39; to done." /></p>
+<p>The full play. GPS gets the rover roughly to the right place, the camera does
+the last few metres, and only then does it fire. GPS is metres-accurate and a
+bucket is not, which is exactly why the two halves are separate steps.</p>
+<h2 id="what-a-step-contains"><a class="header" href="#what-a-step-contains">What a step contains</a></h2>
+<p><img src="../img/routines-inspector.webp" alt="The inspector for the line_up state: a name field, a final checkbox, a &#39;drives with&#39; selector reading Object align, a time limit, When entered and When leaving action lists, and a Then list holding one transition — &#39;when ALL of several things&#39; held for 0.3 seconds, going to shoot." /></p>
+<p>The inspector for one step. <strong>Drives with</strong> is the only thing that commands the
+motors — no action drives, so exactly one thing owns them at any moment.</p>
+<p><strong>Drives with</strong>
+: <code>Stop</code>, <code>Hold position</code>, <code>Fixed throttle/steer</code>, <code>Teleop</code> (hand it back to the
+driver), or <strong>delegate</strong> to <code>Object align</code>, <code>Shooter align</code> or <code>Waypoint route</code>.
+Delegation is how the graph composes the autonomy that already exists rather
+than re-expressing it.</p>
+<p><strong>When entered</strong>
+: Runs once. Set a mechanism to a preset, load a GPS route, arm the launcher,
+add one to a counter.</p>
+<p><strong>Action while here</strong>
+: Runs every tick, at the control-loop rate. Right for holding a mechanism at a
+power; wrong for counting, which is why <em>count this</em> belongs in <em>when entered</em>.</p>
+<p><strong>When leaving</strong>
+: Runs however the state is left — including a timeout, an abort or an e-stop.
+The right place to disarm something.</p>
+<p><strong>Then</strong>
+: The transitions, <strong>checked in order, first match wins, at most one per tick</strong>.
+Order is meaning: put "gave up" below "succeeded".</p>
+<h2 id="what-a-wire-can-wait-for"><a class="header" href="#what-a-wire-can-wait-for">What a wire can wait for</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Group</th><th>Conditions</th></tr></thead><tbody>
+<tr><td>timing</td><td>after a delay · immediately · never (hold here)</td></tr>
+<tr><td>vision</td><td>when the camera sees a target · when lined up · when at the standoff distance</td></tr>
+<tr><td>navigation</td><td>when the route is finished · when pointing a direction · when near a saved place</td></tr>
+<tr><td>mechanism</td><td>after N shots · when a mechanism is ready</td></tr>
+<tr><td>logic</td><td>ALL of · ANY of · NOT · after this has happened N times</td></tr>
+<tr><td>operator</td><td>when I press a button · when the e-stop is latched</td></tr>
+</tbody></table>
+</div>
+<p>Every condition can additionally be required to <strong>hold continuously</strong> for a
+number of seconds before it counts. That one field is the difference between a
+launcher that fires on a single noisy frame and one that waits half a second to
+be sure — it is the <code>0.3</code> on the wire out of <code>line_up</code> above.</p>
+<h2 id="what-an-action-can-do"><a class="header" href="#what-an-action-can-do">What an action can do</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Group</th><th>Actions</th></tr></thead><tbody>
+<tr><td>mechanism</td><td>set a mechanism to a preset · run one at a power · stop one · pulse one once · fire · arm / disarm the launcher</td></tr>
+<tr><td>navigation</td><td>load a GPS route (from saved places)</td></tr>
+<tr><td>logic</td><td>count this · reset a counter</td></tr>
+</tbody></table>
+</div>
+<p>None of them drive. That is the state's <code>drive</code> source, which is what guarantees
+exactly one thing commands the motors at any moment.</p>
+<h2 id="running-it"><a class="header" href="#running-it">Running it</a></h2>
+<ol>
+<li><strong>Save to robot.</strong> Routines take effect the moment they land — they are data
+the engine reads, not hardware a constructor owns.</li>
+<li>Press <strong>Run</strong>. The robot switches to <code>routine</code> mode and the live box lights
+up.</li>
+<li>For a "when I press a button" wire, type the event name and press <strong>Send
+event</strong>. A press is cleared whenever a new state is entered, so it cannot
+satisfy a transition it was not meant for.</li>
+<li><strong>Stop</strong> ends the run. The e-stop does too, and the routine's <em>on e-stop</em>
+setting decides whether it aborts or holds.</li>
+</ol>
+<blockquote>
+<p><strong>Test it dry</strong></p>
+<p>The simulator runs the real state-machine engine with the real validators. You
+can build, run and debug an entire competition routine against <code>--sim</code> and
+only then put it on a rover.</p>
+</blockquote>
+<p>Routines <strong>Export</strong> to a JSON file and <strong>Import</strong> back, which is how you move one
+between rovers or keep last season's in the repo.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../bringup/hardware.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../bringup/tuning.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../bringup/hardware.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../bringup/tuning.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

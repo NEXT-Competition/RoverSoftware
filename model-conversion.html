@@ -1,0 +1,433 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Training and converting a detector - RoverSoftware</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="Operator handbook: run the base station, drive a rover, declare your motors and mechanisms, and program a robot without writing Python.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/custom.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "coal" : "coal";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="index.html">RoverSoftware</a></li><li class="chapter-item expanded affix "><a href="shape.html">The shape of the system</a></li><li class="chapter-item expanded affix "><li class="part-title">Install</li><li class="chapter-item expanded "><a href="install/apt.html">Install from apt</a></li><li class="chapter-item expanded "><a href="install/packages.html">What each package puts where</a></li><li class="chapter-item expanded affix "><li class="part-title">Bring-up</li><li class="chapter-item expanded "><a href="bringup/simulator.html">1 · Run it, no hardware</a></li><li class="chapter-item expanded "><a href="bringup/driving-view.html">2 · Read the driving view</a></li><li class="chapter-item expanded "><a href="bringup/drive.html">3 · Drive a rover</a></li><li class="chapter-item expanded "><a href="bringup/places-routes.html">4 · Places and routes</a></li><li class="chapter-item expanded "><a href="bringup/hardware.html">5 · Add motors and mechanisms</a></li><li class="chapter-item expanded "><a href="bringup/routines.html">6 · Program a routine</a></li><li class="chapter-item expanded "><a href="bringup/tuning.html">7 · Tune it in the field</a></li><li class="chapter-item expanded "><a href="bringup/command.html">8 · Command it by voice</a></li><li class="chapter-item expanded "><a href="bringup/deploy.html">9 · Put it on the robot</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="reference/wiring.html">Wiring and calibration</a></li><li class="chapter-item expanded "><a href="reference/python.html">Extending it in Python</a></li><li class="chapter-item expanded "><a href="reference/protocol.html">The radio protocol</a></li><li class="chapter-item expanded "><a href="reference/troubleshooting.html">When it misbehaves</a></li><li class="chapter-item expanded "><a href="reference/releasing.html">Cutting a release</a></li><li class="chapter-item expanded affix "><li class="part-title">Deep dives</li><li class="chapter-item expanded "><a href="architecture.html">Architecture, end to end</a></li><li class="chapter-item expanded "><a href="model-conversion.html" class="active">Training and converting a detector</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">RoverSoftware</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware/edit/main/docs/src/model-conversion.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="running-our-own-model-on-the-sony-imx500"><a class="header" href="#running-our-own-model-on-the-sony-imx500">Running our own model on the Sony IMX500</a></h1>
+<p>The Raspberry Pi AI Camera runs its network <strong>inside the sensor</strong>, so the Pi
+spends no CPU on inference. This is how our trained model gets in there.</p>
+<pre><code>uv sync --group convert          # once, on this machine
+just model-bootstrap             # once per robot: AI Camera stack on the Pi
+just model-deploy                # export here, build the .rpk on the Pi, install it
+just model-selftest              # does the sensor actually see anything?
+</code></pre>
+<p>Then <code>just config</code> and set:</p>
+<pre><code>RS_VISION_BACKEND=imx500
+RS_VISION_IMX500_MODEL=/var/lib/roversoftware/network.rpk
+RS_VISION_IMX500_LABELS=/var/lib/roversoftware/labels.txt
+RS_VISION_HFOV=66                               # the AI Camera's real FOV
+</code></pre>
+<h3 id="why-it-takes-two-machines"><a class="header" href="#why-it-takes-two-machines">Why it takes two machines</a></h3>
+<p><strong>There is no <code>.rpk</code> on your laptop, and there cannot be.</strong> <code>imx500-package</code> ships
+only in the Pi's <code>imx500-tools</code> apt package — it is not on PyPI and not available
+for macOS. <code>packerOut.zip</code> is the portable artifact; the <code>.rpk</code> is built from it
+on the Pi.</p>
+<pre><code>this machine                         the Pi
+────────────                         ──────
+best.pt                              Ultralytics + MCT + imxconv-pt
+  -&gt; packerOut.zip   ──scp──&gt;        imx500-package -&gt; network.rpk
+</code></pre>
+<p><code>just model-deploy</code> does both halves. The individual steps, if you want them:</p>
+<div class="table-wrapper"><table><thead><tr><th>recipe</th><th>where</th><th>does</th></tr></thead><tbody>
+<tr><td><code>just model-bootstrap</code></td><td>Pi</td><td>installs <code>imx500-tools</code>, <code>imx500-all</code>, <code>python3-picamera2</code></td></tr>
+<tr><td><code>just model-export</code></td><td>here</td><td>stages the dataset, converts <code>best.pt</code> -&gt; <code>packerOut.zip</code></td></tr>
+<tr><td><code>just model-validate</code></td><td>here</td><td>measures what quantization cost</td></tr>
+<tr><td><code>just model-install</code></td><td>both</td><td>scp's the zip, packages the <code>.rpk</code> on the Pi, installs it</td></tr>
+<tr><td><code>just model-selftest</code></td><td>Pi</td><td>runs the rover's own decode against the live sensor</td></tr>
+<tr><td><code>just model-status</code></td><td>Pi</td><td>what is currently installed</td></tr>
+</tbody></table>
+</div>
+<p>All of them honour <code>ROBOT_HOST</code> / <code>just host=rover2.local ...</code> like the rest of
+the Justfile. Or do it by hand:</p>
+<pre><code>uv run tools/prepare_yolo_dataset.py --src model/data --out build/dataset
+uv run tools/imx500_export_yolo.py  --model model/best.pt --data build/dataset/data.yaml
+uv run tools/imx500_validate.py
+scp build/imx500-yolo/packerOut.zip pi@rover1.local:/tmp/
+ssh pi@rover1.local 'imx500-package -i /tmp/packerOut.zip -o /tmp/net'
+</code></pre>
+<hr />
+<h2 id="two-converters-and-which-one-you-want"><a class="header" href="#two-converters-and-which-one-you-want">Two converters, and which one you want</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>script</th><th>input</th><th>use it for</th></tr></thead><tbody>
+<tr><td><code>tools/prepare_yolo_dataset.py</code></td><td>Label Studio export</td><td>staging <code>model/data</code> into something Ultralytics reads</td></tr>
+<tr><td><strong><code>tools/imx500_export_yolo.py</code></strong></td><td>Ultralytics <code>.pt</code> (<code>best.pt</code>)</td><td><strong>the live path</strong> — our YOLO11n detector</td></tr>
+<tr><td><code>tools/imx500_validate.py</code></td><td>the exported ONNX</td><td>measuring what quantization cost</td></tr>
+<tr><td><code>tools/imx500_convert.py</code></td><td>Edge Impulse <code>.lite</code></td><td>an Edge Impulse export, if we ever go back to one</td></tr>
+</tbody></table>
+</div>
+<p>The <code>.lite</code> converter came first, for an Edge Impulse export that turned out to
+be a FOMO classification grid rather than a detector. It works and is verified
+(see the bottom of this file), but it is not the path the rover is on.</p>
+<h2 id="what-the-yolo-export-actually-does"><a class="header" href="#what-the-yolo-export-actually-does">What the YOLO export actually does</a></h2>
+<p><code>YOLO.export(format="imx")</code> does the hard part, and <code>imx500_export_yolo.py</code>
+wraps it rather than reimplementing it:</p>
+<ol>
+<li>Rebinds the <code>Detect</code> head so the DFL box decode happens <strong>inside</strong> the graph
+and sets <code>xyxy=True</code>, so boxes come out as corners rather than centre/size.</li>
+<li>Quantizes with MCT against the IMX500 target platform (TPC 4.0, INT8).</li>
+<li>Wraps the result in edge-mdt-cl's <code>multiclass_nms_with_indices</code>, so <strong>NMS runs
+on the sensor</strong>. The Pi receives finished detections, not raw anchors.</li>
+<li>Runs <code>imxconv-pt</code> to produce <code>packerOut.zip</code>, plus <code>labels.txt</code>.</li>
+</ol>
+<p>Reproducing that by hand would mean re-deriving head surgery that changes between
+YOLO versions — not worth it.</p>
+<h3 id="the-two-patches-and-why-theyre-safe"><a class="header" href="#the-two-patches-and-why-theyre-safe">The two patches, and why they're safe</a></h3>
+<p>Ultralytics <code>assert LINUX</code> before exporting. That is a support policy, not a
+technical limit: everything behind it (<code>imxconv-pt</code>, its bundled JVM <code>sdspconv</code>
+backend, MCT) is pure Python plus a platform-independent jar, and <code>torch2imx</code>
+even has an explicit Windows branch for the binary name. The whole toolchain was
+verified end to end on macOS/arm64 before the wrapper existed. Set
+<code>RS_IMX_REQUIRE_LINUX=1</code> to restore the assert.</p>
+<p>The second patch stubs <code>check_font</code>, which downloads a font for plotting labels
+and blows up on recent macOS because matplotlib's <code>_get_macos_fonts()</code> hits
+<code>KeyError('_items')</code>. Nothing to do with the export. Both patches are no-ops on
+Linux.</p>
+<h3 id="calibration-is-the-thing-that-decides-accuracy"><a class="header" href="#calibration-is-the-thing-that-decides-accuracy">Calibration is the thing that decides accuracy</a></h3>
+<p><code>--data</code> takes the dataset YAML. MCT sets every activation range by running those
+images through the float model, so this is the single biggest lever on how well
+the quantized network performs.</p>
+<p>Without it the script falls back to <code>coco8.yaml</code> — eight generic COCO images —
+prints a loud warning, and records <code>"calibration_is_placeholder": true</code> in
+<code>export_report.json</code>. That is enough to prove the pipeline runs and <strong>not</strong> enough
+to trust the accuracy of the result. Calibrating on the real 648 images takes
+~10 minutes instead of ~2.5; that is the whole cost.</p>
+<h3 id="staging-the-dataset"><a class="header" href="#staging-the-dataset">Staging the dataset</a></h3>
+<p><code>model/data</code> is a Label Studio export, which looks like an Ultralytics dataset
+and is not one. It has no <code>data.yaml</code>, and — the part that bites — the image and
+label filenames do not pair:</p>
+<pre><code>images/00BCF467-...-CDA3A7094BF5.jpg.6tfj6d12.ingestion-5759d4ffb8-8lvsf.jpg
+labels/00BCF467-...-CDA3A7094BF5.txt
+</code></pre>
+<p>Ultralytics finds a label by swapping <code>/images/</code> for <code>/labels/</code> and changing the
+extension, so the stems must match exactly. Left alone, <strong>every image is silently
+treated as having no objects</strong> — the export still succeeds and nothing warns.
+<code>tools/prepare_yolo_dataset.py</code> stages a directory of symlinks whose stems match
+and writes the yaml. It refuses to stage an export where the stem rule does not
+fit, rather than producing a quietly-empty dataset.</p>
+<p>The generated yaml points <em>both</em> splits at every image, because the purpose is
+calibration and more data is strictly better. That makes it wrong for scoring, so
+the file says so in a comment; <code>--val-split 0.2</code> gives a real disjoint split.</p>
+<h2 id="what-the-sensor-sends-back"><a class="header" href="#what-the-sensor-sends-back">What the sensor sends back</a></h2>
+<p>Four tensors, because NMS already ran on-sensor:</p>
+<div class="table-wrapper"><table><thead><tr><th>tensor</th><th>shape</th><th>on-wire</th><th>meaning</th></tr></thead><tbody>
+<tr><td>boxes</td><td><code>(max_det, 4)</code></td><td>int16 × 1/32</td><td><code>(x_min, y_min, x_max, y_max)</code> in <strong>network input pixels</strong>, not normalized</td></tr>
+<tr><td>scores</td><td><code>(max_det,)</code></td><td>uint8 × 1/256</td><td>descending</td></tr>
+<tr><td>labels</td><td><code>(max_det,)</code></td><td>int16 × 1</td><td>class index</td></tr>
+<tr><td>n_valid</td><td><code>(1,)</code></td><td>int16 × 1</td><td>real detections; everything after is zero padding</td></tr>
+</tbody></table>
+</div>
+<p><code>robot/sensors/imx500.py::unpack_edgemdt_nms()</code> decodes this, and
+<code>Decoder.parse()</code> tries it <strong>first</strong> — it is recognized from the tensors
+themselves, whereas the two model-zoo layouts are selected by intrinsics that a
+custom <code>.rpk</code> doesn't carry.</p>
+<p>Two details in there are load-bearing:</p>
+<ul>
+<li><strong><code>n_valid</code> is honoured.</strong> Ignore it and every frame decodes 300 zero-padded
+boxes at the origin; <code>select="centermost"</code> then locks onto the padding forever.</li>
+<li><strong>Tensors are identified by shape, not position.</strong> The ONNX graph declares them
+<code>boxes, scores, labels, n_valid</code>; the converter's own <code>dnnParams.xml</code> lists them
+in the <em>opposite</em> order. Which one picamera2 follows is only observable on a Pi.
+Shape settles the two unambiguous ones — boxes is the only 2-D tensor, <code>n_valid</code>
+the only single-element one — and where those landed reveals whether the whole
+list is forward or reversed, which fixes scores vs labels too. Both orders are
+covered by tests.</li>
+</ul>
+<p>If no boxes appear on the rover, <code>Decoder.describe_layout(metadata)</code> reports which
+decode path a real frame actually took.</p>
+<h2 id="what-quantization-actually-cost"><a class="header" href="#what-quantization-actually-cost">What quantization actually cost</a></h2>
+<p><code>tools/imx500_validate.py</code> runs the <strong>real exported graph</strong> — MCTQ quantizer
+nodes, on-sensor NMS and all — under onnxruntime and compares it against the
+float checkpoint on the same images. Calibrated on the 648-image dataset, over 40
+images at <code>conf=0.25</code>:</p>
+<div class="table-wrapper"><table><thead><tr><th></th><th></th></tr></thead><tbody>
+<tr><td>float detections</td><td>176</td></tr>
+<tr><td>quantized detections</td><td>175</td></tr>
+<tr><td>matched at IoU ≥ 0.5 (one-to-one)</td><td>151 — <strong>85.8%</strong> of float</td></tr>
+<tr><td>mean IoU of matches</td><td><strong>0.910</strong></td></tr>
+<tr><td>label agreement</td><td><strong>100%</strong></td></tr>
+</tbody></table>
+</div>
+<p>Read that carefully: detection <em>counts</em> agree to within one, boxes that match do
+so tightly, and no match ever changes class. The ~14% unmatched are detections
+sitting near the 0.25 confidence threshold that quantization nudged across it,
+not boxes landing in the wrong place — which is what a mean IoU of 0.91 tells you.</p>
+<p>Worth re-running after every export, because the failure it catches is silent: a
+model calibrated on the wrong images still exports, still packs, still loads, and
+simply sees less well. The tool also re-checks the output contract the decoder
+depends on and <strong>fails the run</strong> if a future Ultralytics release reorders or
+reformats those tensors — better here than on the rover.</p>
+<h2 id="object_align-gets-its-size-back"><a class="header" href="#object_align-gets-its-size-back">object_align gets its size back</a></h2>
+<p>The Edge Impulse FOMO caveat in <code>requirements.txt</code> — centroids only, so the rover
+can turn to face a target but never approach it — <strong>does not apply here</strong>. This is
+a real bounding-box detector, so <code>to_detection()</code> reports a true <code>size</code> and
+approach/standoff work. Calibrate <code>RS_VISION_STANDOFF_SIZE</code> with
+<code>tools/detector_selftest.py</code> rather than guessing.</p>
+<p>Set <code>RS_VISION_HFOV=66</code>. The 50° default is the <em>post-crop</em> figure for the Edge
+Impulse backend; the IMX500 path maps boxes back to the full frame, so it needs
+the camera's real FOV or the steering derivative is scaled wrong.</p>
+<h2 id="sensor-memory-is-tight-at-640"><a class="header" href="#sensor-memory-is-tight-at-640">Sensor memory is tight at 640</a></h2>
+<p>Our YOLO11n at <code>imgsz=640</code> uses <strong>7.12 MB of the 8 MB on-chip budget (90%)</strong>. It
+fits, but there is not much room. If a future model doesn't fit, the first lever
+is <code>--imgsz 480</code> or <code>320</code>; the exporter prints the memory report and says
+<code>Fit In Chip</code> on every run.</p>
+<p>For comparison, the FOMO network was 1.34 MB (17%).</p>
+<hr />
+<h2 id="verifying-the-lite-converter-toolsimx500_convertpy"><a class="header" href="#verifying-the-lite-converter-toolsimx500_convertpy">Verifying the <code>.lite</code> converter (<code>tools/imx500_convert.py</code>)</a></h2>
+<p>Kept for reference; this is the Edge Impulse path, not the live one.</p>
+<p>The IMX500 toolchain does not accept <code>.tflite</code> — <code>imxconv-pt</code> wants ONNX that MCT
+has already quantized, and MCT wants a <em>float</em> model. The usual bridge is
+<code>tf2onnx</code> + <code>onnx2torch</code>, which pins a TensorFlow version and leaves a NHWC/NCHW
+transpose soup. The Edge Impulse graph was small enough (<code>CONV_2D</code> ×15,
+<code>DEPTHWISE_CONV_2D</code> ×6, <code>ADD</code> ×3, <code>SOFTMAX</code> ×1) that <code>tools/tflite_to_torch.py</code>
+reads the flatbuffer directly and emits real <code>nn.Conv2d</code>s. No TensorFlow anywhere.</p>
+<p><code>tests/test_tflite_to_torch.py</code> verifies it layer by layer rather than end to end,
+because comparing only the final output hides a transposed kernel or an off-by-one
+SAME pad inside an average:</p>
+<ul>
+<li><strong>float32 export, every intermediate tensor</strong> — matches to float32 epsilon
+(3.5e-08 mean). Nothing is quantized, so nothing structural can hide.</li>
+<li><strong>int8 export, each layer fed the reference's own inputs</strong> — matches to ≤ ½ a
+quantization step, the rounding floor, excluding only the few dozen elements
+where the <code>.lite</code> itself saturated int8. The test bounds those at 0.1% so the
+exclusion can't quietly widen.</li>
+<li><strong>first conv exact</strong> — it reads the graph input, so no upstream drift can
+explain a failure away.</li>
+</ul>
+<h2 id="the-torch-pin-is-load-bearing"><a class="header" href="#the-torch-pin-is-load-bearing">The torch pin is load-bearing</a></h2>
+<p><code>pyproject.toml</code> pins <code>torch&gt;=2.4,&lt;2.9</code> in the <code>convert</code> group. Do not relax it.</p>
+<p><code>mct_quantizers</code> emits its MCTQ quantizer nodes from <code>symbolic()</code> methods on
+<code>torch.autograd.Function</code> — a hook only the <strong>legacy TorchScript</strong> ONNX exporter
+calls. torch 2.9 flipped <code>torch.onnx.export</code> to <code>dynamo=True</code> by default, and the
+dynamo exporter never consults those symbolics, so the export either errors out or
+silently produces an ONNX file with no quantization nodes, which <code>imxconv-pt</code> then
+rejects.</p>
+<p><code>torch</code> and <code>ultralytics</code> live in the <code>convert</code> group, not
+<code>[project.dependencies]</code>: they are build-machine-only, nothing on the robot
+imports them, and the Pi just loads the finished <code>.rpk</code> through picamera2. Plain
+<code>uv sync</code> stays lean.</p>
+<p><strong>Licensing note:</strong> Ultralytics is AGPL-3.0, and a model trained from
+<code>yolo11n.pt</code> inherits that. It is a build-time tool here — no Ultralytics code
+ships to the robot or runs on it — but if this rover is ever distributed, that is
+worth a deliberate decision rather than a default.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="architecture.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="architecture.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>
