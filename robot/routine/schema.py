@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import RoutineConfig
-from .actions import ARMING_ACTIONS, Effect, compile_action
+from .actions import ARMING_ACTIONS, Effect, compile_action, parse_waypoints
 from .conditions import Predicate, compile_condition
 
 VERSION = 1

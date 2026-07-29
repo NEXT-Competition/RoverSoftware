@@ -1,7 +1,9 @@
 import { useState } from "preact/hooks";
 import { robots, selected } from "./net/ws.ts";
 import { showView, view } from "./state/view.ts";
+import { rendition, toggleRendition } from "./state/theme.ts";
 import { MapView } from "./components/MapView.tsx";
+import { CommandDock } from "./components/CommandDock.tsx";
 import { ConnectionPill } from "./components/ConnectionPill.tsx";
 import { ControllerStatus } from "./components/ControllerStatus.tsx";
 import { FleetPanel } from "./components/FleetPanel.tsx";
@@ -31,8 +33,34 @@ function GearIcon() {
   );
 }
 
+/* Drawn rather than imported: two 20px glyphs in the same stroke weight as the
+   gear beside them, which no icon set would have matched. */
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.2" fill="currentColor" />
+      <g stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".75">
+        <path d="M12 2.6v2.5M12 18.9v2.5M2.6 12h2.5M18.9 12h2.5" />
+        <path d="M5.4 5.4 7.2 7.2M16.8 16.8l1.8 1.8M18.6 5.4 16.8 7.2M7.2 16.8l-1.8 1.8" />
+      </g>
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M20.3 14.9A8.6 8.6 0 0 1 9.1 3.7a8.6 8.6 0 1 0 11.2 11.2Z"
+      />
+    </svg>
+  );
+}
+
 function TopBar() {
   const online = robots.value.filter((r) => r.online).length;
+  const daylight = rendition.value === "daylight";
   return (
     <header class="topbar panel">
       <div class="brand">
@@ -49,6 +77,19 @@ function TopBar() {
         {online}/{robots.value.length} live
       </span>
       <ConnectionPill />
+      {/* Sits in the top bar rather than behind Settings on purpose: it is a
+          response to where the operator is standing, not a preference they set
+          once, and stepping out of the shade should not cost two taps. */}
+      <button
+        type="button"
+        class="icon-btn"
+        title={daylight ? "Switch to the console rendition" : "Switch to daylight (outdoors)"}
+        aria-label={daylight ? "Switch to the console rendition" : "Switch to daylight"}
+        aria-pressed={daylight}
+        onClick={toggleRendition}
+      >
+        {daylight ? <SunIcon /> : <MoonIcon />}
+      </button>
       <button
         type="button"
         class="icon-btn"
@@ -74,6 +115,10 @@ function ControlSection() {
       <div style="height:14px" />
       {/* Renders nothing unless the robot is in shooter_align (see the component). */}
       <ShooterControls />
+      {/* Places before Route: you save the buckets once, then build a run out
+          of them every match. The panel above is the noun, the one below the verb. */}
+      <PlacesPanel />
+      <div style="height:12px" />
       <RouteControls />
       <div style="height:12px" />
       <Telemetry />
@@ -117,6 +162,11 @@ export function App() {
               </div>
             </div>
           </aside>
+
+          {/* Bottom strip: every rover's activity at once, and where a spoken
+              order will land. Hidden on the portrait kiosk, which has no room
+              for it and whose operator is looking at one rover anyway. */}
+          <CommandDock />
 
           <div class="dock">
             <DrivePad />

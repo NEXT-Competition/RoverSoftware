@@ -71,6 +71,7 @@ rounded:
   input: "12px"
   inner: "9px"
   pill: "999px"
+  chamfer: "13px"
 spacing:
   hair: "3px"
   xs: "6px"
@@ -340,7 +341,11 @@ sheet at `1000`. Any new full-screen surface goes *under* the e-stop.
 **The Thumb-Floor Rule.** `--tap: 52px` is the minimum height for any primary control,
 and it does not shrink on the kiosk breakpoint.
 
-## Elevation & Depth
+```
+"top   top   top "
+"rail  .     .   "
+"rail  cmd   dock"
+```
 
 **Cards lift; slots sink.** A floating surface is warm translucent paper with a
 hairline, `backdrop-filter: blur(20px) saturate(1.15)`, and a soft offset drop shadow in
@@ -376,7 +381,9 @@ Does it present information, or does it receive input?
 is the one device that would break the material. Liveness is carried by a flag-coloured
 dot with a soft ring, and by motion.
 
-## Shapes
+Below 820px or in portrait the rail becomes a bottom sheet, and the command dock
+is **removed rather than shrunk** — it is a fleet-wide readout, and that layout
+belongs to the panel where the operator is standing next to one rover.
 
 **A nested radius scale, each step smaller as you go inward.** 26px on floating panels,
 16px on controls sitting on them, 12px on inputs inside those, and 9px on the smallest

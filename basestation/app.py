@@ -34,6 +34,7 @@ from fastapi.responses import Response, StreamingResponse
 from robot.comms.doc_transfer import split
 
 from .fleet import FleetManager
+from .places import PlaceStore
 from .settings import SettingsStore
 from .tiles import TileStore, attribution_for, content_type
 
@@ -57,6 +58,10 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                   if k in ("drive_hz", "ui_hz", "video_hz", "tiles")},
         load=False,
     )
+    # Named field positions, fleet-wide (basestation/places.py). Same fallback
+    # rule as settings: an embedder that passes nothing still gets a working
+    # app, and the tests don't write to a developer's home directory.
+    places = places or PlaceStore(load=False)
 
     # Offline map tiles: serves /tiles/{z}/{x}/{y}.png from a local .mbtiles cache,
     # optionally filling misses from an upstream server. Constructed even when no
@@ -170,6 +175,9 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # was clamped or refused. Robot config results ride on the robot's own
     # entry (fleet.configs); this is the base station's equivalent.
     _settings_result: dict = {"v": None}
+    # Same idea for the places list, so a refused coordinate is reported rather
+    # than silently dropped from the map.
+    _places_result: dict = {"v": None}
 
     def on_settings_change(applied: dict) -> None:
         if controller is not None and any(p.startswith("controller.") for p in applied):
@@ -242,6 +250,13 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # refused value the same way it reports one a robot refused.
             _settings_result["v"] = settings.apply(data.get("settings") or {})
             _settings_dirty["v"] = True
+        elif action == "set_places":
+            # Named field positions, edited from the map. Local like
+            # set_settings — no radio, no robot involved. A place only ever
+            # reaches a robot as the plain lat/lon the editor resolved it into
+            # when a routine was saved, so nothing here has to be pushed out.
+            _places_result["v"] = places.replace(data.get("places") or [])
+            _settings_dirty["v"] = True
 
     def settings_frame() -> dict:
         """The cold channel: everything the settings page edits or displays."""
@@ -249,6 +264,12 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             "type": "settings",
             "settings": settings.snapshot(),
             "settings_result": _settings_result["v"],
+            # Named field positions. Cold channel because they change when
+            # somebody saves one, not thirty times a second — but they ride
+            # here rather than in `settings` because they are a list the map
+            # draws, not a flat whitelist of scalars the settings page edits.
+            "places": places.snapshot(),
+            "places_result": _places_result["v"],
             "configs": fleet.configs(),
             # Layouts, routines and the field descriptors for whatever actuators
             # the operator declared. Cold channel with the configs, for the same

@@ -12,6 +12,8 @@ import type {
   FleetMessage,
   GamepadMessage,
   GamepadState,
+  Place,
+  PlacesResult,
   Robot,
   RobotConfigEntry,
   RobotDocuments,
@@ -50,6 +52,11 @@ export const robotConfigs = signal<Record<string, RobotConfigEntry>>({});
  *  channel as the configs, and for the same reason: kilobytes that change when
  *  someone presses Save, not thirty times a second. */
 export const robotDocuments = signal<Record<string, RobotDocuments>>({});
+/** Named field positions, fleet-wide. The bridge owns the list and persists it
+ *  (basestation/places.py); this is the mirror every map and picker reads. */
+export const places = signal<Place[]>([]);
+/** Which entries the bridge refused on the last save, if any. */
+export const placesResult = signal<PlacesResult | null>(null);
 /** Raw gamepad sample. Only streams while a client is watching. */
 export const gamepad = signal<GamepadState | null>(null);
 /** True once the first settings frame has landed (before that, a blank form
@@ -104,6 +111,8 @@ export function connect(): void {
         settingsResult.value = msg.settings_result ?? null;
         robotConfigs.value = msg.configs ?? {};
         robotDocuments.value = msg.documents ?? {};
+        places.value = msg.places ?? [];
+        placesResult.value = msg.places_result ?? null;
         if (msg.gamepad) gamepad.value = msg.gamepad;
         settingsReady.value = true;
       });

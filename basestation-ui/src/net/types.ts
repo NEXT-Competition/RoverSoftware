@@ -288,7 +288,36 @@ export interface SettingsMessage {
   } | null;
   configs: Record<string, RobotConfigEntry>; // by robot_id
   documents: Record<string, RobotDocuments>; // by robot_id
+  /** Named field positions, shared by the whole fleet (basestation/places.py). */
+  places: Place[];
+  places_result: PlacesResult | null;
   gamepad: GamepadState | null;
+}
+
+/** What a place is, so the map can draw it differently and an operator can
+ *  find the buckets among the markers. Mirrors basestation/places.py::KINDS. */
+export type PlaceKind = "bucket" | "marker" | "start" | "hazard";
+
+/** A point somebody stood a rover on and named.
+ *
+ *  Fleet property, not robot property: the whole point is that one rover is
+ *  driven up to a bucket in teleop and every OTHER rover can then use where it
+ *  was. They live on the base station and are resolved into plain lat/lon when
+ *  a routine is saved, so a robot never has to learn the word. */
+export interface Place {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  kind: PlaceKind;
+}
+
+/** Outcome of the last set_places — which entries the bridge refused, and
+ *  whether the file was written. Same shape idea as settings_result. */
+export interface PlacesResult {
+  count: number;
+  rejected: Record<string, string>;
+  save_error: string | null;
 }
 
 /** Streamed at ui_hz, but only to clients that asked (watch_gamepad). */
@@ -351,6 +380,10 @@ export type Action =
   | { action: "jog"; robot_id: string; mech: string; actuator?: string; power: number }
   // Base-station settings + gamepad mapping. Local; no radio involved.
   | { action: "set_settings"; settings: Record<string, SettingValue> }
+  // Named field positions. Local like set_settings — no radio, no robot: a
+  // place only ever reaches a robot as the lat/lon a saved routine resolved it
+  // into. Sent as the whole list, because that is what the map is holding.
+  | { action: "set_places"; places: Place[] }
   // Subscribe this socket to raw gamepad frames (mapping editor only).
   | { action: "watch_gamepad"; on: boolean };
 

@@ -101,9 +101,10 @@ export const CONDITIONS: VerbSpec[] = [
     group: "navigation",
     label: "when near a point",
     chip: "near point",
+    help:
+      "Distance from a saved place, in metres. Pick the place rather than typing coordinates — then moving the place moves every routine that refers to it.",
     args: [
-      { key: "lat", label: "latitude", kind: "number", step: 0.000001, fallback: 0 },
-      { key: "lon", label: "longitude", kind: "number", step: 0.000001, fallback: 0 },
+      { key: "place", label: "place", kind: "place" },
       { key: "at_most", label: "within", kind: "number", min: 0.5, max: 500, step: 0.5, unit: "m", fallback: 2 },
     ],
   },

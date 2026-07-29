@@ -81,6 +81,61 @@
   color-scheme: light;
 }
 
+/* --- Daylight: the same console, read in the sun -------------------------
+   Not a "light mode" in the theming sense — it is the field rendition, and the
+   one the 7" panel boots into outdoors. Contrast is pushed harder than the dark
+   rendition needs, because the competition here is sunlight on glass, and the
+   accent darkens so that dark ink still sits on it at the same ratio. */
+:root[data-theme="daylight"] {
+  --bg: #d9dbd4;
+  --paper: #fbfbf8;
+  --panel: rgba(251, 251, 248, 0.9);
+  --panel-solid: #fbfbf8;
+  --panel-2: rgba(255, 255, 255, 0.78);
+  --well: #e7e8e1;
+  --hairline: rgba(20, 22, 15, 0.12);
+  --hairline-strong: rgba(20, 22, 15, 0.24);
+  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+
+  --ink: #14160f;
+  --text: #14160f;
+  --muted: #4e5449;
+  --faint: #666c5f;
+
+  --accent: #10b394;
+  --accent-deep: #0b8d75;
+  --accent-lift: #6fe6cd;
+  --on-accent: #04211c;
+
+  --data: #b0600a;
+  --on-data: #fff8ee;
+
+  --ok: #0f7a4a;
+  --warn: #a85c08;
+  --danger: #d4192a;
+  --on-danger: #ffffff;
+  --on-ok: #ffffff;
+  --panel-rgb: 251, 251, 248;
+
+  --shadow-rgb: 20, 22, 15;
+  --hi-rgb: 255, 255, 255;
+  --accent-rgb: 16, 179, 148;
+  --data-rgb: 176, 96, 10;
+  --danger-rgb: 212, 25, 42;
+  --ok-rgb: 15, 122, 74;
+
+  --lift-card: 0 14px 34px -20px rgba(20, 22, 15, 0.36);
+  --lift-pad: 0 18px 40px -18px rgba(20, 22, 15, 0.42);
+  --lift-cap: 0 6px 14px -4px rgba(20, 22, 15, 0.4),
+    inset 0 1px 2px rgba(255, 255, 255, 0.6);
+
+  /* Sunlight already flattens the imagery; dimming it further costs legibility
+     of the one thing the operator is navigating by. */
+  --map-dim: 0;
+
+  color-scheme: light;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -127,12 +182,12 @@ body {
   inset: 0;
   z-index: 1000;
   display: grid;
-  grid-template-columns: minmax(320px, 360px) 1fr;
+  grid-template-columns: minmax(320px, 360px) 1fr auto;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
-    "top   top"
-    "rail  .  "
-    "rail  dock";
+    "top   top   top "
+    "rail  .     .   "
+    "rail  cmd   dock";
   gap: 14px;
   padding: calc(14px + var(--sa-t)) calc(14px + var(--sa-r))
     calc(14px + var(--sa-b)) calc(14px + var(--sa-l));
@@ -584,7 +639,7 @@ body {
 }
 .btn.danger:active {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 
 .btn-row {
@@ -678,6 +733,9 @@ body {
   pointer-events: auto;
   z-index: 1001;
 }
+/* The one control that does NOT theme. A stop button is a physical object: the
+   same red, the same place, the same weight in every rendition and in every
+   light. An operator reaching for it is not reading the screen. */
 .estop {
   font-family: var(--font-ui);
   font-weight: 700;
@@ -710,6 +768,147 @@ body {
 .estop-clear {
   min-height: 60px;
   padding: 0 16px;
+}
+
+/* ---------- Command dock ----------
+   The bottom strip: every rover's current activity, and where a spoken order
+   will land once there is something to receive it. Carries the chamfer, so it
+   reads as the same faceplate family as the top cluster — those two are the
+   console's frame, and the plates between them are its instruments. */
+
+.cmd-dock {
+  grid-area: cmd;
+  align-self: end;
+  justify-self: start;
+  max-width: min(660px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  backdrop-filter: blur(14px) saturate(1.3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--inset-hi), var(--lift-card);
+  clip-path: polygon(
+    var(--chamfer) 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 var(--chamfer)
+  );
+}
+
+.cmd-order {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.cmd-mic {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-inner);
+  background: var(--well);
+  color: var(--faint);
+}
+/* Disabled on purpose and styled to look it. An input that looks live and
+   silently drops what is typed into it is the thing somebody talks at while a
+   rover is moving. */
+.cmd-input {
+  flex: 1;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  color: var(--text);
+}
+.cmd-input::placeholder {
+  color: var(--faint);
+}
+.cmd-input:disabled {
+  cursor: not-allowed;
+}
+.cmd-state {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.cmd-fleet {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.cmd-fleet::-webkit-scrollbar {
+  display: none;
+}
+.cmd-rover {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 11px 6px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.16s var(--ease-out), background 0.16s var(--ease-out);
+}
+.cmd-rover.sel {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+.cmd-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--faint);
+}
+/* State is never carried by colour alone — the activity is spelled out beside
+   the dot, which is what an operator actually reads. */
+.cmd-led.run {
+  background: var(--accent);
+}
+.cmd-led.bad {
+  background: var(--danger);
+}
+.cmd-led.warn {
+  background: var(--warn);
+}
+.cmd-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.cmd-act {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.cmd-act.bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+.cmd-act.run {
+  color: var(--accent);
 }
 
 /* ---------- Drive pad ---------- */
@@ -898,6 +1097,240 @@ body {
 }
 .wp-tip::before {
   display: none;
+}
+
+/* ---------- Saved places ----------
+   Deliberately NOT the route's colour. A place is a fact about the field that
+   outlives the match; a route waypoint is this run's plan. An operator has to
+   tell them apart at a glance on a bright screen outdoors, so they differ in
+   hue and in shape, not in shade. */
+
+.place-icon .pin {
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--on-accent);
+  background: var(--accent-deep);
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  box-shadow: var(--lift-cap);
+  transition: transform 0.18s var(--ease-out);
+}
+.place-icon.k-hazard .pin {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.place-icon.k-start .pin {
+  background: var(--ok);
+  color: var(--on-ok);
+}
+.place-icon.k-marker .pin {
+  background: var(--paper);
+  color: var(--ink);
+}
+/* The open row's pin, so selecting in the list finds it on the map. */
+.place-icon.sel .pin {
+  transform: scale(1.25);
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.45), var(--lift-cap);
+}
+.place-icon .tag {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--map-label-ink);
+  background: var(--map-label-bg);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+/* Drop mode changes what a tap MEANS, which is the kind of mode you forget you
+   are in. The cursor is the standing reminder. */
+.map.dropping {
+  cursor: crosshair;
+}
+
+.place-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.place-row {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--panel-2);
+}
+.place-row.open {
+  border-color: var(--hairline-strong);
+}
+.place-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 8px;
+}
+.place-id {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+.place-glyph {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  border-radius: 50%;
+  color: var(--on-accent);
+  background: var(--accent-deep);
+}
+.place-glyph.k-marker {
+  background: var(--well);
+  color: var(--muted);
+}
+.place-glyph.k-start {
+  background: var(--ok);
+  color: var(--on-ok);
+}
+.place-glyph.k-hazard {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.place-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.place-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Tabular figures: a column of coordinates that jitters as digits change is
+   unreadable, and these are read as a column. */
+.place-coords {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.place-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px 9px;
+}
+.place-edit .segmented {
+  align-self: flex-start;
+}
+
+/* The primary action in a rail otherwise full of equals. Only ever one. */
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent-deep);
+  color: var(--on-accent);
+}
+.btn.primary:disabled {
+  background: var(--well);
+  border-color: var(--hairline);
+  color: var(--faint);
+}
+
+/* ---------- Route chips (routine editor) ---------- */
+
+.arg-route {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.route-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.route-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px 3px 6px;
+  border-radius: 9px;
+  background: var(--well);
+  font-size: 12.5px;
+}
+/* A leg pointing at a deleted place is silently dropped on save, so it has to
+   look wrong here — this is the only place it is visible before the rover
+   drives a shorter route than the one on screen. */
+.route-chip.missing {
+  background: rgba(var(--danger-rgb), 0.1);
+  color: var(--danger);
+}
+.route-n {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-deep);
+  color: var(--on-accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+.route-chip.missing .route-n {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.route-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.route-btn {
+  appearance: none;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.route-btn:active {
+  background: var(--hairline);
 }
 
 /* ============================ Settings sheet ============================ */
@@ -1141,7 +1574,7 @@ body {
 }
 .badge.warn {
   color: var(--warn);
-  border-color: rgba(240, 165, 58, 0.45);
+  border-color: rgba(var(--data-rgb), 0.45);
 }
 
 /* Inputs */
@@ -1302,8 +1735,8 @@ body {
 }
 .banner.warn {
   color: var(--warn);
-  background: rgba(240, 165, 58, 0.1);
-  border-color: rgba(240, 165, 58, 0.35);
+  background: rgba(var(--data-rgb), 0.1);
+  border-color: rgba(var(--data-rgb), 0.35);
 }
 .banner.error {
   color: var(--danger);
@@ -1485,6 +1918,13 @@ body {
       "."
       "rail";
     gap: 10px;
+  }
+  /* The command dock is a fleet-wide readout, and this layout belongs to the
+     7" panel where the operator is standing next to ONE rover with the sheet
+     already covering half the map. There is no room, and no question it
+     answers that the rail does not. */
+  .cmd-dock {
+    display: none;
   }
   .dock {
     position: absolute;
