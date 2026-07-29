@@ -45,7 +45,8 @@ DOC_FRAMES_PER_CYCLE = 2
 
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None,
-              settings: SettingsStore | None = None, ip_server=None) -> FastAPI:
+              settings: SettingsStore | None = None, ip_server=None,
+              places: PlaceStore | None = None) -> FastAPI:
     app = FastAPI(title="RoverSoftware base station")
     clients: Set[WebSocket] = set()
     # Clients with the gamepad mapping editor open (see watch_gamepad).
