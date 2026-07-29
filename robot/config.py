@@ -339,7 +339,7 @@ class ShooterConfig:
     # Off by default: a stock chassis has no launcher, and enabling it would
     # drive an unused channel at boot. Set RS_SHOOTER_ENABLED=1 on builds that
     # have one.
-    enabled: bool = False
+    enabled: bool = True
     # Channels 0 and 1 are the drive ESCs (see DriveConfig), so a shooter starts
     # at 2. Changing this to 0 or 1 would fight the drivetrain for a channel.
     channel: int = 2
@@ -349,7 +349,7 @@ class ShooterConfig:
     # too long and it stalls against the mechanical stop. Find it with
     # tools/servo_sweep.py, then add a little margin.
     fire_seconds: float = 1.0
-    retract_seconds: float = 0.35  # settle at rest before another shot may start
+    retract_seconds: float = 0.1  # settle at rest before another shot may start
 
     # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
     # Hold the alignment this long before firing. This is the single most
