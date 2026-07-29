@@ -256,7 +256,7 @@ class ShooterConfig:
     # How long to HOLD the fire angle. Too short and the servo never reaches it;
     # too long and it stalls against the mechanical stop. Find it with
     # tools/servo_sweep.py, then add a little margin.
-    fire_seconds: float = 0.35
+    fire_seconds: float = 1
     retract_seconds: float = 0.35  # settle at rest before another shot may start
 
     # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
