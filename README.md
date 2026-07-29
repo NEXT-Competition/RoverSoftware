@@ -14,7 +14,11 @@ Built teleop-first, but structured so the autonomy (object alignment, GPS
 waypoint navigation) and the multi-robot base station drop in without reworking
 the core.
 
-> **Docs:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the whole
+> **Docs:** [`docs/index.html`](docs/index.html) is the **handbook** — an
+> illustrated walkthrough of running the base station, driving a rover, adding
+> your own motors and mechanisms, and programming a routine without Python.
+> Open it in a browser.
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the whole
 > system works end to end (robot, base station, protocol, GPS, offline maps).
 > [`docs/waypoint-navigation.html`](docs/waypoint-navigation.html)
 > is an interactive walkthrough of the navigation algorithm — open it in a

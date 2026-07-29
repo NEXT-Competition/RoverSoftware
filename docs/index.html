@@ -1,0 +1,1994 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoverSoftware — build it, drive it, program it</title>
+<meta name="description" content="Operator handbook for RoverSoftware: run the base station, drive a rover, declare your motors and mechanisms, and program a robot without writing Python.">
+<link rel="icon" href="../basestation-ui/public/icon.svg">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   RoverSoftware documentation.
+
+   This page extends the console's own design system rather than inventing a
+   second one: the tokens below are lifted from basestation-ui/src/styles/
+   theme.css, and the grammar it defines is kept intact —
+
+     · TEAL is the tape. It marks the one thing you are currently on, and
+       nothing else. Never a state, never body type.
+     · AMBER is the plan. Routes, waypoints, and here, anything you have not
+       done yet: prerequisites, "do this first", numbers on the bring-up steps.
+     · The three flags — ok / warn / danger — say how a machine IS, so on this
+       page they are reserved for notes about the robot's behaviour, not for
+       decoration.
+     · The chamfered corner is the signature. It appears on the top cluster
+       and nowhere else, exactly as in the app.
+
+   Both renditions are first-class. The app calls them "console" and
+   "daylight"; the aliases dark/light are accepted too, because a host viewer
+   stamps those.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@font-face {
+  font-family: "Archivo Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("fonts/archivo-latin-wght-normal.woff2") format("woff2-variations");
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+:root {
+  /* Surface — graphite, never pure black. */
+  --bg: #07090a;
+  --paper: #0f1416;
+  --panel: #0f1416;
+  --panel-2: #141a1c;
+  --well: #171e20;
+  --hairline: rgba(150, 180, 184, 0.14);
+  --hairline-strong: rgba(150, 180, 184, 0.3);
+  --inset-hi: inset 0 1px 0 rgba(190, 225, 228, 0.09);
+
+  /* Ink */
+  --ink: #e9f1f1;
+  --muted: #9aacae;
+  --faint: #7d9094;
+
+  /* The tape, the plan, the flags. */
+  --accent: #2ee6c5;
+  --accent-deep: #17c8a8;
+  --on-accent: #04211c;
+  --data: #f0a53a;
+  --on-data: #231602;
+  --ok: #35d68a;
+  --warn: #f5b43f;
+  --danger: #ff4256;
+  --on-danger: #1a0206;
+
+  --accent-rgb: 46, 230, 197;
+  --data-rgb: 240, 165, 58;
+  --danger-rgb: 255, 66, 86;
+  --ok-rgb: 53, 214, 138;
+  --hi-rgb: 190, 225, 228;
+
+  --font-ui: "Archivo Variable", system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", monospace;
+
+  --lift-card: 0 16px 32px -22px rgba(0, 0, 0, 0.9);
+  --lift-pad: 0 20px 44px -20px rgba(0, 0, 0, 0.95);
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-inner: 6px;
+  --chamfer: 13px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* One spacing scale, used everywhere. */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px; --s7: 48px; --s8: 72px; --s9: 104px;
+
+  --rail-w: 268px;
+  --measure: 68ch;
+
+  color-scheme: dark;
+}
+
+/* Daylight — the field rendition. Contrast pushed harder, because the
+   competition is sunlight on glass. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #d9dbd4;
+    --paper: #fbfbf8;
+    --panel: #fbfbf8;
+    --panel-2: #f2f3ec;
+    --well: #e7e8e1;
+    --hairline: rgba(20, 22, 15, 0.14);
+    --hairline-strong: rgba(20, 22, 15, 0.26);
+    --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    --ink: #14160f;
+    --muted: #4e5449;
+    --faint: #666c5f;
+    --accent: #0b8d75;
+    --accent-deep: #0a7a66;
+    --on-accent: #ffffff;
+    --data: #a8590a;
+    --on-data: #fff8ee;
+    --ok: #0f7a4a;
+    --warn: #a85c08;
+    --danger: #c41626;
+    --on-danger: #ffffff;
+    --accent-rgb: 11, 141, 117;
+    --data-rgb: 168, 89, 10;
+    --danger-rgb: 196, 22, 38;
+    --ok-rgb: 15, 122, 74;
+    --hi-rgb: 255, 255, 255;
+    --lift-card: 0 14px 34px -20px rgba(20, 22, 15, 0.36);
+    --lift-pad: 0 18px 40px -18px rgba(20, 22, 15, 0.42);
+    color-scheme: light;
+  }
+}
+
+/* Explicit choices win over the OS in both directions. "console"/"daylight"
+   are the app's names; "dark"/"light" are what a host viewer stamps. */
+:root[data-theme="console"], :root[data-theme="dark"] {
+  --bg: #07090a; --paper: #0f1416; --panel: #0f1416; --panel-2: #141a1c;
+  --well: #171e20;
+  --hairline: rgba(150, 180, 184, 0.14);
+  --hairline-strong: rgba(150, 180, 184, 0.3);
+  --inset-hi: inset 0 1px 0 rgba(190, 225, 228, 0.09);
+  --ink: #e9f1f1; --muted: #9aacae; --faint: #7d9094;
+  --accent: #2ee6c5; --accent-deep: #17c8a8; --on-accent: #04211c;
+  --data: #f0a53a; --on-data: #231602;
+  --ok: #35d68a; --warn: #f5b43f; --danger: #ff4256; --on-danger: #1a0206;
+  --accent-rgb: 46, 230, 197; --data-rgb: 240, 165, 58;
+  --danger-rgb: 255, 66, 86; --ok-rgb: 53, 214, 138;
+  --hi-rgb: 190, 225, 228;
+  --lift-card: 0 16px 32px -22px rgba(0, 0, 0, 0.9);
+  --lift-pad: 0 20px 44px -20px rgba(0, 0, 0, 0.95);
+  color-scheme: dark;
+}
+:root[data-theme="daylight"], :root[data-theme="light"] {
+  --bg: #d9dbd4; --paper: #fbfbf8; --panel: #fbfbf8; --panel-2: #f2f3ec;
+  --well: #e7e8e1;
+  --hairline: rgba(20, 22, 15, 0.14);
+  --hairline-strong: rgba(20, 22, 15, 0.26);
+  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --ink: #14160f; --muted: #4e5449; --faint: #666c5f;
+  --accent: #0b8d75; --accent-deep: #0a7a66; --on-accent: #ffffff;
+  --data: #a8590a; --on-data: #fff8ee;
+  --ok: #0f7a4a; --warn: #a85c08; --danger: #c41626; --on-danger: #ffffff;
+  --accent-rgb: 11, 141, 117; --data-rgb: 168, 89, 10;
+  --danger-rgb: 196, 22, 38; --ok-rgb: 15, 122, 74;
+  --hi-rgb: 255, 255, 255;
+  --lift-card: 0 14px 34px -20px rgba(20, 22, 15, 0.36);
+  --lift-pad: 0 18px 40px -18px rgba(20, 22, 15, 0.42);
+  color-scheme: light;
+}
+
+/* ── base ──────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; scroll-padding-top: 96px; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 16.5px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: var(--accent); text-decoration-color: rgba(var(--accent-rgb), 0.4); text-underline-offset: 3px; }
+a:hover { text-decoration-color: currentColor; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+h1, h2, h3, h4 { text-wrap: balance; margin: 0; line-height: 1.12; letter-spacing: -0.022em; }
+h1 { font-size: clamp(36px, 5.4vw, 64px); font-weight: 800; letter-spacing: -0.035em; }
+h2 { font-size: clamp(27px, 3.3vw, 38px); font-weight: 750; }
+h3 { font-size: 21px; font-weight: 700; letter-spacing: -0.012em; }
+h4 { font-size: 16px; font-weight: 700; letter-spacing: -0.005em; }
+
+p { margin: 0; max-width: var(--measure); }
+strong { font-weight: 680; }
+
+code, kbd, samp { font-family: var(--font-mono); font-variant-ligatures: none; }
+
+:not(pre) > code {
+  font-size: 0.875em;
+  padding: 0.12em 0.4em;
+  border-radius: var(--radius-inner);
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+kbd {
+  font-size: 0.8em;
+  padding: 0.15em 0.45em;
+  border-radius: var(--radius-inner);
+  background: var(--panel-2);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: 0 1px 0 var(--hairline-strong);
+}
+
+/* The uppercase instrument label used throughout the console. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+  max-width: none; /* wins over the prose measure when it is a <p> */
+}
+
+/* ── page frame ────────────────────────────────────────────────────────── */
+
+.wrap {
+  max-width: 1420px;
+  margin: 0 auto;
+  padding: 0 clamp(18px, 4vw, 44px);
+}
+
+/* Top cluster. The chamfer lives here and nowhere else. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--hairline);
+}
+.topbar-in {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  height: 62px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+  color: var(--ink);
+  padding: 7px 14px 7px 11px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--inset-hi);
+  border-radius: var(--radius-sm);
+  clip-path: polygon(
+    0 0, 100% 0, 100% calc(100% - var(--chamfer)),
+    calc(100% - var(--chamfer)) 100%, 0 100%
+  );
+}
+.brand .mark {
+  width: 22px; height: 22px; flex: none;
+  border-radius: 6px;
+  background: linear-gradient(150deg, var(--accent), var(--accent-deep));
+  display: grid; place-items: center;
+  color: var(--on-accent);
+  font-size: 13px; font-weight: 800;
+}
+.brand small {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: 500;
+  letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--faint);
+  margin-top: -2px;
+}
+.topbar nav { margin-left: auto; display: flex; gap: 2px; align-items: center; }
+.topbar nav a {
+  font-size: 14px; font-weight: 550;
+  white-space: nowrap;
+  color: var(--muted); text-decoration: none;
+  padding: 7px 12px; border-radius: 999px;
+}
+.topbar nav a:hover { color: var(--ink); background: var(--panel-2); }
+/* Below these widths the rail itself becomes the sticky index, so the top-bar
+   links are duplication rather than navigation. */
+@media (max-width: 900px) { .topbar nav a.opt { display: none; } }
+@media (max-width: 560px) { .topbar nav a { display: none; } }
+
+.icon-btn {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  box-shadow: var(--inset-hi);
+  transition: color .18s var(--ease-out), border-color .18s var(--ease-out);
+}
+.icon-btn:hover { color: var(--ink); border-color: var(--hairline-strong); }
+.icon-btn .moon { display: none; }
+@media (prefers-color-scheme: light) { .icon-btn .sun { display: none; } .icon-btn .moon { display: block; } }
+:root[data-theme="console"] .icon-btn .sun, :root[data-theme="dark"] .icon-btn .sun { display: block; }
+:root[data-theme="console"] .icon-btn .moon, :root[data-theme="dark"] .icon-btn .moon { display: none; }
+:root[data-theme="daylight"] .icon-btn .sun, :root[data-theme="light"] .icon-btn .sun { display: none; }
+:root[data-theme="daylight"] .icon-btn .moon, :root[data-theme="light"] .icon-btn .moon { display: block; }
+
+/* ── hero ──────────────────────────────────────────────────────────────── */
+
+.hero { padding: clamp(48px, 8vw, 104px) 0 var(--s7); }
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s6);
+}
+.hero h1 { margin-bottom: var(--s4); }
+.hero h1 .tape { color: var(--accent); }
+.lead {
+  font-size: clamp(17px, 2vw, 20.5px);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 60ch;
+}
+.hero-cta { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s5); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: inherit; font-size: 15px; font-weight: 650;
+  padding: 11px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline-strong);
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform .18s var(--ease-out), border-color .18s var(--ease-out);
+}
+.btn:hover { transform: translateY(-1px); border-color: var(--accent); }
+.btn.tape {
+  background: var(--accent); color: var(--on-accent);
+  border-color: transparent;
+}
+.btn.tape:hover { border-color: transparent; }
+
+/* Quick facts — measurements, so tabular mono, as the console does it. */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  margin-top: var(--s7);
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.facts div { background: var(--panel); padding: var(--s4) var(--s5); }
+.facts dt { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); }
+.facts dd {
+  margin: 4px 0 0;
+  font-size: 15px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── the two-column body ───────────────────────────────────────────────── */
+
+.body-grid {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: start;
+  padding-bottom: var(--s9);
+}
+@media (max-width: 1080px) {
+  .body-grid { grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
+}
+
+/* Instrument rail: the same plate-and-eyebrow language as the console's rail. */
+.rail {
+  position: sticky;
+  top: 86px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+  padding: var(--s4) var(--s3) var(--s4) 0;
+  scrollbar-width: thin;
+}
+@media (max-width: 1080px) {
+  .rail {
+    position: sticky; top: 62px; z-index: 30;
+    max-height: none; padding: var(--s3) 0;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--hairline);
+    margin: 0 calc(-1 * clamp(18px, 4vw, 44px));
+    padding-inline: clamp(18px, 4vw, 44px);
+  }
+  .rail ol { display: flex; gap: var(--s2); overflow-x: auto; padding-bottom: 4px; }
+  .rail li { flex: none; }
+  .rail .eyebrow { display: none; }
+  .rail a { white-space: nowrap; }
+  .rail a::before { display: none; }
+}
+.rail ol { list-style: none; margin: 0; padding: 0; }
+.rail .eyebrow { display: block; margin: var(--s5) 0 var(--s2); }
+.rail .eyebrow:first-child { margin-top: 0; }
+.rail a {
+  display: block;
+  position: relative;
+  padding: 6px 10px 6px 14px;
+  font-size: 14px;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: var(--radius-inner);
+  transition: color .16s var(--ease-out);
+}
+.rail a::before {
+  content: "";
+  position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 2px; border-radius: 2px;
+  background: transparent;
+  transition: background .16s var(--ease-out);
+}
+.rail a:hover { color: var(--ink); }
+.rail a.on { color: var(--ink); font-weight: 600; }
+.rail a.on::before { background: var(--accent); }
+
+/* ── content ───────────────────────────────────────────────────────────── */
+
+.doc { min-width: 0; display: flex; flex-direction: column; gap: var(--s9); }
+/* A divider heading introduces the block right under it, so it keeps the
+   section rhythm above and drops it below. */
+.doc > .divider + section { margin-top: calc(-1 * var(--s9) + var(--s6)); }
+section { display: flex; flex-direction: column; gap: var(--s5); scroll-margin-top: 96px; }
+section > h2 + p { margin-top: calc(-1 * var(--s2)); }
+
+.sec-head { display: flex; flex-direction: column; gap: var(--s2); }
+.sec-head .eyebrow { display: flex; align-items: center; gap: 10px; }
+.sec-head .rule { flex: 1; height: 1px; background: var(--hairline); max-width: 160px; }
+
+/* A bring-up step. The numbers are load-bearing — this is the order you do
+   things in, not a decorative index. */
+.step { display: flex; flex-direction: column; gap: var(--s5); scroll-margin-top: 96px; }
+.step-head { display: flex; gap: var(--s4); align-items: flex-start; }
+.step-num {
+  flex: none;
+  width: 40px; height: 40px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 15px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--data);
+  background: rgba(var(--data-rgb), 0.1);
+  border: 1px solid rgba(var(--data-rgb), 0.32);
+}
+.step-head h3 { padding-top: 7px; }
+.step-head .sub { color: var(--muted); font-size: 14.5px; margin-top: 2px; }
+
+.stack { display: flex; flex-direction: column; gap: var(--s4); }
+.stack-lg { display: flex; flex-direction: column; gap: var(--s5); }
+
+/* ── plates: figures, callouts, tables ─────────────────────────────────── */
+
+figure.plate { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+figure.plate img {
+  display: block;
+  width: 100%; height: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  box-shadow: var(--lift-pad);
+}
+figure.plate figcaption {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--faint);
+  padding-left: 2px;
+  max-width: 78ch;
+}
+figure.plate figcaption b { color: var(--muted); font-weight: 600; }
+/* Detail crops sit small and left, so they read as instrument close-ups
+   rather than as another full screen. */
+figure.plate.detail { max-width: 460px; }
+figure.plate.tall img { max-height: 720px; width: auto; max-width: 100%; object-fit: contain; object-position: top left; }
+/* A tall rail crop next to a column of prose would otherwise set the row's
+   height and leave the prose floating in the middle of it. */
+.figrow figure.plate.rail-crop img { max-height: 560px; width: auto; max-width: 100%; object-position: top left; }
+
+.figrow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--s5);
+  align-items: start;
+}
+.figrow figure.plate.detail { max-width: none; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--inset-hi);
+  padding: var(--s5);
+  display: flex; flex-direction: column; gap: var(--s3);
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--s4);
+}
+.card h4 { display: flex; align-items: center; gap: 8px; }
+.card p { font-size: 15px; color: var(--muted); }
+
+/* Notes. The flag colours mean what they mean in the app. */
+.note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s3);
+  padding: var(--s4) var(--s5);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  border-left-width: 3px;
+  background: var(--panel);
+  font-size: 15px;
+  max-width: var(--measure);
+}
+.note p { font-size: inherit; }
+.note .tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  padding-top: 4px;
+}
+.note.plan { border-left-color: var(--data); }
+.note.plan .tag { color: var(--data); }
+.note.stop { border-left-color: var(--danger); background: rgba(var(--danger-rgb), 0.05); }
+.note.stop .tag { color: var(--danger); }
+.note.good { border-left-color: var(--ok); }
+.note.good .tag { color: var(--ok); }
+
+/* Code. */
+.code {
+  position: relative;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.code pre {
+  margin: 0;
+  padding: var(--s4) var(--s5);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13.2px;
+  line-height: 1.72;
+  tab-size: 2;
+}
+.code .cm { color: var(--faint); }
+.code .fl { color: var(--accent); }
+.code .st { color: var(--data); }
+.copy {
+  position: absolute; top: 8px; right: 8px;
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  padding: 5px 9px;
+  border-radius: var(--radius-inner);
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .16s var(--ease-out), color .16s var(--ease-out);
+}
+.code:hover .copy, .copy:focus-visible { opacity: 1; }
+.copy:hover { color: var(--ink); }
+.copy.done { color: var(--ok); border-color: rgba(var(--ok-rgb), 0.5); opacity: 1; }
+
+/* Tables. */
+.tablewrap { overflow-x: auto; border: 1px solid var(--hairline); border-radius: var(--radius); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 11px var(--s4); border-bottom: 1px solid var(--hairline); vertical-align: top; }
+thead th {
+  font-family: var(--font-mono);
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.15em; text-transform: uppercase;
+  color: var(--faint);
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--panel-2); }
+td code { white-space: pre-wrap; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Prose lists. */
+ul.tight, ol.tight { margin: 0; padding-left: 1.25em; max-width: var(--measure); display: flex; flex-direction: column; gap: 8px; }
+ul.tight li::marker { color: var(--faint); }
+ol.tight li::marker { font-family: var(--font-mono); font-size: 0.85em; color: var(--data); }
+
+dl.fields { margin: 0; display: grid; grid-template-columns: minmax(140px, auto) minmax(0, 1fr); gap: 10px var(--s5); max-width: 84ch; }
+dl.fields dt { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--ink); padding-top: 2px; }
+dl.fields dd { margin: 0; font-size: 15px; color: var(--muted); }
+@media (max-width: 620px) {
+  dl.fields { grid-template-columns: minmax(0, 1fr); gap: 2px var(--s3); }
+  dl.fields dd { margin-bottom: 10px; }
+}
+
+/* The signal-flow diagram: drawn from boxes, not an image, so it stays sharp
+   and reflows on a phone. */
+.flow {
+  display: grid;
+  gap: var(--s3);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  align-items: stretch;
+}
+.flow .box {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: var(--s4);
+  display: flex; flex-direction: column; gap: 4px;
+  box-shadow: var(--inset-hi);
+}
+.flow .box b { font-size: 14.5px; }
+.flow .box span { font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+.flow .box.tape { border-color: rgba(var(--accent-rgb), 0.45); }
+.flow .box.tape b { color: var(--accent); }
+
+/* ── footer ────────────────────────────────────────────────────────────── */
+
+footer {
+  border-top: 1px solid var(--hairline);
+  padding: var(--s7) 0 var(--s8);
+  color: var(--muted);
+  font-size: 14.5px;
+}
+footer .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--s6); }
+footer ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+footer a { color: var(--muted); text-decoration: none; }
+footer a:hover { color: var(--accent); }
+
+.skip {
+  position: absolute; left: -9999px;
+  background: var(--accent); color: var(--on-accent);
+  padding: 10px 16px; border-radius: var(--radius-sm); z-index: 100;
+}
+.skip:focus { left: var(--s4); top: var(--s3); }
+</style>
+</head>
+
+<body>
+<a class="skip" href="#doc">Skip to the handbook</a>
+
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="brand" href="#top">
+      <span class="mark">R</span>
+      <span>RoverSoftware<small>handbook</small></span>
+    </a>
+    <nav>
+      <a href="#bringup">Bring-up</a>
+      <a href="#hardware" class="opt">Hardware</a>
+      <a href="#routines" class="opt">Routines</a>
+      <a href="#reference">Reference</a>
+      <button class="icon-btn" id="theme" type="button" aria-label="Switch rendition" title="Switch between the console and daylight renditions">
+        <svg class="sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.2" fill="currentColor"/>
+          <g stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".75">
+            <path d="M12 2.6v2.5M12 18.9v2.5M2.6 12h2.5M18.9 12h2.5"/>
+            <path d="M5.4 5.4 7.2 7.2M16.8 16.8l1.8 1.8M18.6 5.4 16.8 7.2M7.2 16.8l-1.8 1.8"/>
+          </g>
+        </svg>
+        <svg class="moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M20.3 14.9A8.6 8.6 0 0 1 9.1 3.7a8.6 8.6 0 1 0 11.2 11.2Z"/>
+        </svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ═══════════════════════════════════════════════════ hero ══════════ -->
+<div class="wrap hero">
+  <div class="hero-grid">
+    <div>
+      <p class="eyebrow" style="margin-bottom:18px">Ground robot · Raspberry Pi · XBee · one base station</p>
+      <h1>Describe the robot.<br>Draw what it does.<br><span class="tape">Then drive it.</span></h1>
+      <p class="lead" style="margin-top:22px">
+        RoverSoftware is a modular Python stack for a ground robot and the touch
+        base station that commands a fleet of them. The build is declared from
+        the dashboard rather than compiled in, the behaviour is a state machine
+        you draw, and all of it runs against a simulator before you connect a
+        single wire.
+      </p>
+      <div class="hero-cta">
+        <a class="btn tape" href="#step-1">Start with no hardware →</a>
+        <a class="btn" href="#step-5">Add your motors</a>
+        <a class="btn" href="#step-6">Program a routine</a>
+      </div>
+    </div>
+
+    <figure class="plate">
+      <img src="img/dashboard.webp" width="1800" height="1125" alt="The RoverSoftware base station: a satellite map filling the screen with three rovers drawn as heading arrows with position trails, a left rail showing throttle, heading and link age above a fleet list, a live camera feed with detection boxes, and a joystick in the bottom-right corner."
+           fetchpriority="high">
+      <figcaption>
+        The driving view. <b>Terrain is the lit object</b> and every panel is
+        pulled back around it — the rover you are calling is filled teal,
+        anything merely planned is amber, and the stop button never moves.
+        Every screenshot on this page is the real app, running against
+        <code>--sim</code>.
+      </figcaption>
+    </figure>
+
+    <dl class="facts">
+      <div><dt>Runs without hardware</dt><dd>Yes — <code>--sim</code></dd></div>
+      <div><dt>Radio link</dt><dd>XBee, JSON lines</dd></div>
+      <div><dt>Drive command</dt><dd>One type, fleet-wide</dd></div>
+      <div><dt>Programming</dt><dd>No Python required</dd></div>
+      <div><dt>Works offline</dt><dd>Tiles, speech, model</dd></div>
+    </dl>
+  </div>
+</div>
+
+<div class="wrap body-grid">
+
+  <!-- ═════════════════════════════════════════════════ rail ══════════ -->
+  <aside class="rail" aria-label="Contents">
+    <span class="eyebrow">Orientation</span>
+    <ol>
+      <li><a href="#shape">The shape of the system</a></li>
+    </ol>
+    <span class="eyebrow">Bring-up</span>
+    <ol>
+      <li><a href="#step-1">1 · Run it, no hardware</a></li>
+      <li><a href="#step-2">2 · Read the driving view</a></li>
+      <li><a href="#step-3">3 · Drive a rover</a></li>
+      <li><a href="#step-4">4 · Places and routes</a></li>
+      <li><a href="#step-5">5 · Add motors</a></li>
+      <li><a href="#step-6">6 · Program a routine</a></li>
+      <li><a href="#step-7">7 · Tune it</a></li>
+      <li><a href="#step-8">8 · Command it by voice</a></li>
+      <li><a href="#step-9">9 · Put it on the robot</a></li>
+    </ol>
+    <span class="eyebrow">Reference</span>
+    <ol>
+      <li><a href="#wiring">Wiring &amp; calibration</a></li>
+      <li><a href="#python">Extending it in Python</a></li>
+      <li><a href="#protocol">The radio protocol</a></li>
+      <li><a href="#trouble">When it misbehaves</a></li>
+    </ol>
+  </aside>
+
+  <!-- ══════════════════════════════════════════════ content ══════════ -->
+  <div class="doc" id="doc">
+
+  <!-- ─────────────────────────────────────────── the shape ────────── -->
+  <section id="shape">
+    <div class="sec-head">
+      <span class="eyebrow">Orientation <span class="rule"></span></span>
+      <h2>The shape of the system</h2>
+    </div>
+    <p>
+      Two programs. <strong>The robot</strong> runs on a Raspberry Pi with a
+      SunFounder Fusion HAT and owns everything that moves. <strong>The base
+      station</strong> runs on your laptop or a second Pi, owns the radio, the
+      gamepad and the map, and serves the touch dashboard. They talk in
+      newline-delimited JSON over one shared XBee channel, addressed by robot
+      id — so a whole fleet lives on one radio.
+    </p>
+
+    <div class="flow">
+      <div class="box">
+        <b>Base station</b>
+        <span>gamepad · map · voice<br>run_basestation.py</span>
+      </div>
+      <div class="box">
+        <b>XBee link</b>
+        <span>JSON over serial<br>reader thread → queue</span>
+      </div>
+      <div class="box tape">
+        <b>ControlManager</b>
+        <span>mode arbitration<br>e-stop overrides all</span>
+      </div>
+      <div class="box">
+        <b>Drivetrain</b>
+        <span>mixing + slew limit<br>ESC as a servo</span>
+      </div>
+    </div>
+
+    <p>
+      The load-bearing idea is in the third box. Teleop, object alignment,
+      waypoint navigation and the routine engine are all just
+      <em>controllers</em>, and every one of them emits the same
+      <code>DriveCommand(left, right)</code>. The drive layer never learns that
+      a new mode exists, which is why a steered chassis reuses the autonomy
+      unchanged and why the state-machine editor can <em>delegate</em> a step to
+      object align instead of re-implementing it.
+    </p>
+
+    <div class="note plan">
+      <span class="tag">Before</span>
+      <p>
+        Everything on this page works against the simulator. Read it with
+        <code>./start-basestation.sh</code> running in a terminal and click
+        along — nothing here needs a rover until step 9.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────── bring-up ─────────── -->
+  <section id="bringup" class="divider">
+    <div class="sec-head">
+      <span class="eyebrow">Bring-up · nine steps, in order <span class="rule"></span></span>
+      <h2>From a clone to a robot that runs itself</h2>
+    </div>
+    <p>
+      The steps below are the order the system is meant to be learned in, and
+      it is also the order you would actually bring up a new vehicle: get the
+      dashboard talking first, drive by hand, describe the hardware, draw the
+      behaviour, then trust it alone.
+    </p>
+  </section>
+
+  <!-- 1 -->
+  <section class="step" id="step-1">
+    <div class="step-head">
+      <div class="step-num">01</div>
+      <div>
+        <h3>Run the whole thing with no hardware</h3>
+        <p class="sub">Simulated rovers, real validators, real state-machine engine.</p>
+      </div>
+    </div>
+
+    <p>
+      Clone the repo and install the Python dependencies. The
+      <code>fusion_hat</code> library from SunFounder is only needed on the
+      robot — the motor layer mocks it when it is missing, so the base station
+      installs cleanly on macOS, Linux or a Pi.
+    </p>
+
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm"># base station dependencies (FastAPI, uvicorn, pyserial, pygame)</span>
+pip install -r requirements.txt
+
+<span class="cm"># one command: bridge + touch UI + browser, one Ctrl+C stops both</span>
+./start-basestation.sh                <span class="cm"># simulator: three fake rovers</span>
+./start-basestation.sh --dev          <span class="cm"># same, with Vite hot reload</span></pre>
+    </div>
+
+    <p>
+      Open <code>http://127.0.0.1:8000</code>. Three rovers report in, drive
+      around, obey commands and follow routes you click on the map. They answer
+      Hardware and Routines edits with the <em>real</em> validators and run the
+      <em>real</em> engine, which is the point: a settings page you can only
+      test on a rover is a settings page that ships broken.
+    </p>
+
+    <div class="note stop">
+      <span class="tag">Never invents</span>
+      <p>
+        Running with neither <code>--port</code> nor <code>--sim</code> exits
+        with a hint rather than starting empty. The dashboard never invents
+        robots — anything you see is either real telemetry or an explicitly
+        requested simulator.
+      </p>
+    </div>
+
+    <h4>Running the halves separately</h4>
+    <p>
+      The Python program is the <em>bridge</em>: it owns the radio, the gamepad
+      and the tile cache, and speaks an internal <code>/ws</code> +
+      <code>/tiles</code> API. The Deno app serves the UI and proxies those two
+      paths, so one build runs as a desktop window, a LAN server for an iPad,
+      and the Pi's Chromium kiosk.
+    </p>
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm"># 1) the bridge, on its internal port</span>
+python run_basestation.py --sim --web-port 8001
+
+<span class="cm"># 2a) development, with hot reload → http://localhost:5173</span>
+cd basestation-ui &amp;&amp; npm install &amp;&amp; npm run dev
+
+<span class="cm"># 2b) production front door → binds 0.0.0.0:8000</span>
+npm run build
+RS_UPSTREAM=127.0.0.1:8001 deno task serve
+
+<span class="cm"># 2c) a native desktop window (Deno ≥ 2.9)</span>
+deno task desktop</pre>
+    </div>
+
+    <p>
+      Useful flags on the bridge: <code>--robots N</code> for the simulated
+      fleet size, <code>--origin lat,lon</code> for where it spawns,
+      <code>--no-controller</code> for a pure touch base station, and
+      <code>--tiles</code> / <code>--tiles-upstream</code> to point the map at a
+      local tile server or a different imagery provider.
+    </p>
+  </section>
+
+  <!-- 2 -->
+  <section class="step" id="step-2">
+    <div class="step-head">
+      <div class="step-num">02</div>
+      <div>
+        <h3>Read the driving view</h3>
+        <p class="sub">Six things on one screen, arranged by how often you look at them.</p>
+      </div>
+    </div>
+
+    <p>
+      The rail runs top to bottom in order of urgency. The board leads, because
+      those are the numbers you read from across a bench; the fleet list below
+      it is how you change which rover they are about.
+    </p>
+
+    <div class="figrow">
+      <figure class="plate detail">
+        <img src="img/pitboard.webp" width="712" height="264" alt="A board reading THR 0 percent, HDG 250 degrees, LINK 0.0 seconds, with a teal ROVER1 tag." loading="lazy">
+        <figcaption><b>The board.</b> Throttle, heading, and the age of the last packet. <code>LINK</code> climbing is the first sign of a radio problem.</figcaption>
+      </figure>
+      <figure class="plate detail">
+        <img src="img/fleet.webp" width="696" height="822" alt="A fleet list with rover1 filled teal and labelled WAYPOINT, rover2 in waypoint mode, and rover3 showing a red E-STOP badge." loading="lazy">
+        <figcaption><b>The fleet.</b> Mode, battery, link and live track speeds per rover. Tap one to select it — the teal fill is the only thing that ever means "the rover you are calling". Note rover3, latched.</figcaption>
+      </figure>
+      <figure class="plate detail">
+        <img src="img/camera.webp" width="696" height="638" alt="A first-person camera panel showing a dirt track with a green detection box labelled bucket 0.93 and an amber box labelled cone 0.71." loading="lazy">
+        <figcaption><b>The camera.</b> JPEG-over-UDP from the robot, served as browser-native MJPEG. Green is the object <code>object_align</code> is tracking; amber is everything else it can see.</figcaption>
+      </figure>
+    </div>
+
+    <div class="figrow">
+      <figure class="plate detail">
+        <img src="img/modes.webp" width="712" height="404" alt="A grid of mode buttons: Teleop, Object align, Shooter, Waypoint, Routine — with Waypoint filled teal." loading="lazy">
+        <figcaption><b>Modes.</b> One is always active. Switching is instant and reversible; the drive layer does not change.</figcaption>
+      </figure>
+      <figure class="plate detail">
+        <img src="img/drivepad.webp" width="440" height="440" alt="A circular on-screen joystick with its thumb pushed up and to the right." loading="lazy">
+        <figcaption><b>The pad.</b> Up is throttle, sideways is steer. It releases to zero and rate-limits to the radio's budget.</figcaption>
+      </figure>
+      <figure class="plate detail">
+        <img src="img/estop.webp" width="506" height="216" alt="A large red E-STOP button with a Clear button beside it." loading="lazy">
+        <figcaption><b>The stop.</b> Above every other layer, on every screen — including the one where you are editing drive limits. <em>Clear</em> only appears once something is latched.</figcaption>
+      </figure>
+    </div>
+
+    <div class="note plan">
+      <span class="tag">Two renditions</span>
+      <p>
+        The sun/moon button in the top bar is a field control, not a
+        preference. Dark is right in a pit; the 7&Prime; panel outdoors needs
+        <em>daylight</em>, because sunlight on glass beats any dark UI. The
+        choice is remembered per device, so the kiosk that boots outdoors and
+        the laptop indoors never fight.
+      </p>
+    </div>
+
+    <figure class="plate">
+      <img src="img/daylight.webp" width="1800" height="1125" alt="The same dashboard in the daylight rendition: paper-white panels, dark text, the same teal accent darkened so white text still sits on it." loading="lazy">
+      <figcaption>
+        The daylight rendition. Same identity, same geometry, same grammar —
+        only the light changes, and the accent darkens so the contrast ratio
+        against its own ink holds.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- 3 -->
+  <section class="step" id="step-3">
+    <div class="step-head">
+      <div class="step-num">03</div>
+      <div>
+        <h3>Drive a rover</h3>
+        <p class="sub">A gamepad or the touch joystick — both through the same sender.</p>
+      </div>
+    </div>
+
+    <ol class="tight">
+      <li>Tap a rover in the fleet list. Everything that follows applies to it.</li>
+      <li>Make sure it is in <strong>Teleop</strong>. The mode grid is under <em>Control</em> in the rail.</li>
+      <li>Drive it: hold the on-screen pad, or use a gamepad — <kbd>R2</kbd> forward, <kbd>L2</kbd> reverse, right stick to steer.</li>
+    </ol>
+
+    <p>
+      Both paths hand a throttle and steer already in <code>-1 … +1</code> to
+      one sender, which only transmits on a meaningful change and never faster
+      than the bridge's <code>drive_hz</code>. That single budget is why a
+      physical pad and a tablet joystick feel identical and why two operators
+      cannot flood the radio between them.
+    </p>
+
+    <div class="note stop">
+      <span class="tag">Failsafe</span>
+      <p>
+        Teleop stops the robot if drive commands stop arriving
+        (<code>command_timeout</code>). Walking out of radio range parks the
+        rover rather than leaving it at its last throttle. E-stop overrides
+        every mode until it is explicitly cleared.
+      </p>
+    </div>
+
+    <h4>If the gamepad's buttons are wrong</h4>
+    <p>
+      They will be. Axis and button indices describe a driver, not a controller
+      — the same pad enumerates differently on macOS and Linux, over USB and
+      over Bluetooth. <strong>Settings → Controller</strong> remaps it by
+      <em>pressing the control you want</em>, with a live view of every axis and
+      button and the throttle/steer the current mapping produces.
+    </p>
+
+    <figure class="plate">
+      <img src="img/settings-controller.webp" width="1800" height="1225" alt="The Controller settings tab, showing gamepad mapping fields, dead zone, trigger rest value, throttle and steer authority, and steering inversion." loading="lazy">
+      <figcaption>
+        Also here: dead zone, trigger rest value (a trigger that idles at
+        <code>-1</code> instead of <code>0</code> is normal), throttle and steer
+        authority, and steering inversion. This replaces editing constants and
+        restarting a service.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- 4 -->
+  <section class="step" id="step-4">
+    <div class="step-head">
+      <div class="step-num">04</div>
+      <div>
+        <h3>Save places, then send a route</h3>
+        <p class="sub">Name the field once; build a run out of it every match.</p>
+      </div>
+    </div>
+
+    <p>
+      A <strong>place</strong> is a named position on the field, saved on the
+      base station and shared by every rover. The best way to make one is to
+      drive a rover until it is standing on the thing and press
+      <em>Save rover position</em> — that is more accurate than any amount of
+      squinting at imagery, and it is the reason the button sits next to the
+      driving controls rather than behind a menu.
+    </p>
+
+    <div class="figrow">
+      <figure class="plate detail rail-crop">
+        <img src="img/places-panel.webp" width="704" height="1722" alt="The Places panel listing bucket A, bucket B, cone stack, start pad and ditch with coordinates, each with an arrow button to add it to a route, above the Route controls." loading="lazy">
+        <figcaption>
+          Places carry a kind — bucket, marker, start, hazard — which is what
+          the glyph on the map means. Tap <code>→</code> on a row to push it
+          onto the pending route.
+        </figcaption>
+      </figure>
+      <div class="stack">
+        <h4>Dropping a route on the map</h4>
+        <ol class="tight">
+          <li>Press <strong>Add waypoints</strong> under <em>Route</em>.</li>
+          <li>Tap the map where you want the rover to go. Points are numbered as you drop them.</li>
+          <li>Press <strong>Send</strong>. The rover switches to waypoint mode and starts driving it.</li>
+        </ol>
+        <p>
+          Waypoints are amber because they are a <em>plan</em> — proposed, not
+          yet done. As the rover reaches each one, its own trail is drawn in
+          teal behind it. <strong>Clear</strong> discards a route you have not
+          sent.
+        </p>
+        <div class="note plan">
+          <span class="tag">Heading</span>
+          <p>
+            Navigation needs a heading. With no compass the robot uses the GPS
+            module's <em>track angle</em> — true North, no calibration — which
+            is meaningless standing still, so a BNO085 IMU is preferred when one
+            is fitted. Pick with <code>--heading-source auto|gps|imu</code>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <figure class="plate">
+      <img src="img/route-drawing.webp" width="1800" height="1125" alt="The dashboard mid-draw: the Add waypoints button is active and four numbered amber points have been dropped on the map, not yet sent." loading="lazy">
+      <figcaption>
+        Mid-draw. Four points dropped, <b>nothing sent yet</b> — the route is
+        still a plan you can add to or clear, and the rover is still in whatever
+        mode it was already in.
+      </figcaption>
+    </figure>
+
+    <figure class="plate">
+      <img src="img/route-sent.webp" width="1800" height="1125" alt="The dashboard with a four-point amber route drawn across the map, numbered 1 to 4, saved places marked with glyphs, and rover trails behind each vehicle." loading="lazy">
+      <figcaption>
+        A sent route. The rail shows the mode has flipped to
+        <code>waypoint</code>, and the command dock at the bottom reports what
+        every rover is doing at once — <b>driving route</b>,
+        <b>aligning on target</b> — so you can see the fleet without changing
+        selection.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- 5 -->
+  <section class="step" id="step-5">
+    <div class="step-head">
+      <div class="step-num">05</div>
+      <div>
+        <h3>Describe your hardware — adding motors, servos and mechanisms</h3>
+        <p class="sub">Settings → Hardware. What the robot HAS, written from the dashboard.</p>
+      </div>
+    </div>
+
+    <p>
+      Nothing about your build is compiled in. The <strong>layout document</strong>
+      says which drivetrain you have, how many motors and servos are fitted, and
+      what the rest of them are grouped into. Change it from the tab, save it to
+      the robot, restart, and the robot is a different machine.
+    </p>
+
+    <figure class="plate">
+      <img src="img/hardware.webp" width="1800" height="1225" alt="The Hardware tab: a robot picker with Refresh and Saved buttons, a Drivetrain selector reading Tank — left/right tracks, chip pickers for the left and right sides, slew rate and arm hold fields, and the first motor card." loading="lazy">
+      <figcaption>
+        The tab is a draft you edit locally and send in one go — unlike the
+        tuning page next door, which applies each field as you change it. A
+        layout is a <b>tree</b>, and half a tree is a robot with one drive
+        motor.
+      </figcaption>
+    </figure>
+
+    <h4>1 · Pick the drivetrain</h4>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Kind</th><th>What it is</th><th>What you then assign</th></tr></thead>
+        <tbody>
+          <tr><td class="num">tank</td><td>Two sides, skid steer</td><td>Which motors are on the <em>left</em> side and which on the <em>right</em>. Every motor on a side gets that side's track speed, so a six-wheeler is three names on each list.</td></tr>
+          <tr><td class="num">servo_steer</td><td>Drive motor plus a steering servo</td><td>The drive motors, the steering servo, a <em>steering gain</em> and a <em>pivot creep</em>.</td></tr>
+          <tr><td class="num">single</td><td>One motor, no steering</td><td>The drive motors only.</td></tr>
+          <tr><td class="num">none</td><td>No drivetrain at all</td><td>Nothing — for a fixed platform that is all mechanism.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note stop">
+      <span class="tag">Steered chassis</span>
+      <p>
+        A steered chassis cannot pivot on the spot, and object align and
+        waypoint mode both ask it to. <strong>Pivot creep</strong> is what makes
+        that survivable: it creeps forward so the steering bites. Set to zero,
+        the rover will steer at its target without ever moving.
+      </p>
+    </div>
+
+    <h4>2 · Add a motor</h4>
+    <p>
+      Press <strong>+ Motor</strong> at the bottom of the drivetrain card. You
+      get a fresh actuator card with the fields below; fill them in and it
+      exists.
+    </p>
+
+    <div class="figrow">
+      <figure class="plate">
+        <img src="img/hardware-motor.webp" width="1432" height="752" alt="An actuator card for a motor named left: type ESC (spins), PWM channel 0, an Inverted checkbox, neutral angle 5, forward endpoint 20 and reverse endpoint -20, each with explanatory help text." loading="lazy">
+        <figcaption>An existing motor. Every field carries the sentence you would otherwise have had to find in the source.</figcaption>
+      </figure>
+      <figure class="plate">
+        <img src="img/hardware-motor-new.webp" width="1424" height="744" alt="A newly added motor card with a default name, ready to be renamed and given a channel." loading="lazy">
+        <figcaption>A motor added just now. It starts on a free channel and a safe neutral, so an unfinished card cannot arm anything.</figcaption>
+      </figure>
+    </div>
+
+    <dl class="fields">
+      <dt>Name</dt>
+      <dd>Lower case, no spaces. It is also this actuator's tuning path and how a routine refers to it, so <code>intake_motor</code> is worth more than <code>m3</code>.</dd>
+      <dt>Type</dt>
+      <dd><strong>ESC (spins)</strong> is held at neutral at boot so it arms; <strong>Servo (holds a position)</strong> simply parks. Pick wrong and an ESC will refuse to arm.</dd>
+      <dt>PWM channel</dt>
+      <dd>The Fusion HAT channel, <code>0–15</code>. Claiming a channel twice is <em>refused</em> — silently making two motors move together is not a thing this page will do to you.</dd>
+      <dt>Inverted</dt>
+      <dd>For a motor mounted facing the other way. On a tank chassis the right side is almost always mirrored, so this is almost always ticked on one side.</dd>
+      <dt>Neutral angle</dt>
+      <dd>Where <em>this</em> ESC holds stop. Find it with <code>tools/esc_calibrate.py</code>; do not assume it is zero.</dd>
+      <dt>Forward / reverse endpoint</dt>
+      <dd>The ends of the throw. The throw is <strong>symmetric about neutral</strong>, so whichever endpoint is closer to neutral sets the usable range — which is what keeps a normal and a mirrored motor starting together and matching speed even when neutral is not centred.</dd>
+    </dl>
+
+    <div class="note plan">
+      <span class="tag">Order</span>
+      <p>
+        Add the motor here first, then assign it to a side in the drivetrain
+        card above — the <em>Left side</em> and <em>Right side</em> pickers list
+        the actuators that exist, so a motor you have not created yet cannot be
+        assigned.
+      </p>
+    </div>
+
+    <h4>3 · Group the rest into mechanisms</h4>
+    <p>
+      Anything that is not drive is a <strong>mechanism</strong>: an intake, an
+      arm, a launcher. A mechanism owns one or more actuators and comes in two
+      kinds.
+    </p>
+
+    <div class="cards">
+      <div class="card">
+        <h4>Powered</h4>
+        <p>
+          Holds a value until told otherwise — an intake that spins, an arm that
+          holds an angle. Give it named <strong>presets</strong> like
+          <code>in</code>, <code>out</code> and <code>stow</code>, so a routine
+          asks for <em>"intake → in"</em> rather than a column of numbers.
+          <em>Auto-stop</em> ends the motion after N seconds; <code>0</code>
+          runs until stopped.
+        </p>
+      </div>
+      <div class="card">
+        <h4>Pulse</h4>
+        <p>
+          Owns a cycle: rest angle, active angle, active time, recover time,
+          cooldown and a magazine count. Asking it to fire repeatedly still
+          yields one activation per cycle, which is what makes a launcher safe
+          to wire to a condition that stays true.
+        </p>
+      </div>
+    </div>
+
+    <figure class="plate tall">
+      <img src="img/hardware-mechanism.webp" width="1424" height="1792" alt="A mechanism card named intake of type Power, with an Enabled checkbox, an auto-stop field, two named presets on and off each mapping intake_motor to a value, an Add preset row, and Test controls reading Reverse and Forward — with the note that testing must be unlocked above." loading="lazy">
+      <figcaption>
+        A powered mechanism with two presets and its own actuator. The
+        <b>Test</b> row jogs it from the bench — and is refused unless the robot
+        is in teleop with no e-stop latched, because a bench test that runs
+        while a routine owns the motors is how a hand ends up in an intake.
+      </figcaption>
+    </figure>
+
+    <h4>4 · Save it</h4>
+    <p>
+      Press <strong>Save to robot</strong>. The layout is sliced into numbered
+      fragments, and <em>nothing is applied until every fragment arrives</em> —
+      then the robot validates the whole document, stores it, and echoes the
+      stored copy back, because the validator clamps and what was saved is not
+      always what was sent. Errors come back naming the state or field that was
+      wrong.
+    </p>
+
+    <div class="note stop">
+      <span class="tag">Restart</span>
+      <p>
+        A saved layout takes effect on the <strong>next start</strong>.
+        Actuators are built by constructors; rebuilding them mid-loop with the
+        drivetrain armed is how an ESC ends up holding an undefined pulse. Run
+        <code>just restart</code>, or power-cycle the rover.
+      </p>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="step" id="step-6">
+    <div class="step-head">
+      <div class="step-num">06</div>
+      <div>
+        <h3>Program it without writing Python</h3>
+        <p class="sub">Settings → Routines. A state machine you draw, that runs on the robot.</p>
+      </div>
+    </div>
+
+    <p>
+      A <strong>routine</strong> is a state machine on a canvas. Each box is a
+      step: it says what drives, what happens when the robot enters, holds and
+      leaves it, and what makes it move on. Saved routines run
+      <em>on the robot</em>, so they survive losing the radio — and the box the
+      robot is actually in lights up as it runs, which is what turns the editor
+      into something you can debug a match with.
+    </p>
+
+    <figure class="plate">
+      <img src="img/routines-templates.webp" width="1800" height="1225" alt="The Routines tab showing five starting templates: Drive a GPS route, Find and approach a target, Drive to a bucket line up and shoot, Repeat a step three times, and Wait for the operator then go — each with a description and a step count." loading="lazy">
+      <figcaption>
+        Start from a template rather than an empty canvas. Each one is a
+        complete routine you can run and then edit; they are copied when opened,
+        so changing one never affects the next. Amber text on a card names a
+        <b>prerequisite</b> — a saved place you need before it will do anything.
+      </figcaption>
+    </figure>
+
+    <h4>The canvas</h4>
+    <ul class="tight">
+      <li><strong>Drag a box</strong> to move it. <strong>Tidy</strong> re-lays out the whole graph.</li>
+      <li><strong>Drag from a box's right edge onto another box</strong> to wire them together.</li>
+      <li><strong>Tap a wire</strong> to say when it fires.</li>
+      <li><strong>Tap a box</strong> to open the inspector and edit what it does.</li>
+    </ul>
+
+    <figure class="plate">
+      <img src="img/routines-canvas.webp" width="1800" height="1225" alt="A state machine on the canvas: drive_to_bucket (waypoint, 1 action) wired by 'route done' to line_up (object align), which forks — 'all of · 0.3s' to shoot (stop, 1 action) and 'not · 5s' to gave_up — with shoot leading 'after 4s' to done." loading="lazy">
+      <figcaption>
+        The full play. GPS gets the rover roughly to the right place, the camera
+        does the last few metres, and only then does it fire. GPS is
+        metres-accurate and a bucket is not, which is exactly why the two halves
+        are separate steps.
+      </figcaption>
+    </figure>
+
+    <h4>What a step contains</h4>
+    <figure class="plate">
+      <img src="img/routines-inspector.webp" width="1800" height="1225" alt="The inspector for the line_up state: a name field, a final checkbox, a 'drives with' selector reading Object align, a time limit, When entered and When leaving action lists, and a Then list holding one transition — 'when ALL of several things' held for 0.3 seconds, going to shoot." loading="lazy">
+      <figcaption>
+        The inspector for one step. <b>Drives with</b> is the only thing that
+        commands the motors — no action drives, so exactly one thing owns them
+        at any moment.
+      </figcaption>
+    </figure>
+
+    <dl class="fields">
+      <dt>Drives with</dt>
+      <dd>
+        <code>Stop</code>, <code>Hold position</code>,
+        <code>Fixed throttle/steer</code>,
+        <code>Teleop</code> (hand it back to the driver), or
+        <strong>delegate</strong> to <code>Object align</code>,
+        <code>Shooter align</code> or <code>Waypoint route</code>. Delegation is
+        how the graph composes the autonomy that already exists rather than
+        re-expressing it.
+      </dd>
+      <dt>When entered</dt>
+      <dd>Runs once. Set a mechanism to a preset, load a GPS route, arm the launcher, add one to a counter.</dd>
+      <dt>Action while here</dt>
+      <dd>Runs every tick, at the control-loop rate. Right for holding a mechanism at a power; wrong for counting, which is why <em>count this</em> belongs in <em>when entered</em>.</dd>
+      <dt>When leaving</dt>
+      <dd>Runs however the state is left — including a timeout, an abort or an e-stop. The right place to disarm something.</dd>
+      <dt>Then</dt>
+      <dd>The transitions, <strong>checked in order, first match wins, at most one per tick</strong>. Order is meaning: put "gave up" below "succeeded".</dd>
+    </dl>
+
+    <h4>What a wire can wait for</h4>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Group</th><th>Conditions</th></tr></thead>
+        <tbody>
+          <tr><td class="num">timing</td><td>after a delay · immediately · never (hold here)</td></tr>
+          <tr><td class="num">vision</td><td>when the camera sees a target · when lined up · when at the standoff distance</td></tr>
+          <tr><td class="num">navigation</td><td>when the route is finished · when pointing a direction · when near a saved place</td></tr>
+          <tr><td class="num">mechanism</td><td>after N shots · when a mechanism is ready</td></tr>
+          <tr><td class="num">logic</td><td>ALL of · ANY of · NOT · after this has happened N times</td></tr>
+          <tr><td class="num">operator</td><td>when I press a button · when the e-stop is latched</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Every condition can additionally be required to <strong>hold
+      continuously</strong> for a number of seconds before it counts. That one
+      field is the difference between a launcher that fires on a single noisy
+      frame and one that waits half a second to be sure — it is the
+      <code>0.3</code> on the wire out of <code>line_up</code> above.
+    </p>
+
+    <h4>Running it</h4>
+    <ol class="tight">
+      <li><strong>Save to robot.</strong> Routines take effect the moment they land — they are data the engine reads, not hardware a constructor owns.</li>
+      <li>Press <strong>Run</strong>. The robot switches to <code>routine</code> mode and the live box lights up.</li>
+      <li>For a "when I press a button" wire, type the event name and press <strong>Send event</strong>. A press is cleared whenever a new state is entered, so it cannot satisfy a transition it was not meant for.</li>
+      <li><strong>Stop</strong> ends the run. The e-stop does too, and the routine's <em>on e-stop</em> setting decides whether it aborts or holds.</li>
+    </ol>
+
+    <div class="note good">
+      <span class="tag">Test it dry</span>
+      <p>
+        The simulator runs the real state-machine engine with the real
+        validators. You can build, run and debug an entire competition routine
+        against <code>--sim</code> and only then put it on a rover.
+      </p>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="step" id="step-7">
+    <div class="step-head">
+      <div class="step-num">07</div>
+      <div>
+        <h3>Tune it in the field</h3>
+        <p class="sub">Settings → Tuning. Over the radio, live, and saved on the robot.</p>
+      </div>
+    </div>
+
+    <p>
+      Everything the dashboard is allowed to change is on this tab: PID gains
+      for object alignment and waypoint heading hold, drive limits and per-motor
+      ESC calibration, loop and telemetry rates, vision thresholds, shooter
+      geometry and firing policy, GPS/IMU and FPV.
+    </p>
+
+    <figure class="plate">
+      <img src="img/settings-tuning-open.webp" width="1800" height="1225" alt="The Tuning tab with a group expanded, showing numeric fields with units, ranges and one-line explanations." loading="lazy">
+      <figcaption>
+        Fetched when you open the tab rather than streamed: the full set is
+        about 2.4&nbsp;KB on a link shared with telemetry. On a robot running its
+        own layout, the per-motor groups are the ones <b>it</b> declared.
+      </figcaption>
+    </figure>
+
+    <div class="cards">
+      <div class="card">
+        <h4>Clamped, not refused</h4>
+        <p>
+          Ask for a gain of 500 and you get the maximum, echoed back — so the
+          field shows what the robot is actually doing, not what you typed. A
+          browser cannot reach an arbitrary attribute: the tuning whitelist
+          decides which paths exist and clamps every value.
+        </p>
+      </div>
+      <div class="card">
+        <h4>Badged “restart”</h4>
+        <p>
+          Serial ports, PWM channels and enable flags are stored immediately but
+          only take effect on the next start. The badge tells you which is
+          which, so you are never left wondering whether a change took.
+        </p>
+      </div>
+      <div class="card">
+        <h4>Saved on the robot</h4>
+        <p>
+          Robot settings persist on the robot, base-station settings on the base
+          station. Field tuning survives the next power cycle, and a rover
+          carries its own calibration to the next event.
+        </p>
+      </div>
+    </div>
+
+    <h4>The base station's own settings</h4>
+    <figure class="plate">
+      <img src="img/settings-base.webp" width="1800" height="1225" alt="The Base station settings tab with fields for the radio drive rate, dashboard refresh rate, video frame rate, basemap URL and trail length." loading="lazy">
+      <figcaption>
+        Radio airtime budget (<code>drive_hz</code>), dashboard refresh, video
+        frame rate, basemap URL and trail length. Point the basemap at a local
+        tile server here for offline field use.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- 8 -->
+  <section class="step" id="step-8">
+    <div class="step-head">
+      <div class="step-num">08</div>
+      <div>
+        <h3>Command it by voice, by typing, or from an AI</h3>
+        <p class="sub">One whitelist, one confirmation gate, one audit log — whoever is asking.</p>
+      </div>
+    </div>
+
+    <p>
+      Tap the microphone in the command dock to open a screen built for talking:
+      hold <kbd>Space</kbd>, say the order, and watch the transcript, the parsed
+      command and the fleet's reaction in one place. Speech is recognised
+      <strong>on the base station</strong> with faster-whisper and classified by
+      a <strong>local Gemma in LM Studio</strong>, so the whole path works with
+      no internet.
+    </p>
+
+    <figure class="plate">
+      <img src="img/command.webp" width="1800" height="1125" alt="The Command screen: a microphone button reading 'No microphone', a text field, the fleet with rover3 marked E-STOP LATCHED, the live camera, a 'You can say' panel listing rovers, places and modes, and an Orders log showing two STOP rover3 entries." loading="lazy">
+      <figcaption>
+        Captured with neither half installed — the badges say
+        <b>speech unavailable</b> and <b>no model</b>, and typing still works.
+        The two <code>STOP rover3</code> orders in the log went through the
+        keyword fast path, which is the whole point of it.
+      </figcaption>
+    </figure>
+
+    <div class="cards">
+      <div class="card">
+        <h4>“Stop” never goes through the model</h4>
+        <p>
+          It is matched on the raw transcript before any HTTP request, so LM
+          Studio being closed, slow or mid-download cannot sit between the word
+          and the rover. Rover names, modes and the camera take the same fast
+          path, which is why those feel instant while a full sentence takes
+          about 700&nbsp;ms.
+        </p>
+      </div>
+      <div class="card">
+        <h4>Nothing dangerous on a 4B model's say-so</h4>
+        <p>
+          Firing, arming, jogging and raw drive return a pending card a human
+          taps; it expires after 45 seconds. Everything else is validated
+          against live state first — an unknown rover or an unsaved place is
+          refused with a message naming what <em>does</em> exist.
+        </p>
+      </div>
+      <div class="card">
+        <h4>Both halves are optional</h4>
+        <p>
+          With no model, keyword commands and typing still work. With no
+          faster-whisper, everything except the microphone. The screen says
+          which you have. Flags: <code>--no-voice</code>,
+          <code>--llm-url</code>, <code>--llm-model</code>,
+          <code>--stt-model</code>.
+        </p>
+      </div>
+    </div>
+
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm"># speech recognition — on this machine, no internet, no API key</span>
+pip install faster-whisper
+<span class="cm"># fetch the weights ONCE while you still have signal (~150 MB)</span>
+python -c <span class="st">"from faster_whisper import WhisperModel; WhisperModel('base.en')"</span>
+
+<span class="cm"># the language model: LM Studio (or any OpenAI-compatible server).</span>
+<span class="cm"># load google/gemma-3n-e4b, start the local server on :1234. That's it.</span>
+
+python run_basestation.py --sim   <span class="cm"># both are auto-detected</span></pre>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Say</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr><td><code>stop</code> · <code>all stop</code> · <code>stop rover2</code></td><td>E-stop, <strong>without the model</strong></td></tr>
+          <tr><td><code>rover two</code> · <code>switch to rover three</code></td><td>Selects it, everywhere</td></tr>
+          <tr><td><code>teleop</code> · <code>put it in waypoint mode</code></td><td>Mode change</td></tr>
+          <tr><td><code>rover1 align to the bucket</code></td><td>Sets the target label, <em>then</em> enters object align</td></tr>
+          <tr><td><code>send rover2 to bucket A then start</code></td><td>Routes through both saved places</td></tr>
+          <tr><td><code>show me rover3's camera</code></td><td>Selects it and pulls up the FPV</td></tr>
+          <tr><td><code>what is rover2 doing</code></td><td>Answers from live telemetry</td></tr>
+          <tr><td><code>fire</code> · <code>arm the shooter</code></td><td><strong>Asks first</strong> — a card you tap</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>Letting Claude — or any AI — command the fleet</h4>
+    <p>
+      <code>basestation/mcp_server.py</code> is a stdio MCP server. It connects
+      to a <em>running</em> base station over the same WebSocket the dashboard
+      uses, which is the point: an AI gets exactly the dashboard's authority —
+      same whitelist, same confirmation gate, same audit log — because it goes
+      through the same front door. The tool list is <em>generated</em> from the
+      same intent registry the voice interface uses, so the two cannot drift.
+    </p>
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm"># see exactly what an AI could do, before you connect one</span>
+python -m basestation.mcp_server --list-tools</pre>
+    </div>
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre>{<span class="st">"mcpServers"</span>: {<span class="st">"rover"</span>: {
+  <span class="st">"command"</span>: <span class="st">"python"</span>, <span class="st">"args"</span>: [<span class="st">"-m"</span>, <span class="st">"basestation.mcp_server"</span>],
+  <span class="st">"env"</span>: {<span class="st">"RS_BASE_WS"</span>: <span class="st">"ws://127.0.0.1:8000/ws"</span>}}}}</pre>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="step" id="step-9">
+    <div class="step-head">
+      <div class="step-num">09</div>
+      <div>
+        <h3>Put it on the robot</h3>
+        <p class="sub">A Debian package, a systemd service, and one command to iterate.</p>
+      </div>
+    </div>
+
+    <p>
+      The robot software ships as a <code>.deb</code> that installs to
+      <code>/opt/roversoftware</code>, drops a <code>roversoftware-robot</code>
+      systemd service and starts it on boot. Per-robot settings — id, serial
+      port, mode — live in <code>/etc/roversoftware/robot.env</code>, a
+      conffile, so your edits survive upgrades. Everything is driven by
+      <a href="https://github.com/casey/just">just</a>, pointed at a robot by
+      hostname (default <code>rover1.local</code>).
+    </p>
+
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm"># ONCE per robot: SunFounder Fusion HAT drivers + the fusion_hat library</span>
+just bootstrap
+just reboot                        <span class="cm"># if bootstrap asks for it</span>
+
+<span class="cm"># first-time / clean install: builds the .deb, installs it, sets up the service</span>
+just deploy                        <span class="cm"># → rover1.local</span>
+just host=rover2.local deploy      <span class="cm"># a different robot</span>
+
+<span class="cm"># FAST iteration: rsync changed code into /opt/roversoftware and restart,</span>
+<span class="cm"># with no packaging round-trip</span>
+just sync
+
+<span class="cm"># service and logs</span>
+just status
+just logs                          <span class="cm"># journalctl -u roversoftware-robot -f</span>
+just restart
+just config                        <span class="cm"># edit robot.env, then restart</span></pre>
+    </div>
+
+    <div class="note plan">
+      <span class="tag">Per robot</span>
+      <p>
+        Give each rover a unique <code>RS_ROBOT_ID</code> in its
+        <code>robot.env</code>. Frames are addressed by id on a shared channel,
+        and two rovers answering to the same name will both take every command.
+      </p>
+    </div>
+
+    <h4>Running the robot by hand</h4>
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre>python run_robot.py --port /dev/serial0 --baud 9600
+
+<span class="cm"># useful additions</span>
+<span class="fl">--mode</span> object_align      <span class="cm"># start in a mode other than teleop</span>
+<span class="fl">--mock-motors</span>            <span class="cm"># no Fusion HAT: mock them, for comms testing</span>
+<span class="fl">--fpv --fpv-host</span> &lt;ip&gt;    <span class="cm"># stream the camera to the base station (needs LAN)</span>
+<span class="fl">--heading-source</span> gps     <span class="cm"># track angle only, no IMU</span>
+<span class="fl">--vision-backend</span> imx500  <span class="cm"># run detection on the AI Camera's sensor</span>
+<span class="fl">--no-gps --no-imu</span>        <span class="cm"># bench work indoors</span></pre>
+    </div>
+
+    <h4>The base station as a touchscreen kiosk</h4>
+    <p>
+      The dashboard ships as its own package for a Raspberry Pi with a screen.
+      It installs the Python bridge on an internal port
+      (<code>RS_WEB_PORT</code>, default 8001), the Deno UI on the public port
+      (<code>RS_UI_PORT</code>, default 8000), and a desktop autostart entry that
+      launches a full-screen Chromium kiosk pointed at it on boot.
+    </p>
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre>just bs_host=base.local bootstrap-deno       <span class="cm"># ONCE: the deno runtime</span>
+just bs_host=base.local deploy-basestation   <span class="cm"># builds the UI + installs the .deb</span>
+
+just bs_host=base.local sync-ui              <span class="cm"># fast: rebuild + push the UI</span>
+just bs_host=base.local bs-reload             <span class="cm"># refresh the kiosk browser</span></pre>
+    </div>
+
+    <figure class="plate">
+      <img src="img/portrait.webp" width="1668" height="2300" alt="The dashboard in a narrow portrait layout: the map on top, a bottom sheet holding the board, fleet list and joystick, with the E-STOP pinned in the corner." loading="lazy" style="max-height:760px;width:auto;max-width:100%">
+      <figcaption>
+        The portrait layout, for a tablet or the official 7&Prime; 800×480
+        panel. The bottom sheet collapses, the map keeps the space, and the stop
+        button stays where it was. Large tap targets, iPad safe-area insets, and
+        locally-bundled map and fonts — no CDN, so it works fully offline.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ─────────────────────────────────────────── reference ────────── -->
+  <section id="reference" class="divider">
+    <div class="sec-head">
+      <span class="eyebrow">Reference <span class="rule"></span></span>
+      <h2>The parts you will look up twice</h2>
+    </div>
+  </section>
+
+  <section id="wiring">
+    <h3>Wiring and calibration</h3>
+    <ul class="tight">
+      <li><strong>motor1 → Fusion HAT channel 0</strong> (left), <strong>motor2 → channel 1</strong> (right).</li>
+      <li>The right motor is mounted mirrored, so <code>right.inverted = True</code>.</li>
+      <li><strong>An ESC takes the same PWM a servo does.</strong> Neutral pulse = stop, longer = forward, shorter = reverse.</li>
+      <li>
+        <strong>“90 is centre”?</strong> Not here. The Fusion HAT's
+        <code>Servo.angle()</code> runs about <code>−90 … +90</code> with the
+        <em>middle</em> (0) as neutral; the 0–180 convention is for positional
+        servos. Neutral need not be 0 — this rover's ESC stops at
+        <code>5.0</code>.
+      </li>
+    </ul>
+
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm"># 1. confirm a channel moves — WHEELS OFF THE GROUND</span>
+python tools/servo_sweep.py --channel 0
+
+<span class="cm"># 2. find this ESC's neutral and endpoints, then copy them into the</span>
+<span class="cm">#    motor's card in Settings → Hardware</span>
+python tools/esc_calibrate.py --channel 0
+
+<span class="cm"># 3. verify the radio: watch frames in, send test frames out</span>
+python tools/xbee_monitor.py --port /dev/serial0 --baud 9600
+<span class="cm">#    type  d 0.5 0  to send a drive frame; blank line for test telemetry;</span>
+<span class="cm">#    q to quit. Raw bytes printed => baud or wiring mismatch.</span></pre>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Tool</th><th>What it is for</th></tr></thead>
+        <tbody>
+          <tr><td class="num">servo_sweep.py</td><td>Raw servo sweep — the Fusion HAT hello-world</td></tr>
+          <tr><td class="num">esc_calibrate.py</td><td>Interactive single-channel ESC bring-up</td></tr>
+          <tr><td class="num">xbee_monitor.py</td><td>Watch and inject XBee frames to prove the link</td></tr>
+          <tr><td class="num">gps_monitor.py</td><td>GPS bring-up: fix quality, track angle</td></tr>
+          <tr><td class="num">imu_monitor.py</td><td>BNO085 heading and calibration status</td></tr>
+          <tr><td class="num">detector_selftest.py</td><td>Vision bring-up and standoff calibration, either backend</td></tr>
+          <tr><td class="num">fetch_tiles.py</td><td>Build an offline <code>.mbtiles</code> cache before you lose signal</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="python">
+    <h3>Extending it in Python</h3>
+    <p>
+      You do not need Python to program behaviour — that is what step 6 is for.
+      You need it to teach the robot something genuinely new: a different sensor,
+      a different way of deciding where to go.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Where</th><th>What lives there</th></tr></thead>
+        <tbody>
+          <tr><td class="num">robot/control/</td><td>Controllers. Subclass <code>Controller</code>, return a <code>DriveCommand</code>, register a mode — nothing downstream changes.</td></tr>
+          <tr><td class="num">robot/drive/</td><td><code>ESCMotor</code>, the drivetrain kinds, and mechanisms. Mocks the HAT when it is absent.</td></tr>
+          <tr><td class="num">robot/routine/</td><td>The FSM: schema, conditions, actions, engine, store. Adding a condition here is what makes it appear in the editor's menu.</td></tr>
+          <tr><td class="num">robot/tuning.py</td><td>The whitelist of what the dashboard may change, and each field's limits.</td></tr>
+          <tr><td class="num">robot/comms/</td><td>The protocol, the threaded XBee reader, and document fragmenting.</td></tr>
+          <tr><td class="num">basestation/command/</td><td>Vocabulary, keyword fast path, the LLM classifier, the intent whitelist and the executor.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Two conventions are worth knowing before you start. First, controllers get
+      their inputs <em>injected</em> — <code>ObjectAlignController</code> takes a
+      detection provider and <code>WaypointController</code> takes a pose
+      provider — which is why both are testable with no hardware. Second,
+      anything a browser can change must be declared in
+      <code>robot/tuning.py</code> and mirrored in
+      <code>basestation-ui/src/settings/schema.ts</code>; Python decides what is
+      legal, the schema adds the words a person reads.
+    </p>
+
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm"># the test suite runs with no hardware and no radio</span>
+pytest -q</pre>
+    </div>
+  </section>
+
+  <section id="protocol">
+    <h3>The radio protocol</h3>
+    <p>
+      Newline-delimited JSON over the shared XBee channel. <code>to</code>
+      addresses a robot (or <code>"all"</code>); robots stamp telemetry with
+      <code>from</code>.
+    </p>
+    <div class="code">
+      <button class="copy" type="button">Copy</button>
+      <pre><span class="cm">// base station → robot</span>
+{<span class="st">"type"</span>: <span class="st">"drive"</span>, <span class="st">"throttle"</span>: 0.5, <span class="st">"steer"</span>: -0.2, <span class="st">"to"</span>: <span class="st">"rover1"</span>}  <span class="cm">// arcade</span>
+{<span class="st">"type"</span>: <span class="st">"drive"</span>, <span class="st">"left"</span>: 0.4, <span class="st">"right"</span>: 0.6, <span class="st">"to"</span>: <span class="st">"rover1"</span>}       <span class="cm">// tank</span>
+{<span class="st">"type"</span>: <span class="st">"mode"</span>, <span class="st">"mode"</span>: <span class="st">"teleop"</span>, <span class="st">"to"</span>: <span class="st">"rover1"</span>}
+{<span class="st">"type"</span>: <span class="st">"route"</span>, <span class="st">"waypoints"</span>: [[lat, lon], ...], <span class="st">"to"</span>: <span class="st">"rover1"</span>}
+{<span class="st">"type"</span>: <span class="st">"estop"</span>, <span class="st">"to"</span>: <span class="st">"rover1"</span>}
+{<span class="st">"type"</span>: <span class="st">"set_config"</span>, <span class="st">"config"</span>: {<span class="st">"align.pid.kp"</span>: 0.6}, <span class="st">"to"</span>: <span class="st">"rover1"</span>}
+{<span class="st">"type"</span>: <span class="st">"routine_cmd"</span>, <span class="st">"cmd"</span>: <span class="st">"start"</span>, <span class="st">"to"</span>: <span class="st">"rover1"</span>}
+{<span class="st">"type"</span>: <span class="st">"jog"</span>, <span class="st">"mech"</span>: <span class="st">"intake"</span>, <span class="st">"power"</span>: 0.3, <span class="st">"to"</span>: <span class="st">"rover1"</span>}
+
+<span class="cm">// robot → base station, ~5 Hz</span>
+{<span class="st">"type"</span>: <span class="st">"telemetry"</span>, <span class="st">"from"</span>: <span class="st">"rover1"</span>, <span class="st">"mode"</span>: <span class="st">"teleop"</span>, <span class="st">"estop"</span>: false,
+ <span class="st">"left"</span>: 0.4, <span class="st">"right"</span>: 0.6, <span class="st">"battery"</span>: 87.0,
+ <span class="st">"lat"</span>: 37.77, <span class="st">"lon"</span>: -122.41, <span class="st">"heading"</span>: 30.0}</pre>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <h4>Config is merged</h4>
+        <p>
+          A <code>config</code> payload is independent scalars, so half a
+          snapshot is a valid smaller snapshot. A full one is about 0.4 s of
+          airtime at 57600 baud, which is why it is requested explicitly and
+          never polled.
+        </p>
+      </div>
+      <div class="card">
+        <h4>Documents are not</h4>
+        <p>
+          A layout is a tree, and half a tree is a robot with one drive motor.
+          Layouts and routines are sliced into numbered fragments and nothing is
+          applied until every fragment arrives.
+        </p>
+      </div>
+      <div class="card">
+        <h4>Video does not ride the radio</h4>
+        <p>
+          57600 baud cannot carry a camera. FPV goes over WiFi as
+          JPEG-over-UDP, keeping the freshest frame rather than every frame —
+          the XBee stays the long-range control link.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="trouble">
+    <h3>When it misbehaves</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>What you see</th><th>What it usually is</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>The dashboard exits at start-up with a hint</td>
+            <td>Neither <code>--port</code> nor <code>--sim</code> was given. It refuses to start empty rather than showing a fleet that is not there.</td>
+          </tr>
+          <tr>
+            <td>No robots in the list, but the bridge is running</td>
+            <td>Nothing is reporting in. Run <code>tools/xbee_monitor.py</code> at both ends — raw bytes instead of JSON means a baud or wiring mismatch.</td>
+          </tr>
+          <tr>
+            <td><code>LINK</code> climbing on the board</td>
+            <td>Telemetry is not arriving. Range, antenna, or a robot that has stopped. Teleop's own timeout will have parked it already.</td>
+          </tr>
+          <tr>
+            <td>Motors do not move, everything else works</td>
+            <td>E-stop latched (the fleet row says so), or the ESC never armed — check the motor's <em>Type</em> is <strong>ESC</strong> and give it its <em>arm hold</em> at neutral.</td>
+          </tr>
+          <tr>
+            <td>One side of the robot runs backwards</td>
+            <td><em>Inverted</em> is unticked on the mirrored side. It is per-motor, on the motor's card.</td>
+          </tr>
+          <tr>
+            <td>Both motors do the same thing</td>
+            <td>They are on the same PWM channel — except the Hardware tab refuses that, so check they are not both assigned to the same <em>side</em>.</td>
+          </tr>
+          <tr>
+            <td>A hardware change did nothing</td>
+            <td>Layouts take effect on the next start. <code>just restart</code>.</td>
+          </tr>
+          <tr>
+            <td>A tuning value came back different</td>
+            <td>It was clamped, not refused. The field shows what the robot is actually using.</td>
+          </tr>
+          <tr>
+            <td>Waypoint mode steers but does not move</td>
+            <td>A steered chassis with <em>pivot creep</em> at zero. It cannot turn on the spot.</td>
+          </tr>
+          <tr>
+            <td>The map is blank</td>
+            <td>No route to the tile provider. Point <code>--tiles</code> at a local server, or build a cache first with <code>tools/fetch_tiles.py</code>.</td>
+          </tr>
+          <tr>
+            <td>The camera panel says “waiting for video”</td>
+            <td>FPV needs WiFi, not the radio. Start the robot with <code>--fpv --fpv-host &lt;base-ip&gt;</code>.</td>
+          </tr>
+          <tr>
+            <td>Voice is dead but typing works</td>
+            <td>faster-whisper is not installed, or there is no microphone. The badges at the top of the Command screen say which.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  </div>
+</div>
+
+<footer>
+  <div class="wrap cols">
+    <div>
+      <span class="eyebrow">Go deeper</span>
+      <ul>
+        <li><a href="ARCHITECTURE.md">ARCHITECTURE.md — the whole system, end to end</a></li>
+        <li><a href="waypoint-navigation.html">Waypoint navigation, walked through interactively</a></li>
+        <li><a href="MODEL_CONVERSION.md">MODEL_CONVERSION.md — training and converting a detector</a></li>
+        <li><a href="../README.md">README — the short version</a></li>
+      </ul>
+    </div>
+    <div>
+      <span class="eyebrow">In the repo</span>
+      <ul>
+        <li><a href="../robot/">robot/ — everything that moves</a></li>
+        <li><a href="../basestation/">basestation/ — radio, fleet, commands</a></li>
+        <li><a href="../basestation-ui/">basestation-ui/ — the touch dashboard</a></li>
+        <li><a href="../tools/">tools/ — bring-up utilities</a></li>
+      </ul>
+    </div>
+    <div>
+      <span class="eyebrow">About these pages</span>
+      <p style="margin-top:8px; font-size:14px">
+        Every screenshot is the real application running against
+        <code>--sim</code>, captured at 2× on a 1440-wide window. The basemap in
+        them is a locally rendered stand-in, because the machine that took them
+        had no route to a tile provider.
+      </p>
+    </div>
+  </div>
+</footer>
+
+</main>
+
+<script>
+// ── rendition ───────────────────────────────────────────────────────────
+// The app keeps this per device and so does the handbook: which light you are
+// reading in is a property of the screen you are standing at.
+(function () {
+  var KEY = "rs.docs.rendition";
+  var root = document.documentElement;
+  try {
+    var saved = localStorage.getItem(KEY);
+    if (saved) root.setAttribute("data-theme", saved);
+  } catch (e) { /* a kiosk with storage disabled still gets the toggle */ }
+
+  document.getElementById("theme").addEventListener("click", function () {
+    var now = root.getAttribute("data-theme");
+    if (!now) {
+      now = matchMedia("(prefers-color-scheme: light)").matches ? "daylight" : "console";
+    }
+    var next = (now === "daylight" || now === "light") ? "console" : "daylight";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem(KEY, next); } catch (e) { /* ignore */ }
+  });
+})();
+
+// ── copy buttons ────────────────────────────────────────────────────────
+document.querySelectorAll(".code .copy").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var code = btn.parentElement.querySelector("pre");
+    navigator.clipboard.writeText(code.innerText).then(function () {
+      btn.textContent = "Copied";
+      btn.classList.add("done");
+      setTimeout(function () {
+        btn.textContent = "Copy";
+        btn.classList.remove("done");
+      }, 1400);
+    });
+  });
+});
+
+// ── rail: mark the section being read ───────────────────────────────────
+// The rule is "the last section whose top has passed the reading line", not
+// "the section with the largest visible area" — a long section that is 90%
+// scrolled past still owns most of the viewport, and highlighting it while
+// the next heading sits under the top bar is exactly the wrong answer.
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll(".rail a"));
+  var targets = links
+    .map(function (a) { return document.querySelector(a.getAttribute("href")); })
+    .filter(Boolean);
+  if (!targets.length) return;
+
+  var current = null;
+  function mark() {
+    var line = 180; // just below the sticky top bar
+    var found = targets[0];
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i].getBoundingClientRect().top <= line) found = targets[i];
+    }
+    // At the very bottom the last section may never reach the line.
+    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
+      found = targets[targets.length - 1];
+    }
+    if (found === current) return;
+    current = found;
+    links.forEach(function (a) {
+      a.classList.toggle("on", a.getAttribute("href") === "#" + found.id);
+    });
+  }
+
+  var ticking = false;
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () { ticking = false; mark(); });
+  }
+  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", onScroll);
+  mark();
+})();
+</script>
+</body>
+</html>
