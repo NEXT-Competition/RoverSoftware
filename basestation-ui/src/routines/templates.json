@@ -3,7 +3,7 @@
     "key": "route",
     "title": "Drive a GPS route",
     "blurb": "Loads a list of waypoints, hands them to the waypoint controller, and finishes when the last one is reached. This is the smallest complete autonomous run.",
-    "needs": "Waypoints — save some places on the map, then pick them in the first step.",
+    "needs": "Waypoints — paste “lat,lon” one per line into the first step.",
     "spec": {
       "id": "drive_route",
       "name": "Drive a GPS route",
@@ -20,8 +20,7 @@
           "on_enter": [
             {
               "do": "set_route",
-              "waypoints": [],
-              "places": []
+              "waypoints": ""
             }
           ],
           "transitions": [
@@ -113,127 +112,6 @@
           "drive": {
             "mode": "stop"
           },
-          "terminal": true,
-          "transitions": []
-        }
-      ]
-    }
-  },
-  {
-    "key": "bucket",
-    "title": "Drive to a bucket, line up, shoot",
-    "blurb": "The full play. GPS gets the rover to roughly the right place, the camera does the last few metres — align on the bucket and creep to the standoff distance — and only then does it fire. GPS is metres-accurate and a bucket is not, which is exactly why the two halves are separate steps.",
-    "needs": "A saved place for the bucket. Drive a rover to one in teleop, press “Save rover position”, then pick it in the first step.",
-    "spec": {
-      "id": "bucket_run",
-      "name": "Drive to a bucket, line up, shoot",
-      "start": "drive_to_bucket",
-      "on_estop": "abort",
-      "states": [
-        {
-          "id": "drive_to_bucket",
-          "x": 40,
-          "y": 120,
-          "drive": {
-            "mode": "waypoint"
-          },
-          "on_enter": [
-            {
-              "do": "set_route",
-              "waypoints": [],
-              "places": []
-            }
-          ],
-          "transitions": [
-            {
-              "when": "route_done",
-              "to": "line_up"
-            }
-          ]
-        },
-        {
-          "id": "line_up",
-          "x": 300,
-          "y": 120,
-          "drive": {
-            "mode": "object_align"
-          },
-          "transitions": [
-            {
-              "when": "all",
-              "of": [
-                {
-                  "when": "aligned"
-                },
-                {
-                  "when": "arrived"
-                }
-              ],
-              "for_seconds": 0.3,
-              "to": "shoot"
-            },
-            {
-              "when": "not",
-              "of": [
-                {
-                  "when": "target_visible"
-                }
-              ],
-              "for_seconds": 5,
-              "to": "gave_up"
-            }
-          ]
-        },
-        {
-          "id": "shoot",
-          "x": 560,
-          "y": 120,
-          "drive": {
-            "mode": "stop"
-          },
-          "on_enter": [
-            {
-              "do": "fire",
-              "mech": "shooter"
-            }
-          ],
-          "transitions": [
-            {
-              "when": "shots",
-              "mech": "shooter",
-              "at_least": 1,
-              "to": "done"
-            },
-            {
-              "when": "elapsed",
-              "seconds": 4,
-              "to": "done"
-            }
-          ]
-        },
-        {
-          "id": "done",
-          "x": 820,
-          "y": 60,
-          "drive": {
-            "mode": "stop"
-          },
-          "terminal": true,
-          "transitions": []
-        },
-        {
-          "id": "gave_up",
-          "x": 820,
-          "y": 190,
-          "drive": {
-            "mode": "stop"
-          },
-          "on_enter": [
-            {
-              "do": "log",
-              "message": "no bucket in view at the waypoint"
-            }
-          ],
           "terminal": true,
           "transitions": []
         }

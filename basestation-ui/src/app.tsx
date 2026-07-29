@@ -10,7 +10,6 @@ import { FleetPanel } from "./components/FleetPanel.tsx";
 import { FPV } from "./components/FPV.tsx";
 import { ModeControls } from "./components/ModeControls.tsx";
 import { PitBoard } from "./components/PitBoard.tsx";
-import { PlacesPanel } from "./components/PlacesPanel.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
 import { ShooterControls } from "./components/ShooterControls.tsx";
 import { Telemetry } from "./components/Telemetry.tsx";

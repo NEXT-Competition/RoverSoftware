@@ -8,20 +8,7 @@
 export interface ArgSpec {
   key: string;
   label: string;
-  kind:
-    | "number"
-    | "text"
-    | "mech"
-    | "preset"
-    | "actuator"
-    | "state"
-    | "counter"
-    // Saved field positions (state/places.ts). `route` is an ordered list of
-    // them, `place` is one. Both write plain lat/lon into the document
-    // ALONGSIDE the ids — the robot only ever reads the coordinates, and the
-    // ids are what lets the editor still show a name after a round trip.
-    | "route"
-    | "place";
+  kind: "number" | "text" | "mech" | "preset" | "actuator" | "state" | "counter";
   min?: number;
   max?: number;
   step?: number;
@@ -225,8 +212,8 @@ export const ACTIONS: VerbSpec[] = [
     group: "navigation",
     label: "load a GPS route",
     help:
-      "Hands a list of waypoints to the waypoint controller, so a state that drives with Waypoint route follows them. This is what makes a fully autonomous run possible from the graph alone — pair it with “when the route is finished”. Pick saved places in the order you want them driven.",
-    args: [{ key: "places", label: "route", kind: "route" }],
+      "Hands a list of waypoints to the waypoint controller, so a state that drives with Waypoint route follows them. This is what makes a fully autonomous run possible from the graph alone — pair it with “when the route is finished”. Draw the route on the map, then paste it here.",
+    args: [{ key: "waypoints", label: "waypoints (lat,lon per line)", kind: "text", fallback: "" }],
   },
   {
     key: "pulse",
