@@ -33,8 +33,8 @@ class MotorConfig:
     # Endpoints/clamps. The usable swing is SYMMETRIC about neutral: the side
     # closer to neutral sets the throw (see the module docstring), so with
     # neutral=5 and these endpoints the effective range is -10..+20 (+/-15).
-    max_angle: float = 20.0  # Full-forward endpoint (upper clamp)
-    min_angle: float = -20.0  # Full-reverse endpoint (lower clamp)
+    max_angle: float = 10.0  # Full-forward endpoint (upper clamp)
+    min_angle: float = -10.0  # Full-reverse endpoint (lower clamp)
     deadband: float = 0.03  # |throttle| below this => treat as neutral
     max_forward: float = 1.0  # Safety cap on forward throttle, [0..1]
     max_reverse: float = 1.0  # Safety cap on reverse throttle, [0..1]
