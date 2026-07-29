@@ -1,52 +1,84 @@
-/* RoverSoftware base station — "The Pit Board".
+/* RoverSoftware base station — "The Plot Table".
  *
- * THESIS: A pit board over live terrain. The category ships a dark glass cockpit
- *   and puts its type at 17px; this refuses both. Paper cards over the map, and
- *   the poster-scale numeral goes to the MEASUREMENT, not to a brand wordmark —
- *   an operator reads this at arm's length in sun, not leaning into a monitor.
- * OWN-WORLD: Warm paper (#fbfbf8) cards on a live satellite map, ink near-black
- *   with a green cast, ONE fluorescent lime that only ever means "the rover you
- *   are calling", and three deep marshal's-flag colours that only ever mean how
- *   a machine is. Archivo 800 for numerals, JetBrains Mono for anything measured.
- *   26 -> 16 -> 12 -> 9 radii; controls grouped in 999px capsules.
- * STORY: The operator sees which rover is theirs before reading a word, reads its
- *   condition at distance, and reaches the stop without looking for it.
- * FIRST VIEWPORT: Full-bleed terrain. Top-left a pill capsule (brand, link state,
- *   gear). Left rail of paper cards, the selected rover filled lime. Bottom-right
- *   the drive pad; top-right the red E-STOP, above everything at z-index 1001.
- * FORM: Pit board / pace notes — brief-pinned by the user's reference, so no
- *   direction roll was dealt; the reference supplied light + lime + display type
- *   + pill nav + generous radii, and the pit board is what makes those true here.
+ * THESIS: A mission-control plot table. The terrain is the only lit thing in the
+ *   room and every panel is machined chrome pulled back around it. The category
+ *   ships a smart-home cockpit — soft 26px cards of glass floating on a blurred
+ *   gradient — and this refuses that: milled plates, tight radii, notched
+ *   corners, and a number that is a MEASUREMENT in tabular mono, never a "stat".
+ * OWN-WORLD: Graphite ground (#0b0f10) with the map as the lit object. Panels are
+ *   dark plates with a 1px lit top edge; the top bar and command dock carry a
+ *   chamfered corner, which is the signature and appears nowhere else. ONE signal
+ *   teal that only ever means "the rover you are calling". Amber only ever means
+ *   a plan — routes, waypoints, pending. Three hard flags for how a machine IS.
+ *   Archivo 800 numerals, JetBrains Mono for anything measured. 14/10/8/6 radii.
+ * STORY: The operator finds their rover before reading a word, reads its
+ *   condition across a pit, and reaches the stop without looking for it.
+ * FIRST VIEWPORT: Full-bleed terrain, dimmed at the edges so plates read. Top-left
+ *   a chamfered cluster (brand, link state, gear). Left rail of plates, the
+ *   selected rover filled teal. Bottom the command dock; top-right the E-STOP,
+ *   above everything at z-index 1001.
+ * FORM: Plot table / flight-control console — brief-pinned by the operator's
+ *   reference boards, so no direction roll was dealt. The reference supplied the
+ *   dark ground, teal + amber, and the dense instrument rail; the plot table is
+ *   what makes those true for a rover fleet rather than a stadium.
+ *
+ * --- Two renditions, one identity ---
+ * Dark is the default because the console is read indoors and in a pit. But the
+ * PRIMARY panel is a 7" screen used OUTDOORS in direct sun, where a dark ground
+ * is exactly wrong — so `[data-theme="daylight"]` re-renders the same identity
+ * on paper, at full contrast, and the operator can flip to it in one tap. Same
+ * accent, same geometry, same grammar; only the light changes. Every value below
+ * has a daylight twin, and adding a token here means adding it there.
  */
 
 :root {
-  /* Surface — warm paper, never #fff (pure white beside a sunlit tile is glare) */
-  --bg: #d9dbd4;
-  --paper: #fbfbf8;
-  --panel: rgba(251, 251, 248, 0.82);
-  --panel-solid: #fbfbf8;
-  --panel-2: rgba(255, 255, 255, 0.74);
-  --well: #e7e8e1;
-  --hairline: rgba(20, 22, 15, 0.1);
-  --hairline-strong: rgba(20, 22, 15, 0.2);
-  --inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  /* Surface — graphite, never pure black (a black plate beside a sunlit
+     satellite tile reads as a hole punched in the screen). */
+  --bg: #07090a;
+  --paper: #0f1416;
+  --panel: rgba(15, 20, 22, 0.88);
+  --panel-solid: #0f1416;
+  --panel-2: rgba(30, 38, 41, 0.72);
+  --well: #171e20;
+  --hairline: rgba(150, 180, 184, 0.14);
+  --hairline-strong: rgba(150, 180, 184, 0.3);
+  /* The lit top edge that makes a plate look milled rather than painted. */
+  --inset-hi: inset 0 1px 0 rgba(190, 225, 228, 0.09);
 
   /* Ink */
-  --ink: #14160f;
-  --text: #14160f;
-  --muted: #5b6053;
-  --faint: #767b6e;
+  --ink: #e9f1f1;
+  --text: #e9f1f1;
+  --muted: #9aacae;
+  --faint: #7d9094;
 
   /* The tape: selection and engagement. Never a state, never type. */
-  --accent: #ccf24a;
-  --accent-deep: #b2d92f;
-  --accent-lift: #ddf87e;
-  --on-accent: #14160f;
+  --accent: #2ee6c5;
+  --accent-deep: #17c8a8;
+  --accent-lift: #86f6e0;
+  --on-accent: #04211c;
 
-  /* The flags: how a machine is. Deep on purpose — never confusable with lime. */
-  --ok: #0f7a4a;
-  --warn: #b0600a;
-  --danger: #d4192a;
+  /* The plan: routes, pending waypoints, anything proposed but not yet done.
+     Distinct from the flags — amber here means "drawn", not "wrong". */
+  --data: #f0a53a;
+  --on-data: #231602;
+
+  /* The flags: how a machine is. Never confusable with the tape or the plan. */
+  --ok: #35d68a;
+  --warn: #f5b43f;
+  --danger: #ff4256;
+  --on-danger: #1a0206;
+  /* Bright flags on a dark ground carry DARK ink; the daylight twin inverts
+     both, so a fill never has to guess what sits on it. */
+  --on-ok: #04211c;
+  --panel-rgb: 15, 20, 22;
+
+  /* Channels, so alpha ramps don't hardcode a rendition's ink. */
+  --shadow-rgb: 0, 0, 0;
+  --hi-rgb: 190, 225, 228;
+  --accent-rgb: 46, 230, 197;
+  --data-rgb: 240, 165, 58;
+  --danger-rgb: 255, 66, 86;
+  --ok-rgb: 53, 214, 138;
 
   /* Type */
   --font-ui: "Archivo Variable", system-ui, -apple-system, "Segoe UI",
@@ -56,20 +88,34 @@
     "DejaVu Sans Mono", monospace;
   --display-size: 38px;
 
-  /* Depth — offset ink shadows. A black shadow on paper reads as dirt. */
-  --lift-card: 0 14px 34px -20px rgba(20, 22, 15, 0.36);
-  --lift-pad: 0 18px 40px -18px rgba(20, 22, 15, 0.42);
-  --lift-cap: 0 6px 14px -4px rgba(20, 22, 15, 0.4),
-    inset 0 1px 2px rgba(255, 255, 255, 0.6);
+  /* Depth — offset and blur, never a zero-offset halo. On a dark ground the
+     shadow does less work than the lit top edge, so it sits shallower. */
+  --lift-card: 0 16px 32px -22px rgba(0, 0, 0, 0.9);
+  --lift-pad: 0 20px 44px -20px rgba(0, 0, 0, 0.95);
+  --lift-cap: 0 8px 18px -6px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 rgba(190, 225, 228, 0.1);
+
+  /* How far the map is pulled down so plates read against it. */
+  --map-dim: 0.34;
+
+  /* Marker labels sit on imagery, not on a plate. Imagery is bright in both
+     renditions, so these do NOT flip with the theme — a label that inverted
+     with the ink would be dark-on-dark half the time. */
+  --map-label-bg: rgba(6, 10, 11, 0.72);
+  --map-label-ink: #f2f7f7;
 
   /* Motion — real-world mass, never linear/ease-in-out */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* Geometry */
-  --radius: 26px;
-  --radius-sm: 16px;
-  --radius-input: 12px;
+  /* Geometry — machined, not moulded. */
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-input: 8px;
+  --radius-inner: 6px;
+  /* The signature chamfer. Used on the top cluster and the command dock ONLY;
+     a notch on every plate is a texture, not a mark. */
+  --chamfer: 13px;
   --tap: 52px;
 
   /* Safe-area shorthands (iPad home indicator / notch) */
@@ -78,7 +124,7 @@
   --sa-b: env(safe-area-inset-bottom, 0px);
   --sa-l: env(safe-area-inset-left, 0px);
 
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 /* --- Daylight: the same console, read in the sun -------------------------
@@ -171,7 +217,19 @@ body {
 .map {
   position: absolute;
   inset: 0;
-  background: #cfd2ca;
+  background: var(--bg);
+}
+
+/* The terrain is the lit object on the plot table, but raw satellite imagery is
+   brighter than any plate we can build — left alone it flattens the rail into
+   it. So the tiles are pulled down, and ONLY the tiles: markers, trails, routes
+   and place pins are siblings of this layer, not children, so the rover you are
+   looking for stays at full strength against a dimmed ground.
+   In daylight --map-dim is 0, because there the competition is the sun and the
+   imagery is the one thing being navigated by. */
+.leaflet-tile-pane {
+  filter: brightness(calc(1 - var(--map-dim))) saturate(calc(1 - var(--map-dim) * 0.5));
+  transition: filter 0.4s var(--ease-out);
 }
 
 /* The overlay is transparent to pointers; individual panels re-enable them.
@@ -289,12 +347,23 @@ body {
 
 /* One capsule, internally divided — brand, fleet health, link, settings all act
    on the same subject (this station), so they share a single object. */
+/* The signature. A pill reads as an app chrome; a plate with its trailing
+   corner cut off reads as a console faceplate, which is what the plot table is
+   made of. It appears here and on the command dock and NOWHERE else — a notch
+   on every panel would be a texture rather than a mark. */
 .topbar {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 7px 7px 7px 15px;
-  border-radius: 999px;
+  border-radius: var(--radius) 0 var(--radius) var(--radius);
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--chamfer)) 0,
+    100% var(--chamfer),
+    100% 100%,
+    0 100%
+  );
 }
 .brand {
   display: flex;
@@ -516,12 +585,12 @@ body {
 }
 .robot.sel .mode,
 .robot.sel .meta {
-  color: rgba(20, 22, 15, 0.68);
+  color: rgba(var(--shadow-rgb), 0.68);
 }
 /* Flag colours have to survive the lime fill they sit on. */
 .robot.sel .dot.online {
   background: var(--ok);
-  box-shadow: 0 0 0 3px rgba(20, 22, 15, 0.16);
+  box-shadow: 0 0 0 3px rgba(var(--shadow-rgb), 0.16);
 }
 .robot.sel .estop-flag {
   color: #8c0714;
@@ -547,7 +616,7 @@ body {
 }
 .dot.online {
   background: var(--ok);
-  box-shadow: 0 0 0 3px rgba(15, 122, 74, 0.18);
+  box-shadow: 0 0 0 3px rgba(var(--ok-rgb), 0.18);
 }
 .dot.offline {
   background: var(--danger);
@@ -634,8 +703,8 @@ body {
 }
 .btn.danger {
   color: var(--danger);
-  background: rgba(212, 25, 42, 0.09);
-  border-color: rgba(212, 25, 42, 0.38);
+  background: rgba(var(--danger-rgb), 0.09);
+  border-color: rgba(var(--danger-rgb), 0.38);
 }
 .btn.danger:active {
   background: var(--danger);
@@ -714,11 +783,11 @@ body {
   width: 5px;
   height: 11px;
   border-radius: 2px;
-  background: rgba(20, 22, 15, 0.1);
+  background: rgba(var(--shadow-rgb), 0.1);
 }
 .pip.on {
   background: var(--ok);
-  box-shadow: 0 0 0 3px rgba(15, 122, 74, 0.18);
+  box-shadow: 0 0 0 3px rgba(var(--ok-rgb), 0.18);
 }
 
 /* ---------- E-STOP ---------- */
@@ -743,12 +812,12 @@ body {
   letter-spacing: 0.14em;
   color: #fff;
   background: linear-gradient(180deg, #e8394a, #b8101f);
-  border: 1px solid rgba(20, 22, 15, 0.22);
+  border: 1px solid rgba(var(--shadow-rgb), 0.22);
   border-radius: 16px;
   min-height: 60px;
   padding: 0 26px;
   cursor: pointer;
-  box-shadow: 0 10px 30px -8px rgba(212, 25, 42, 0.5), var(--inset-hi);
+  box-shadow: 0 10px 30px -8px rgba(var(--danger-rgb), 0.5), var(--inset-hi);
   transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
 }
 .estop:active {
@@ -759,10 +828,10 @@ body {
 }
 @keyframes estop-pulse {
   0%, 100% {
-    box-shadow: 0 10px 30px -8px rgba(212, 25, 42, 0.45), var(--inset-hi);
+    box-shadow: 0 10px 30px -8px rgba(var(--danger-rgb), 0.45), var(--inset-hi);
   }
   50% {
-    box-shadow: 0 10px 42px -4px rgba(212, 25, 42, 0.72), var(--inset-hi);
+    box-shadow: 0 10px 42px -4px rgba(var(--danger-rgb), 0.72), var(--inset-hi);
   }
 }
 .estop-clear {
@@ -921,7 +990,7 @@ body {
   border-radius: 50%;
   background: radial-gradient(
       circle at 50% 38%,
-      rgba(204, 242, 74, 0.30),
+      rgba(var(--accent-rgb), 0.30),
       transparent 60%
     ),
     var(--panel);
@@ -963,7 +1032,7 @@ body {
   position: absolute;
   inset: 16%;
   border-radius: 50%;
-  border: 1px dashed rgba(20, 22, 15, 0.14);
+  border: 1px dashed rgba(var(--shadow-rgb), 0.14);
   pointer-events: none;
 }
 .drivepad .nub {
@@ -975,7 +1044,7 @@ body {
   margin: -37px 0 0 -37px;
   border-radius: 50%;
   background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--hairline-strong);
   box-shadow: var(--lift-cap);
   transition: transform 0.18s var(--ease-out);
   will-change: transform;
@@ -1035,7 +1104,7 @@ body {
   border-left: 9px solid transparent;
   border-right: 9px solid transparent;
   border-bottom: 20px solid var(--accent);
-  filter: drop-shadow(0 1px 3px rgba(20, 22, 15, 0.45));
+  filter: drop-shadow(0 1px 3px rgba(var(--shadow-rgb), 0.45));
   transform-origin: 50% 65%;
   transition: transform 0.25s var(--ease-out);
 }
@@ -1054,8 +1123,8 @@ body {
   font-size: 11px;
   font-family: var(--font-mono);
   white-space: nowrap;
-  color: var(--text);
-  background: rgba(20, 22, 15, 0.5);
+  color: var(--map-label-ink);
+  background: var(--map-label-bg);
   padding: 2px 6px;
   border-radius: 5px;
 }
@@ -1072,12 +1141,12 @@ body {
 }
 .leaflet-bar {
   border: none !important;
-  box-shadow: 0 12px 30px -18px rgba(20, 22, 15, 0.34);
+  box-shadow: 0 12px 30px -18px rgba(var(--shadow-rgb), 0.34);
 }
 /* Basemap credit: required by the imagery licence, so it stays visible — but
    small and dim enough not to compete with telemetry on the kiosk. */
 .leaflet-control-attribution {
-  background: rgba(251, 251, 248, 0.72) !important;
+  background: rgba(var(--panel-rgb), 0.72) !important;
   color: var(--muted);
   font-size: 10px;
   padding: 1px 6px;
@@ -1343,7 +1412,7 @@ body {
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  background: rgba(251, 251, 248, 0.92);
+  background: rgba(var(--panel-rgb), 0.92);
   backdrop-filter: blur(26px) saturate(1.2);
   -webkit-backdrop-filter: blur(26px) saturate(1.2);
   padding: calc(14px + var(--sa-t)) calc(14px + var(--sa-r))
@@ -1651,15 +1720,15 @@ body {
   margin-top: -11px;
   border-radius: 50%;
   background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  box-shadow: 0 4px 12px -5px rgba(20, 22, 15, 0.42);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: 0 4px 12px -5px rgba(var(--shadow-rgb), 0.42);
 }
 .field-range::-moz-range-thumb {
   width: 26px;
   height: 26px;
   border-radius: 50%;
   background: linear-gradient(180deg, var(--accent-lift), var(--accent-deep));
-  border: 1px solid rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--hairline-strong);
 }
 
 /* Toggle */
@@ -1687,7 +1756,7 @@ body {
   height: 24px;
   border-radius: 50%;
   background: #cdd7e4;
-  box-shadow: 0 2px 6px rgba(20, 22, 15, 0.28);
+  box-shadow: 0 2px 6px rgba(var(--shadow-rgb), 0.28);
   transition: transform 0.28s var(--ease);
 }
 .toggle.on .knob {
@@ -1740,8 +1809,8 @@ body {
 }
 .banner.error {
   color: var(--danger);
-  background: rgba(212, 25, 42, 0.09);
-  border-color: rgba(212, 25, 42, 0.32);
+  background: rgba(var(--danger-rgb), 0.09);
+  border-color: rgba(var(--danger-rgb), 0.32);
 }
 .btn.small {
   min-height: 38px;
@@ -1934,7 +2003,7 @@ body {
   }
   .rail {
     max-height: 48dvh;
-    box-shadow: var(--inset-hi), 0 -14px 40px -22px rgba(20, 22, 15, 0.34);
+    box-shadow: var(--inset-hi), 0 -14px 40px -22px rgba(var(--shadow-rgb), 0.34);
     transition: transform 0.5s var(--ease);
   }
   .drawer-handle {
@@ -2674,14 +2743,14 @@ body {
    pale track reads as glare. Ink for both; barStyle()'s inline colour has to be
    overridden, which is the one place !important is the honest tool. */
 .robot.sel .bar-track {
-  background: rgba(20, 22, 15, 0.14);
-  border-color: rgba(20, 22, 15, 0.2);
+  background: rgba(var(--shadow-rgb), 0.14);
+  border-color: rgba(var(--shadow-rgb), 0.2);
 }
 .robot.sel .bar-fill {
   background: var(--ink) !important;
 }
 .robot.sel .bar-label {
-  color: rgba(20, 22, 15, 0.66);
+  color: rgba(var(--shadow-rgb), 0.66);
 }
 
 /* ---------- Routine palette: "add a step" ----------

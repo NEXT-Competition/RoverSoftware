@@ -173,7 +173,8 @@ def main():
                      "tiles_upstream": args.tiles_upstream,
                      "tiles_offline": args.tiles_offline,
                      "tiles": args.tiles},
-                    video_rx=video_rx, settings=settings, ip_server=ip_server)
+                    video_rx=video_rx, settings=settings, ip_server=ip_server,
+                    places=places)
     print(f"[base] dashboard -> http://{args.host}:{args.web_port}")
     uvicorn.run(app, host=args.host, port=args.web_port, log_level="warning")
 
