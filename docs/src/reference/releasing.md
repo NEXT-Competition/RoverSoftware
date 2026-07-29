@@ -49,14 +49,24 @@ to release, and CI does not read them.
 
 ## One-time setup
 
-Three things on the **RoverSoftware** repository. Without them the workflows
-build fine but cannot publish — and each one fails with a step that tells you
-exactly what is missing, rather than `Input required and not supplied: token`.
+Two things, and only the first blocks anything today.
 
-### 1 · A signing key for the apt repository
+### 1 · Turn Pages on
+
+**Settings → Pages → Source: Deploy from a branch → `gh-pages` / `(root)`.**
+
+That is the whole deploy configuration. Both workflows publish to this
+repository's own `gh-pages` branch using the built-in `GITHUB_TOKEN`, so there
+is no personal access token to create and nothing to keep in sync with another
+repository. The branch is created by the first successful run — you can set the
+dropdown before or after it, whichever order you get to.
+
+### 2 · A signing key for the apt repository
+
+Only needed before the first tag; the handbook publishes without it.
 
 Generate it somewhere you trust — a laptop, not a runner — and keep the private
-half. Debian clients will refuse an unsigned repository unless every rover is
+half. Debian clients refuse an unsigned repository unless every rover is
 configured with `[trusted=yes]`, which is worse.
 
 ```bash
@@ -65,8 +75,8 @@ gpg --batch --quick-gen-key "RoverSoftware Packages <you@example.com>" \
 gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}'
 ```
 
-Export the private key and paste it into a secret called
-**`APT_GPG_PRIVATE_KEY`**:
+Export the private key and paste it into a repository secret called
+**`APT_GPG_PRIVATE_KEY`** (*Settings → Secrets and variables → Actions*):
 
 ```bash
 gpg --armor --export-secret-keys <FINGERPRINT>
@@ -75,50 +85,32 @@ gpg --armor --export-secret-keys <FINGERPRINT>
 Back the key up offline. Losing it means every rover has to have its keyring
 replaced by hand before it can update again.
 
-### 2 · A token that can push to the site repo
-
-The default `GITHUB_TOKEN` is scoped to this repository, so it cannot write to
-`NEXT-Competition.github.io`. Create a **fine-grained personal access token**
-with:
-
-- Repository access: `NEXT-Competition/NEXT-Competition.github.io`
-- Permissions: **Contents → Read and write**
-
-Save it as **`SITE_DEPLOY_TOKEN`** under
-*Settings → Secrets and variables → Actions*. A deploy key on the site repo
-works too if you would rather not use a PAT — swap the `token:` line in both
-workflows for `ssh-key:`.
-
-Fine-grained tokens expire. When one does, both workflows fail at their
-"Check the deploy token exists" step with the same instructions; generate a new
-token and update the secret.
-
-### 3 · Pages enabled on the site repo
-
-In `NEXT-Competition.github.io` → Settings → Pages, serve from the default
-branch, root. Both workflows commit into that branch; nothing else is needed.
-
 ## How the site is laid out
 
-Two workflows write into one repository, and neither may clobber the other:
+Both workflows write to the `gh-pages` branch of this repository, and neither
+may clobber the other:
 
 ```text
-NEXT-Competition.github.io/
+gh-pages/
 ├── .nojekyll                   # so Jekyll leaves mdBook's output alone
-└── roversoftware/
-    ├── index.html …            ← docs.yml       (the handbook)
-    └── apt/                    ← release.yml    (the package repository)
-        ├── roversoftware-archive-keyring.asc
-        ├── dists/stable/…
-        └── pool/main/*.deb
+├── index.html …                ← docs.yml      (the handbook)
+└── apt/                        ← release.yml   (the package repository)
+    ├── roversoftware-archive-keyring.asc
+    ├── dists/stable/…
+    └── pool/main/*.deb
 ```
 
-The docs job syncs with `rsync --delete --exclude 'apt/'`, so publishing
-documentation never unpublishes packages. Both jobs share the
-`pages-site` concurrency group and retry a rejected push with a rebase, because
-two concurrent pushes to one branch is a lost commit.
+Served at `https://next-competition.github.io/RoverSoftware/`. That path is
+**case-sensitive** — it is the repository name, so the capital R and S matter in
+a `sources.list` line.
 
-The apt job is **incremental**: it checks out the existing pool, adds the new
+The docs job syncs with `rsync --delete --exclude 'apt/'`, so publishing
+documentation never unpublishes packages. Both jobs share the `pages-site`
+concurrency group and retry a rejected push with a rebase, because two
+concurrent pushes to one branch is a lost commit. Neither job assumes the branch
+exists: if the clone fails they create it as an orphan.
+
+The apt job is **incremental**: it clones the existing pool, adds the new
 `.deb` files, and regenerates every index over all of it. That is what keeps
 `apt-get install roversoftware-robot=0.1.0` working after 0.2.0 ships.
 
@@ -177,4 +169,7 @@ just book-serve   # live-reloading preview on :3000
 5. On a spare Pi: `apt-get update && apt-get install roversoftware-robot` and
    confirm `apt-cache policy` shows the new version coming from the repository.
 6. Check the handbook rendered at
-   <https://next-competition.github.io/roversoftware/>.
+   <https://next-competition.github.io/RoverSoftware/>.
+
+If step 5 shows nothing, the usual cause is Pages not yet pointed at
+`gh-pages` — the branch exists but nothing is serving it.

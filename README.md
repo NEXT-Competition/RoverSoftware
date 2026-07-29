@@ -14,7 +14,7 @@ Built teleop-first, but structured so the autonomy (object alignment, GPS
 waypoint navigation) and the multi-robot base station drop in without reworking
 the core.
 
-> **📖 The handbook: <https://next-competition.github.io/roversoftware/>**
+> **📖 The handbook: <https://next-competition.github.io/RoverSoftware/>**
 > — an illustrated walkthrough of running the base station, driving a rover,
 > adding your own motors and mechanisms, and programming a routine without
 > Python. Source is [`docs/`](docs/); build it locally with `just book`.
@@ -31,9 +31,9 @@ Released builds are published as signed Debian packages. On a robot:
 
 ```bash
 sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://next-competition.github.io/roversoftware/apt/roversoftware-archive-keyring.asc \
+curl -fsSL https://next-competition.github.io/RoverSoftware/apt/roversoftware-archive-keyring.asc \
   | sudo tee /etc/apt/keyrings/roversoftware.asc > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/roversoftware/apt stable main" \
+echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/RoverSoftware/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/roversoftware.list > /dev/null
 sudo apt-get update && sudo apt-get install roversoftware-robot
 ```

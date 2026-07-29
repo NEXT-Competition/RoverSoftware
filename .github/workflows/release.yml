@@ -221,9 +221,9 @@ jobs:
 
           \`\`\`bash
           sudo install -d -m 0755 /etc/apt/keyrings
-          curl -fsSL https://next-competition.github.io/roversoftware/apt/roversoftware-archive-keyring.asc \\
+          curl -fsSL https://next-competition.github.io/RoverSoftware/apt/roversoftware-archive-keyring.asc \\
             | sudo tee /etc/apt/keyrings/roversoftware.asc > /dev/null
-          echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/roversoftware/apt stable main" \\
+          echo "deb [signed-by=/etc/apt/keyrings/roversoftware.asc] https://next-competition.github.io/RoverSoftware/apt stable main" \\
             | sudo tee /etc/apt/sources.list.d/roversoftware.list > /dev/null
           sudo apt-get update && sudo apt-get install roversoftware-robot
           \`\`\`
@@ -240,7 +240,7 @@ jobs:
 
           Verify anything with \`sha256sum -c SHA256SUMS\`.
 
-          Full handbook: <https://next-competition.github.io/roversoftware/>
+          Full handbook: <https://next-competition.github.io/RoverSoftware/>
           EOF
 
       - uses: softprops/action-gh-release@v3
@@ -258,8 +258,10 @@ jobs:
     needs: [version, debs, release]
     if: ${{ github.event_name == 'push' || inputs.publish_apt }}
     runs-on: ubuntu-latest
-    # Shares a lane with the docs deploy: both push to the same Pages repo, and
-    # two concurrent pushes to one branch is a lost commit.
+    permissions:
+      contents: write
+    # Shares a lane with the docs deploy: both push to the same gh-pages branch,
+    # and two concurrent pushes to one branch is a lost commit.
     concurrency:
       group: pages-site
       cancel-in-progress: false
@@ -274,38 +276,18 @@ jobs:
       - name: Install packaging tools
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils
 
-      - name: Check the deploy token exists
+      - name: Check out the site branch
         env:
-          TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -n "$TOKEN" ]; then echo "SITE_DEPLOY_TOKEN is set"; exit 0; fi
-          cat >&2 <<'MSG'
-          SITE_DEPLOY_TOKEN is not set on this repository, so there is no way to
-          push to NEXT-Competition/NEXT-Competition.github.io. Without this step
-          actions/checkout fails with the much less helpful
-          "Input required and not supplied: token".
-
-          To fix, once:
-            1. Create a fine-grained personal access token
-               https://github.com/settings/personal-access-tokens/new
-                 Resource owner:      NEXT-Competition
-                 Repository access:   NEXT-Competition/NEXT-Competition.github.io
-                 Permissions:         Contents -> Read and write
-            2. Add it here as a repository secret named SITE_DEPLOY_TOKEN
-               https://github.com/NEXT-Competition/RoverSoftware/settings/secrets/actions/new
-            3. Re-run this workflow.
-
-          Full setup notes: docs/src/reference/releasing.md
-          MSG
-          echo "::error::SITE_DEPLOY_TOKEN is not set — see the log above for the one-time setup"
-          exit 1
-
-      - name: Check out the site repo
-        uses: actions/checkout@v7
-        with:
-          repository: NEXT-Competition/NEXT-Competition.github.io
-          token: ${{ secrets.SITE_DEPLOY_TOKEN }}
-          path: site
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git clone --depth 1 --branch gh-pages "$remote" site 2>/dev/null; then
+            echo "cloned existing gh-pages"
+          else
+            echo "gh-pages does not exist yet — creating it"
+            mkdir site && git -C site init -q -b gh-pages
+            git -C site remote add origin "$remote"
+          fi
 
       - name: Import the signing key
         env:
@@ -329,32 +311,34 @@ jobs:
         run: |
           # Incremental on purpose: the existing pool comes along, the new
           # .debs are added, and every index is regenerated over all of it.
-          APT_ROOT="$PWD/site/roversoftware/apt" \
+          APT_ROOT="$PWD/site/apt" \
           GPG_KEY_ID="$GPG_KEY_ID" \
             ./packaging/apt-repo.sh debs/*.deb
 
       - name: Sanity-check what apt will see
         run: |
-          idx="site/roversoftware/apt/dists/stable/main/binary-arm64/Packages"
+          idx="site/apt/dists/stable/main/binary-arm64/Packages"
           test -s "$idx" || { echo "::error::empty package index"; exit 1; }
           grep -q "^Package: roversoftware-robot" "$idx" || {
             echo "::error::roversoftware-robot missing from the index"; exit 1; }
-          test -s "site/roversoftware/apt/dists/stable/InRelease" || {
+          test -s "site/apt/dists/stable/InRelease" || {
             echo "::error::Release was not signed"; exit 1; }
           echo "index holds $(grep -c '^Package:' "$idx") entries"
 
       - name: Publish
         working-directory: site
         run: |
-          git config user.name  "roversoftware-release[bot]"
-          git config user.email "noreply@github.com"
-          git add roversoftware/apt
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          touch .nojekyll
+          git add apt .nojekyll
           git diff --cached --quiet && { echo "nothing changed"; exit 0; }
-          git commit -m "apt: roversoftware ${{ needs.version.outputs.version }}"
-          # The docs job may have pushed between our checkout and now.
+          git commit -q -m "apt: roversoftware ${{ needs.version.outputs.version }}"
+          # The docs job may have pushed between our clone and now.
           for i in 1 2 3 4 5; do
-            git push && exit 0
+            git push -u origin gh-pages && exit 0
             echo "push rejected, rebasing (attempt $i)"
-            git pull --rebase --autostash origin HEAD && sleep $((i * 3))
+            git fetch origin gh-pages && git rebase --autostash origin/gh-pages
+            sleep $((i * 3))
           done
-          echo "::error::could not push to the site repo after 5 attempts"; exit 1
+          echo "::error::could not push gh-pages after 5 attempts"; exit 1

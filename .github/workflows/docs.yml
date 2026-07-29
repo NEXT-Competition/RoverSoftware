@@ -1,12 +1,15 @@
 name: docs
 
-# Builds the handbook with mdBook and publishes it to the org site at
-# https://next-competition.github.io/roversoftware/ .
+# Builds the handbook with mdBook and publishes it to
+# https://next-competition.github.io/RoverSoftware/ .
 #
-# The site lives in a DIFFERENT repository, so this pushes rather than using
-# actions/deploy-pages: only `roversoftware/` is touched, and the apt tree
-# underneath it is left alone (the release workflow owns that). See
-# docs/src/reference/releasing.md for the one-time setup.
+# Publishes to this repository's own `gh-pages` branch, which is why it needs
+# no secret: the built-in GITHUB_TOKEN can write here. The branch is also where
+# the apt repository lives (under apt/), owned by the release workflow, so this
+# job replaces everything EXCEPT that directory.
+#
+# One-time: Settings -> Pages -> Deploy from a branch -> gh-pages / (root).
+# See docs/src/reference/releasing.md.
 
 on:
   push:
@@ -21,7 +24,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # Pushing the built book to gh-pages, in this same repository.
+  contents: write
 
 env:
   MDBOOK_VERSION: "0.4.40"
@@ -88,62 +92,59 @@ jobs:
           name: book
           path: book
 
-      - name: Check the deploy token exists
+      - name: Check out the site branch
         env:
-          TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -n "$TOKEN" ]; then echo "SITE_DEPLOY_TOKEN is set"; exit 0; fi
-          cat >&2 <<'MSG'
-          SITE_DEPLOY_TOKEN is not set on this repository, so there is no way to
-          push to NEXT-Competition/NEXT-Competition.github.io. Without this step
-          actions/checkout fails with the much less helpful
-          "Input required and not supplied: token".
-
-          To fix, once:
-            1. Create a fine-grained personal access token
-               https://github.com/settings/personal-access-tokens/new
-                 Resource owner:      NEXT-Competition
-                 Repository access:   NEXT-Competition/NEXT-Competition.github.io
-                 Permissions:         Contents -> Read and write
-            2. Add it here as a repository secret named SITE_DEPLOY_TOKEN
-               https://github.com/NEXT-Competition/RoverSoftware/settings/secrets/actions/new
-            3. Re-run this workflow.
-
-          Full setup notes: docs/src/reference/releasing.md
-          MSG
-          echo "::error::SITE_DEPLOY_TOKEN is not set — see the log above for the one-time setup"
-          exit 1
-
-      - name: Check out the site repo
-        uses: actions/checkout@v7
-        with:
-          repository: NEXT-Competition/NEXT-Competition.github.io
-          token: ${{ secrets.SITE_DEPLOY_TOKEN }}
-          path: site
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # gh-pages does not exist until the first successful run, so fall back
+          # to creating it as an orphan rather than failing on a fresh repo.
+          if git clone --depth 1 --branch gh-pages "$remote" site 2>/dev/null; then
+            echo "cloned existing gh-pages"
+          else
+            echo "gh-pages does not exist yet — creating it"
+            mkdir site && git -C site init -q -b gh-pages
+            git -C site remote add origin "$remote"
+          fi
 
       - name: Replace the book, keep the apt repository
         run: |
-          mkdir -p site/roversoftware
-          # rsync rather than rm -rf: `apt/` lives under the same prefix and is
-          # owned by the release workflow. Deleting it here would unpublish
-          # every package between a docs push and the next release.
-          rsync -a --delete --exclude 'apt/' book/ site/roversoftware/
-          # Jekyll would otherwise eat mdBook's _static-ish paths and any
-          # directory starting with an underscore.
+          # rsync rather than rm -rf: apt/ sits on the same branch and is owned
+          # by the release workflow. Deleting it here would unpublish every
+          # package between a docs push and the next release.
+          #
+          # --checksum is load-bearing. rsync's default quick check skips a file
+          # whose size AND mtime match, and both sides here are minted seconds
+          # apart — git checkout stamps the clone, mdBook stamps the build — so
+          # any edit that leaves a page the same length would silently never
+          # deploy. Comparing content costs a hash over ~5 MB and is correct.
+          rsync -a --checksum --delete --exclude 'apt/' --exclude '.git/' book/ site/
+          # Without this, Jekyll eats any path starting with an underscore.
           touch site/.nojekyll
-          ls site/roversoftware | head
+          ls site | head
 
       - name: Publish
         working-directory: site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name  "roversoftware-docs[bot]"
-          git config user.email "noreply@github.com"
-          git add roversoftware .nojekyll
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
           git diff --cached --quiet && { echo "nothing changed"; exit 0; }
-          git commit -m "docs: roversoftware handbook @ ${GITHUB_SHA::7}"
+          git commit -q -m "docs: handbook @ ${GITHUB_SHA::7}"
           for i in 1 2 3 4 5; do
-            git push && exit 0
+            git push -u origin gh-pages && exit 0
             echo "push rejected, rebasing (attempt $i)"
-            git pull --rebase --autostash origin HEAD && sleep $((i * 3))
+            git fetch origin gh-pages && git rebase --autostash origin/gh-pages
+            sleep $((i * 3))
           done
-          echo "::error::could not push to the site repo after 5 attempts"; exit 1
+          echo "::error::could not push gh-pages after 5 attempts"; exit 1
+
+      - name: Where it landed
+        run: |
+          echo "### Handbook published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<https://next-competition.github.io/${GITHUB_REPOSITORY#*/}/>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If that 404s, enable it once: **Settings → Pages → Deploy from a branch → \`gh-pages\` / (root)**." >> "$GITHUB_STEP_SUMMARY"
