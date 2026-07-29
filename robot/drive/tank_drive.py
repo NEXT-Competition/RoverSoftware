@@ -29,9 +29,9 @@ class TankDrive:
     def __init__(self, config: DriveConfig):
         self.cfg = config
         self.left_1 = ESCMotor(config.left_1)
-        self.left_2 = ESCMotor(config.left_2)
+        # self.left_2 = ESCMotor(config.left_2)
         self.right_1 = ESCMotor(config.right_1)
-        self.right_2 = ESCMotor(config.right_2)
+        # self.right_2 = ESCMotor(config.right_2)
         self._cur_left = 0.0
         self._cur_right = 0.0
         self._last_update = None
@@ -39,9 +39,9 @@ class TankDrive:
     def arm(self) -> None:
         """Hold both ESCs at neutral so they arm before we accept commands."""
         self.left_1.stop()
-        self.left_2.stop()
+        # self.left_2.stop()
         self.right_1.stop()
-        self.right_2.stop()
+        # self.right_2.stop()
         if self.cfg.arm_seconds > 0:
             time.sleep(self.cfg.arm_seconds)
 
@@ -60,14 +60,14 @@ class TankDrive:
         self._cur_left = left
         self._cur_right = right
         self.left_1.set_throttle(left)
-        self.left_2.set_throttle(left)
+        # self.left_2.set_throttle(left)
         self.right_1.set_throttle(right)
-        self.right_2.set_throttle(right)
+        # self.right_2.set_throttle(right)
 
     def stop(self) -> None:
         self._cur_left = 0.0
         self._cur_right = 0.0
         self.left_1.stop()
-        self.left_2.stop()
+        # self.left_2.stop()
         self.right_1.stop()
-        self.right_2.stop()
+        # self.right_2.stop()
