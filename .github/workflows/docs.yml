@@ -30,11 +30,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache mdBook
         id: cache-mdbook
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/bin/mdbook
           key: mdbook-${{ env.MDBOOK_VERSION }}-${{ runner.os }}
@@ -66,7 +66,7 @@ jobs:
           [ "$missing" = 0 ] || exit 1
           echo "$(find docs/book -name '*.html' | wc -l) pages, $(du -sh docs/book | cut -f1)"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: book
           path: docs/book
@@ -83,13 +83,39 @@ jobs:
       group: pages-site
       cancel-in-progress: false
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: book
           path: book
 
+      - name: Check the deploy token exists
+        env:
+          TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then echo "SITE_DEPLOY_TOKEN is set"; exit 0; fi
+          cat >&2 <<'MSG'
+          SITE_DEPLOY_TOKEN is not set on this repository, so there is no way to
+          push to NEXT-Competition/NEXT-Competition.github.io. Without this step
+          actions/checkout fails with the much less helpful
+          "Input required and not supplied: token".
+
+          To fix, once:
+            1. Create a fine-grained personal access token
+               https://github.com/settings/personal-access-tokens/new
+                 Resource owner:      NEXT-Competition
+                 Repository access:   NEXT-Competition/NEXT-Competition.github.io
+                 Permissions:         Contents -> Read and write
+            2. Add it here as a repository secret named SITE_DEPLOY_TOKEN
+               https://github.com/NEXT-Competition/RoverSoftware/settings/secrets/actions/new
+            3. Re-run this workflow.
+
+          Full setup notes: docs/src/reference/releasing.md
+          MSG
+          echo "::error::SITE_DEPLOY_TOKEN is not set — see the log above for the one-time setup"
+          exit 1
+
       - name: Check out the site repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: NEXT-Competition/NEXT-Competition.github.io
           token: ${{ secrets.SITE_DEPLOY_TOKEN }}

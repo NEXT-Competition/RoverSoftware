@@ -57,9 +57,9 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -84,7 +84,7 @@ jobs:
             echo "=== $f"; dpkg-deb --info "$f" | sed -n '1,12p'
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: debs
           path: dist/*.deb
@@ -103,9 +103,9 @@ jobs:
           - { os: windows-latest, target: windows-x64 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
@@ -153,7 +153,7 @@ jobs:
           fi
           ls -la ../out
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.target }}
           path: out/*
@@ -164,8 +164,8 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -186,7 +186,7 @@ jobs:
 
       - run: pipx run build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: python
           path: dist/*
@@ -197,8 +197,8 @@ jobs:
     needs: [version, debs, desktop, python]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -243,7 +243,7 @@ jobs:
           Full handbook: <https://next-competition.github.io/roversoftware/>
           EOF
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version.outputs.version }}
           name: v${{ needs.version.outputs.version }}
@@ -264,9 +264,9 @@ jobs:
       group: pages-site
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: debs
           path: debs
@@ -274,8 +274,34 @@ jobs:
       - name: Install packaging tools
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils
 
+      - name: Check the deploy token exists
+        env:
+          TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then echo "SITE_DEPLOY_TOKEN is set"; exit 0; fi
+          cat >&2 <<'MSG'
+          SITE_DEPLOY_TOKEN is not set on this repository, so there is no way to
+          push to NEXT-Competition/NEXT-Competition.github.io. Without this step
+          actions/checkout fails with the much less helpful
+          "Input required and not supplied: token".
+
+          To fix, once:
+            1. Create a fine-grained personal access token
+               https://github.com/settings/personal-access-tokens/new
+                 Resource owner:      NEXT-Competition
+                 Repository access:   NEXT-Competition/NEXT-Competition.github.io
+                 Permissions:         Contents -> Read and write
+            2. Add it here as a repository secret named SITE_DEPLOY_TOKEN
+               https://github.com/NEXT-Competition/RoverSoftware/settings/secrets/actions/new
+            3. Re-run this workflow.
+
+          Full setup notes: docs/src/reference/releasing.md
+          MSG
+          echo "::error::SITE_DEPLOY_TOKEN is not set — see the log above for the one-time setup"
+          exit 1
+
       - name: Check out the site repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: NEXT-Competition/NEXT-Competition.github.io
           token: ${{ secrets.SITE_DEPLOY_TOKEN }}
