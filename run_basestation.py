@@ -14,7 +14,8 @@ configured via /etc/roversoftware/basestation.env), then CLI flags override:
     RS_XBEE_PORT, RS_XBEE_BAUD, RS_WEB_HOST, RS_WEB_PORT, RS_SIM,
     RS_SIM_ROBOTS, RS_SIM_ORIGIN, RS_NO_CONTROLLER, RS_TILES,
     RS_TILES_MBTILES, RS_TILES_UPSTREAM, RS_TILES_OFFLINE,
-    RS_DRIVE_HZ, RS_UI_HZ, RS_VIDEO_ENABLED, RS_VIDEO_PORT, RS_VIDEO_HZ
+    RS_DRIVE_HZ, RS_UI_HZ, RS_VIDEO_ENABLED, RS_VIDEO_PORT, RS_VIDEO_HZ,
+    RS_BULK_IP, RS_BULK_PORT
 
 ...and finally the dashboard's own saved settings (RS_BASE_SETTINGS) are loaded
 over the top: the gamepad mapping and the link/UI rates are editable from the
@@ -30,6 +31,7 @@ import uvicorn
 
 from basestation.app import build_app
 from basestation.fleet import FleetManager
+from basestation.places import PlaceStore
 from basestation.settings import SettingsStore
 
 # Aerial/satellite imagery is the useful basemap for driving a rover: you steer
@@ -96,6 +98,36 @@ def main():
                    help="UDP port the robots stream FPV video to")
     p.add_argument("--video-hz", type=float, default=float(_env("RS_VIDEO_HZ", 20)),
                    help="max MJPEG frame rate served to browsers")
+    # Bulk transfers (config snapshots, layouts, routines) over WiFi instead of
+    # the radio; see robot/comms/ip_link.py. Robots dial in, so this only needs
+    # the port. Robots that aren't connected keep using the radio, so leaving it
+    # on costs nothing.
+    p.add_argument("--no-bulk-ip", dest="bulk_ip", action="store_false",
+                   default=os.environ.get("RS_BULK_IP", "1").strip().lower()
+                   in ("1", "true", "yes", "on"),
+                   help="disable the WiFi bulk-transfer listener (everything on the radio)")
+    p.add_argument("--bulk-port", type=int, default=int(_env("RS_BULK_PORT", 5006)),
+                   help="TCP port robots connect to for config/layout/routine transfers")
+    # ---- commanding in words (basestation/command/) ----
+    # All optional. With no model server and no faster-whisper installed, the
+    # command view still recognises stop, rover names, modes and the camera by
+    # keyword — so none of these flags gate the base station starting.
+    p.add_argument("--no-voice", dest="voice", action="store_false",
+                   default=os.environ.get("RS_VOICE", "1").strip().lower()
+                   in ("1", "true", "yes", "on"),
+                   help="start with the command language model switched off "
+                        "(the keyword fast path still works, and it can be "
+                        "turned back on from the command view)")
+    p.add_argument("--llm-url", default=_env("RS_LLM_URL", "http://127.0.0.1:1234/v1"),
+                   help="OpenAI-compatible endpoint for the local command model "
+                        "(LM Studio's default is http://127.0.0.1:1234/v1)")
+    p.add_argument("--llm-model", default=_env("RS_LLM_MODEL", None),
+                   help="model id to use; default is whichever loaded model "
+                        "looks like a Gemma, else the first one")
+    p.add_argument("--stt-model", default=_env("RS_STT_MODEL", "base.en"),
+                   help="faster-whisper model for speech recognition "
+                        "(tiny.en | base.en | small.en). base.en is the default "
+                        "because tiny.en starts confusing rover numbers")
     args = p.parse_args()
 
     fleet = FleetManager()
@@ -108,6 +140,10 @@ def main():
         "base.video_hz": args.video_hz,
         "base.tiles": args.tiles,
     })
+
+    # Named field positions ("bucket A", "start"), captured from the map. Owned
+    # by the base station and shared by the whole fleet — see basestation/places.py.
+    places = PlaceStore()
 
     def on_msg(msg):
         fleet.handle(msg, time.monotonic())
@@ -140,16 +176,38 @@ def main():
         video_rx = VideoReceiver(port=args.video_port)
         print(f"[base] FPV video receiver on udp/{args.video_port}")
 
+    # Config snapshots, layouts and routine documents come in over WiFi from any
+    # robot that can reach us, and go back out the same way. Robots that can't
+    # are unaffected — their transfers stay on the radio. Not started under
+    # --sim: simulated robots are in-process and have no socket to dial in on.
+    ip_server = None
+    if args.bulk_ip and not args.sim:
+        from robot.comms.ip_link import IPServer
+        ip_server = IPServer(port=args.bulk_port, on_message=on_msg)
+
     # web_cfg now carries only what is fixed for the process's lifetime (the
     # tile cache is opened once); the live rates and the basemap URL come from
     # `settings`, which the dashboard can edit.
+    # The local command model. Constructed unconditionally and never contacted
+    # here: it is a separate application the operator may not have launched yet,
+    # and the base station coming up must not depend on it. The first health
+    # check happens in the background after startup (see build_app).
+    from basestation.command.llm import LMStudio
+    from basestation.command.stt import Transcriber
+    llm = LMStudio(args.llm_url, model=args.llm_model)
+    transcriber = Transcriber(model_name=args.stt_model)
+
     app = build_app(fleet, link, controller,
                     {"tiles_mbtiles": args.tiles_mbtiles,
                      "tiles_upstream": args.tiles_upstream,
                      "tiles_offline": args.tiles_offline,
-                     "tiles": args.tiles},
-                    video_rx=video_rx, settings=settings)
+                     "tiles": args.tiles,
+                     "voice": args.voice},
+                    video_rx=video_rx, settings=settings, ip_server=ip_server,
+                    places=places, llm=llm, transcriber=transcriber)
     print(f"[base] dashboard -> http://{args.host}:{args.web_port}")
+    print(f"[base] voice: model {args.llm_url} ({'on' if args.voice else 'off'}), "
+          f"speech {args.stt_model}")
     uvicorn.run(app, host=args.host, port=args.web_port, log_level="warning")
 
 

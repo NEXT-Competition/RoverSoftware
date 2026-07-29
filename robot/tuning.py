@@ -147,6 +147,9 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("comms.command_timeout", 0.05, 5),
     _t("comms.port", live=False),
     _i("comms.baud", 1200, 921600, live=False),
+    # WiFi bulk transfers. live=False because both open a socket at start-up.
+    _t("comms.base_host", live=False),
+    _i("comms.base_port", 1, 65535, live=False),
 
     # --- drive ---
     _f("drive.slew_rate", 0, 20),

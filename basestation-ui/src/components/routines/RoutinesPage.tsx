@@ -13,6 +13,8 @@ import { refreshLayout } from "../../state/hardware.ts";
 import { configTarget, targetRobot } from "../../state/settings.ts";
 import {
   addRoutine,
+  exportRoutines,
+  importRoutines,
   current,
   discardRoutines,
   duplicateRoutine,
@@ -34,6 +36,7 @@ import {
   stopRoutine,
 } from "../../state/routines.ts";
 import { Inspector } from "./Inspector.tsx";
+import { TemplatePicker } from "./TemplatePicker.tsx";
 import { RoutineCanvas } from "./RoutineCanvas.tsx";
 
 function RunBar() {
@@ -96,6 +99,20 @@ export function RoutinesPage() {
   const routine = current.value;
   const result = routinesResult.value;
   const found = problems.value;
+  const [importError, setImportError] = useState<string | null>(null);
+
+  /** Read a picked file into the draft. The robot stays the authority on what
+   *  is legal — this only rejects a file that isn't a routine document at all,
+   *  because that would corrupt the draft rather than be refused on save. */
+  async function onImport(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    setImportError(importRoutines(await file.text()));
+    // Clear it so picking the SAME file again still fires a change event —
+    // otherwise a failed import can't be retried without switching files.
+    input.value = "";
+  }
 
   useEffect(() => {
     if (rid && !documents?.routines_rev && conn.value === "live") refreshRoutines();
@@ -200,8 +217,30 @@ export function RoutinesPage() {
             Delete
           </button>
         </div>
+        {/* Saving puts routines on the ROBOT, which is what makes them survive a
+            power cycle. These are the other half a competition needs: a file to
+            put in git, hand to another team, or restore onto a fresh SD card. */}
+        <div class="settings-bar-group">
+          <button
+            type="button"
+            class="btn ghost small"
+            disabled={all.length === 0}
+            onClick={exportRoutines}
+          >
+            Export
+          </button>
+          <label class="btn ghost small file-btn">
+            Import
+            <input
+              type="file"
+              accept="application/json,.json"
+              onChange={onImport}
+            />
+          </label>
+        </div>
       </div>
 
+      {importError && <p class="banner error">{importError}</p>}
       {result && !result.ok && (
         <p class="banner error">
           The robot refused these routines:<br />{result.errors.join(" · ")}
@@ -211,11 +250,9 @@ export function RoutinesPage() {
 
       {!routine
         ? (
-          <p class="hint pad">
-            {documents?.routines_rev
-              ? "No routines yet. “New” gives you a two-state skeleton to build on."
-              : `Fetching ${rid}'s routines…`}
-          </p>
+          documents?.routines_rev
+            ? <TemplatePicker />
+            : <p class="hint pad">Fetching {rid}'s routines…</p>
         )
         : (
           <>

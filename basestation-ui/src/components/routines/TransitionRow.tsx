@@ -56,7 +56,7 @@ export function TransitionRow(
         args={spec?.args ?? []}
         values={transition as Record<string, unknown>}
         states={states}
-        onChange={(key, value) => onChange({ ...transition, [key]: value })}
+        onChange={(patch) => onChange({ ...transition, ...patch })}
       />
 
       <label class="arg">

@@ -2,7 +2,7 @@
 
 How the whole system works, end to end: the tank-drive robot, the base-station
 dashboard, the radio protocol, GPS waypoint autonomy, and offline maps. For
-usage/quick-start see the top-level [`README.md`](../README.md); for a visual
+usage/quick-start see the top-level [`README.md`](https://github.com/NEXT-Competition/RoverSoftware/blob/main/README.md); for a visual
 walkthrough of the navigation algorithm open
 [`docs/waypoint-navigation.html`](./waypoint-navigation.html).
 
@@ -24,6 +24,7 @@ walkthrough of the navigation algorithm open
 5. [Wire protocol](#5-wire-protocol-xbee)
 6. [GPS waypoint autonomy](#6-gps-waypoint-autonomy)
 7. [The base station](#7-the-base-station)
+7b. [Commanding in words: voice, and MCP](#7b-commanding-in-words-voice-and-mcp)
 8. [Offline maps](#8-offline-maps)
 9. [Threading model](#9-threading-model)
 10. [Configuration reference](#10-configuration-reference-env-vars)
@@ -536,6 +537,34 @@ call from the main loop while the reader thread runs). Transient read errors are
 logged and skipped so the link survives glitches. To move to API-mode XBee you'd
 swap the transport internals; the `start/stop/send + on_message` interface stays.
 
+**`ip_link.py` — bulk transfers over WiFi.** The radio is the *control* link:
+drive, telemetry, mode, e-stop. Config snapshots, layouts and routine documents
+are none of those — they're bulky, bursty and not realtime — and a ~2.9 KB
+snapshot is roughly half a second of exclusive airtime on a channel shared with
+every robot, during which telemetry frames are the ones `XBeeLink.send` drops.
+So that traffic rides a TCP socket over the same WiFi the FPV video already uses:
+
+```
+robot                                     base station
+IPLink(comms.base_host, 5006)  --TCP-->   IPServer(5006)
+```
+
+Same `protocol.py` framing, so a `config` frame is the identical dict whichever
+way it travelled and `FleetManager` can't tell the difference. The robot **dials
+out** (mirroring the video path, and avoiding having to discover a rover's
+address on a DHCP field network); the base station keys sockets by the `from` on
+anything a robot sends, plus a `hello` on connect so the mapping exists before
+the first document push.
+
+**The fallback is the design.** `send()` returns a *bool* rather than raising:
+`False` means "not connected — you send it". So `comms.base_host` being blank, a
+base station that isn't up, and a rover driving out of WiFi range all degrade to
+exactly the pre-existing radio behaviour, decided per frame. Only the pacing
+changes with it — `Robot._drain_outbox` meters frames onto the radio at
+`OUTBOX_PER_TICK`, but empties the whole queue over WiFi, because there's no
+airtime to protect. A config snapshot that took ~100 ms of paced ticks lands in
+one.
+
 ### 4.6 Sensors
 
 **`gps.py` — Adafruit Ultimate GPS reader.** See [§6](#6-gps-waypoint-autonomy).
@@ -548,6 +577,12 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 `"all"`); robots stamp telemetry with `from`. The base station's baud
 (`basestation.env`, default **57600**) **must match each robot's** `RS_XBEE_BAUD`
 — a mismatch delivers only garbage frames.
+
+> The same message set also travels over WiFi when both ends are configured for
+> it, but only the bulk half: `config`, `fields`, `layout`, `routines` and their
+> `put_*`/`*_result` counterparts. Realtime frames — `drive`, `telemetry`,
+> `mode`, `estop` — never leave the radio, because the radio is what has the
+> range. See [§4.5](#45-comms-layer).
 
 ```jsonc
 // base station -> robot
@@ -982,6 +1017,122 @@ a debugger rather than only an editor.
 
 ---
 
+## 7b. Commanding in words: voice, and MCP
+
+`basestation/command/` turns a spoken or typed sentence into the same actions a
+dashboard button produces, and `basestation/mcp_server.py` exposes those same
+actions to any MCP client. Both faces, one throat.
+
+```
+  microphone ──16 kHz PCM over /ws──┐
+                                    ▼
+  typed order ──────────────► CommandExecutor ──► handle_action() ──► radio
+                                    ▲                 (app.py)
+  MCP client ──ws /ws─────── ───────┘
+```
+
+### Why everything converges on one executor
+
+Not tidiness — **authority**. `CommandExecutor` is where the whitelist, the
+confirmation gate and the audit log live. A path that reached the radio some
+other way would need its own copy of all three, and a second copy is a second
+thing to get wrong. So voice, typed text and MCP all end at
+`handle_action()`, which means **commanding by voice or by AI has exactly the
+dashboard's authority and no more**. `tests/test_command_bridge.py` asserts that
+a spoken order and the equivalent button produce byte-identical radio traffic.
+
+### The three-stage pipeline
+
+| Stage | Module | What it does |
+|---|---|---|
+| Speech → text | `command/stt.py` | faster-whisper, on this machine |
+| Text → intent | `command/fastpath.py`, `command/llm.py` | keyword first, then a local model |
+| Intent → actions | `command/intents.py`, `command/executor.py` | validate, gate, dispatch |
+
+**`stt.py`.** The browser sends **raw 16 kHz mono s16le PCM** with no container
+(`basestation-ui/src/net/audio.ts` does the conversion in an AudioWorklet). That
+means no ffmpeg, no PyAV and no Opus decoder on a Raspberry Pi — the browser
+already has a resampler, so asking its `AudioContext` for Whisper's native rate
+costs nothing and deletes the entire decoding problem. Push-to-talk, never VAD:
+in a pit with three teams shouting, voice activity detection invents commands
+nobody gave, and an invented command is a moving robot.
+
+**`fastpath.py`.** Matched *before* the model is consulted. Two reasons, and only
+the first matters: **stopping must not depend on LM Studio being open**. A hit
+dispatches with no HTTP request at all. The everyday commands — a rover name, a
+bare mode, the camera — are here too, because they are effectively buttons and
+should not cost a 700 ms round trip. Every rule must be *certain*; anything
+ambiguous returns `None` and falls through to the model.
+
+**`llm.py`.** The model's entire job is **classification**: given a sentence and
+the live vocabulary, name one intent and fill in its arguments. It never sees the
+wire protocol and its output is never trusted. LM Studio's `json_schema` response
+format constrains the sampler to the registry's intent names, with a fallback to
+prompted JSON for servers that lack it.
+
+**`vocabulary.py`.** Built fresh per command from the fleet and the place store,
+so a rover that came online two seconds ago is addressable in the next sentence.
+It also resolves what was *said* into what *exists* — "rover two" → `rover2`,
+"bucket a" → the saved place — and **refuses rather than guessing**: "bucket"
+with both a bucket A and a bucket B saved resolves to nothing, because a rover
+driving to the wrong end of the field is worse than being asked to repeat
+yourself.
+
+### Authority, and the confirmation gate
+
+`intents.py` is the security boundary. Every intent carries an `Authority`:
+
+- **`ALWAYS`** — e-stop. Ungated, and matched by keyword before the model is
+  asked anything, so a model that is slow, wrong, or not running cannot delay a
+  stop.
+- **`DIRECT`** — selecting, mode changes, routes, cameras, and *every action that
+  makes something safer* (disarm, stop-routine, clear-estop). Reversible, and an
+  operator who must confirm every mode change stops using their voice.
+- **`CONFIRM`** — firing, arming, jogging, raw drive. These return a pending
+  request and a card a human taps. They expire after 45 s, so a stale "fire?"
+  from an earlier match cannot be tapped by somebody tidying up.
+
+The model never decides this. It names an intent; the registry decides what that
+intent is allowed to do.
+
+### MCP
+
+`basestation/mcp_server.py` is a stdio JSON-RPC server that connects to the
+bridge over the **same WebSocket the dashboard uses**. It goes through the front
+door on purpose: an endpoint mounted inside FastAPI would have been a second path
+into the fleet with a second set of rules.
+
+Its tool list is **generated from `INTENTS`**, so an intent added for voice
+reaches every MCP client with the same authority automatically, and a `CONFIRM`
+intent's tool says so in its description. It has no `mcp` SDK dependency —
+MCP over stdio is newline-delimited JSON-RPC, which costs about a hundred lines
+here and keeps a dependency list that has to install on a Pi exactly as long as
+it was.
+
+```json
+{"mcpServers": {"rover": {
+  "command": "python", "args": ["-m", "basestation.mcp_server"],
+  "env": {"RS_BASE_WS": "ws://127.0.0.1:8000/ws"}}}}
+```
+
+### Degrading honestly
+
+Every piece is optional and each absence is *reported*, never hidden:
+
+| Missing | What still works |
+|---|---|
+| LM Studio not running | stop, rover names, modes, camera (fast path); typing; MCP |
+| faster-whisper not installed | everything except the microphone |
+| Neither | typed orders and MCP, plus the whole fast path |
+
+A base station whose voice stack is half-installed still comes up, still drives,
+and still stops. Warm-up (loading ~150 MB of Whisper weights, pinging the model
+server) runs on a background task after startup, because a base station that
+won't accept a teleop connection while it loads a speech model is one that misses
+its match.
+
+---
+
 ## 8. Offline maps
 
 So the dashboard's map works with no internet (field use). Hybrid by default:
@@ -1038,6 +1189,7 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
+| `RS_BASE_HOST` / `RS_BASE_PORT` | *(blank)* / `5006` | Base station host for WiFi bulk transfers (config, layouts, routines). Blank keeps everything on the radio; unreachable falls back to it per frame. |
 | `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint` \| `routine`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |
@@ -1178,3 +1330,21 @@ GPS exists.
 - **Jog has its own failsafe** — the bench-test control is refused unless the
   robot is in teleop with no e-stop latched, and every jog expires after 0.4 s so
   a dropped command can't leave a motor running.
+- **A language model cannot invent a command.** It names an intent from a fixed
+  registry; `intents.py` then rebuilds the command from validated pieces. An
+  unknown intent, an unknown rover or an unsaved place is refused, never
+  forwarded hopefully ([§7b](#7b-commanding-in-words-voice-and-mcp)).
+- **Stopping never goes through the model.** "Stop" and its synonyms are matched
+  on the raw transcript before any HTTP request, so a model that is closed,
+  slow or wrong cannot sit between the word and the rover.
+- **Firing, arming, jogging and raw drive need a human**, whoever asked —
+  operator, voice, or an AI over MCP. They return a pending confirmation that
+  expires after 45 s and can be used exactly once.
+- **Every order is logged with its source.** With voice, MCP and two tablets all
+  able to command one fleet, "why did rover2 just turn" needs an answer, and
+  "an AI did that" is the first half of it.
+- **The screen cannot disagree with the base station about who is selected.**
+  The dashboard owns its selection locally so a tap feels instant, so a spoken
+  "rover three" carries an explicit UI step alongside the radio one — an
+  operator driving a rover the screen says they are not driving is the worst
+  outcome this feature could produce.

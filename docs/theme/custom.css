@@ -1,0 +1,306 @@
+/* RoverSoftware handbook — the console's own design system, applied to mdBook.
+ *
+ * The tokens below are lifted from basestation-ui/src/styles/theme.css, and
+ * the grammar it defines is kept intact:
+ *
+ *   · TEAL is the tape. It marks the one thing you are currently on, and
+ *     nothing else. Never a state, never body type.
+ *   · AMBER is the plan — anything proposed but not yet carried out.
+ *   · The three flags (ok / warn / danger) say how a machine IS, so here they
+ *     are reserved for notes about the robot's behaviour.
+ *
+ * mdBook's theme picker is hard-coded to its five built-in themes, so this
+ * does not invent a sixth: it re-skins `coal` (the darkest of them) as the
+ * console rendition and makes it the default. The picker keeps working, and
+ * `light` stays available for anyone reading in the sun — mdBook's own light
+ * theme already does what the dashboard calls `daylight`.
+ */
+
+:root {
+  --sidebar-width: 15rem;
+  --page-padding: 20px;
+  --content-max-width: 900px;
+  --menu-bar-height: 50px;
+}
+
+.coal {
+  --bg: #07090a;
+  --fg: #e9f1f1;
+
+  --sidebar-bg: #0f1416;
+  --sidebar-fg: #9aacae;
+  --sidebar-non-existant: #5e6d70;
+  --sidebar-active: #2ee6c5;
+  --sidebar-spacer: rgba(150, 180, 184, 0.14);
+
+  --scrollbar: #2a3437;
+
+  --icons: #7d9094;
+  --icons-hover: #e9f1f1;
+
+  --links: #2ee6c5;
+
+  --inline-code-color: #e9f1f1;
+
+  --theme-popup-bg: #0f1416;
+  --theme-popup-border: rgba(150, 180, 184, 0.3);
+  --theme-hover: #1b2427;
+
+  --quote-bg: #101a1c;
+  --quote-border: #2ee6c5;
+
+  --warning-border: #f5b43f;
+
+  --table-border-color: rgba(150, 180, 184, 0.22);
+  --table-header-bg: #171e20;
+  --table-alternate-bg: #0c1113;
+
+  --searchbar-border-color: rgba(150, 180, 184, 0.3);
+  --searchbar-bg: #171e20;
+  --searchbar-fg: #e9f1f1;
+  --searchbar-shadow-color: rgba(0, 0, 0, 0.6);
+  --searchresults-header-fg: #7d9094;
+  --searchresults-border-color: rgba(150, 180, 184, 0.22);
+  --searchresults-li-bg: #0f1416;
+  --search-mark-bg: rgba(240, 165, 58, 0.35);
+
+  --color-scheme: dark;
+
+  /* Extras this stylesheet uses. */
+  --tape: #2ee6c5;
+  --plan: #f0a53a;
+  --danger: #ff4256;
+  --hairline: rgba(150, 180, 184, 0.14);
+  --panel: #0f1416;
+  --well: #171e20;
+  --muted: #9aacae;
+  --faint: #7d9094;
+}
+
+/* The stock light themes get the extras too, so nothing below renders as an
+   unset custom property when someone switches. */
+.light, .rust {
+  --tape: #0b8d75;
+  --plan: #a8590a;
+  --danger: #c41626;
+  --hairline: rgba(20, 22, 15, 0.14);
+  --panel: #fbfbf8;
+  --well: #f1f1ec;
+  --muted: #4e5449;
+  --faint: #666c5f;
+}
+.navy, .ayu {
+  --tape: #2ee6c5;
+  --plan: #f0a53a;
+  --danger: #ff4256;
+  --hairline: rgba(150, 180, 184, 0.14);
+  --panel: rgba(255, 255, 255, 0.03);
+  --well: rgba(255, 255, 255, 0.05);
+  --muted: #9aacae;
+  --faint: #7d9094;
+}
+
+/* ── type ────────────────────────────────────────────────────────────────
+   Archivo and JetBrains Mono, vendored under src/fonts/ so the book renders
+   identically offline — the same "no CDN" constraint the dashboard has. */
+
+@font-face {
+  font-family: "Archivo Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("../fonts/archivo-latin-wght-normal.woff2") format("woff2-variations");
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+html {
+  font-family: "Archivo Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+code, pre, kbd, .mono {
+  font-family: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+  font-variant-ligatures: none;
+}
+
+.content { font-size: 1rem; line-height: 1.62; }
+.content h1, .content h2, .content h3, .content h4 {
+  text-wrap: balance;
+  letter-spacing: -0.022em;
+  line-height: 1.15;
+}
+.content h1 { font-weight: 800; letter-spacing: -0.03em; }
+.content h2 { font-weight: 750; margin-top: 2.4em; }
+.content h3 { font-weight: 700; margin-top: 1.9em; }
+.content p, .content li { max-width: 68ch; }
+/* …but a paragraph that only holds a screenshot is not prose, and the measure
+   would shrink every screenshot to reading width. */
+.content p:has(> img) { max-width: none; }
+
+/* ── the sidebar: an instrument rail ─────────────────────────────────────── */
+
+.sidebar .sidebar-scrollbox { padding: 12px 12px 40px; }
+
+.chapter li.chapter-item {
+  line-height: 1.5;
+  margin-top: 2px;
+}
+.chapter li.chapter-item a { padding: 5px 10px; border-radius: 6px; }
+.chapter li.chapter-item a.active {
+  color: var(--tape);
+  font-weight: 650;
+  background: rgba(46, 230, 197, 0.07);
+}
+.chapter li.part-title {
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 26px 0 6px;
+  padding-left: 10px;
+}
+.chapter li.spacer { margin: 14px 0; }
+
+/* ── content furniture ───────────────────────────────────────────────────── */
+
+.content a { text-underline-offset: 3px; }
+
+.content img {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 1.6em 0 0.7em;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  box-shadow: 0 16px 32px -22px rgba(0, 0, 0, 0.9);
+}
+
+/* The italic paragraph immediately after a screenshot is its caption. Scoped
+   with :has() so a chapter's italic subtitle is left as ordinary prose. */
+.content p:has(> img) + p > em:only-child {
+  display: block;
+  font-family: "JetBrains Mono Variable", monospace;
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--faint);
+  max-width: 78ch;
+}
+
+.content blockquote {
+  background: var(--panel);
+  border-left: 3px solid var(--plan);
+  border-top: 1px solid var(--hairline);
+  border-right: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 1em 1.2em;
+  margin: 1.6em 0;
+}
+.content blockquote > :first-child { margin-top: 0; }
+.content blockquote > :last-child { margin-bottom: 0; }
+.content blockquote strong:first-child { color: var(--plan); }
+
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.4em 0;
+  font-size: 0.92rem;
+  display: table;
+}
+.content table thead th {
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-align: left;
+  white-space: nowrap;
+}
+.content table td, .content table th {
+  padding: 10px 14px;
+  border: 1px solid var(--table-border-color);
+  vertical-align: top;
+}
+.content table td code { white-space: pre-wrap; }
+/* Wide tables scroll inside their own box rather than the page. */
+.table-wrapper { overflow-x: auto; }
+
+.content pre {
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 2px;
+}
+.content pre > code { font-size: 0.83rem; line-height: 1.7; }
+.content :not(pre) > code {
+  padding: 0.12em 0.4em;
+  border-radius: 6px;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  font-size: 0.875em;
+}
+
+.content kbd {
+  font-size: 0.8em;
+  padding: 0.15em 0.45em;
+  border-radius: 6px;
+  background: var(--well);
+  border: 1px solid var(--table-border-color);
+  box-shadow: 0 1px 0 var(--table-border-color);
+}
+
+/* Definition lists carry the field-by-field reference in the Hardware and
+   Routines chapters. */
+.content dl { margin: 1.3em 0; }
+.content dt {
+  font-family: "JetBrains Mono Variable", monospace;
+  font-size: 0.86rem;
+  font-weight: 600;
+  margin-top: 1.1em;
+}
+.content dd {
+  margin: 0.25em 0 0 0;
+  padding-left: 1.1em;
+  border-left: 2px solid var(--hairline);
+  color: var(--muted);
+  max-width: 72ch;
+}
+
+/* ── the landing page ────────────────────────────────────────────────────── */
+
+.hero { margin: 0.5em 0 2em; }
+.hero h1 {
+  font-size: clamp(2.1rem, 5vw, 3.2rem);
+  margin-bottom: 0.5em;
+}
+.hero .tape { color: var(--tape); }
+.hero p { font-size: 1.1rem; color: var(--muted); max-width: 58ch; }
+
+.quick-links {
+  margin: 2em 0;
+  padding: 1.2em 1.4em;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  line-height: 2.1;
+}
+.quick-links p { max-width: none; margin: 0; }
+
+/* ── print ───────────────────────────────────────────────────────────────── */
+
+@media print {
+  .content img { break-inside: avoid; box-shadow: none; }
+  .content table { break-inside: avoid; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

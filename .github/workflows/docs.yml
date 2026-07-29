@@ -1,0 +1,150 @@
+name: docs
+
+# Builds the handbook with mdBook and publishes it to
+# https://next-competition.github.io/RoverSoftware/ .
+#
+# Publishes to this repository's own `gh-pages` branch, which is why it needs
+# no secret: the built-in GITHUB_TOKEN can write here. The branch is also where
+# the apt repository lives (under apt/), owned by the release workflow, so this
+# job replaces everything EXCEPT that directory.
+#
+# One-time: Settings -> Pages -> Deploy from a branch -> gh-pages / (root).
+# See docs/src/reference/releasing.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  # Pushing the built book to gh-pages, in this same repository.
+  contents: write
+
+env:
+  MDBOOK_VERSION: "0.4.40"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache mdBook
+        id: cache-mdbook
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/bin/mdbook
+          key: mdbook-${{ env.MDBOOK_VERSION }}-${{ runner.os }}
+
+      - name: Install mdBook
+        if: steps.cache-mdbook.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          url="https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" | tar -xz -C ~/.local/bin
+          chmod +x ~/.local/bin/mdbook
+
+      - name: Build
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          mdbook --version
+          mdbook build docs
+
+      - name: Check what was built
+        run: |
+          test -f docs/book/index.html || { echo "::error::no index.html"; exit 1; }
+          # Every screenshot referenced by a chapter has to have been copied.
+          missing=0
+          for f in docs/src/img/*.webp; do
+            b=$(basename "$f")
+            [ -f "docs/book/img/$b" ] || { echo "::error::img/$b missing from the build"; missing=1; }
+          done
+          [ "$missing" = 0 ] || exit 1
+          echo "$(find docs/book -name '*.html' | wc -l) pages, $(du -sh docs/book | cut -f1)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: book
+          path: docs/book
+          if-no-files-found: error
+
+  deploy:
+    # Pull requests build but do not publish.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    # Shares a lane with the release workflow's apt job: both push to the same
+    # Pages repo, and two concurrent pushes to one branch is a lost commit.
+    concurrency:
+      group: pages-site
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: book
+          path: book
+
+      - name: Check out the site branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # gh-pages does not exist until the first successful run, so fall back
+          # to creating it as an orphan rather than failing on a fresh repo.
+          if git clone --depth 1 --branch gh-pages "$remote" site 2>/dev/null; then
+            echo "cloned existing gh-pages"
+          else
+            echo "gh-pages does not exist yet — creating it"
+            mkdir site && git -C site init -q -b gh-pages
+            git -C site remote add origin "$remote"
+          fi
+
+      - name: Replace the book, keep the apt repository
+        run: |
+          # rsync rather than rm -rf: apt/ sits on the same branch and is owned
+          # by the release workflow. Deleting it here would unpublish every
+          # package between a docs push and the next release.
+          #
+          # --checksum is load-bearing. rsync's default quick check skips a file
+          # whose size AND mtime match, and both sides here are minted seconds
+          # apart — git checkout stamps the clone, mdBook stamps the build — so
+          # any edit that leaves a page the same length would silently never
+          # deploy. Comparing content costs a hash over ~5 MB and is correct.
+          rsync -a --checksum --delete --exclude 'apt/' --exclude '.git/' book/ site/
+          # Without this, Jekyll eats any path starting with an underscore.
+          touch site/.nojekyll
+          ls site | head
+
+      - name: Publish
+        working-directory: site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "nothing changed"; exit 0; }
+          git commit -q -m "docs: handbook @ ${GITHUB_SHA::7}"
+          for i in 1 2 3 4 5; do
+            git push -u origin gh-pages && exit 0
+            echo "push rejected, rebasing (attempt $i)"
+            git fetch origin gh-pages && git rebase --autostash origin/gh-pages
+            sleep $((i * 3))
+          done
+          echo "::error::could not push gh-pages after 5 attempts"; exit 1
+
+      - name: Where it landed
+        run: |
+          echo "### Handbook published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<https://next-competition.github.io/${GITHUB_REPOSITORY#*/}/>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If that 404s, enable it once: **Settings → Pages → Deploy from a branch → \`gh-pages\` / (root)**." >> "$GITHUB_STEP_SUMMARY"

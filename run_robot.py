@@ -6,7 +6,8 @@
 Defaults are read from the environment first (so the systemd service can be
 configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
 
-    RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_START_MODE, RS_LOOP_HZ,
+    RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_BASE_HOST, RS_BASE_PORT,
+    RS_START_MODE, RS_LOOP_HZ,
     RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD/RATE_MS, RS_HEADING_SOURCE,
     RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
@@ -65,6 +66,15 @@ def main():
                         help="XBee serial port")
     parser.add_argument("--baud", type=int,
                         default=int(os.environ.get("RS_XBEE_BAUD", cfg.comms.baud)))
+    # Bulk transfers over WiFi (config snapshots, layouts, routines). Falls back
+    # to the radio whenever the base station isn't reachable, so this is safe to
+    # set permanently; see robot/comms/ip_link.py.
+    parser.add_argument("--base-host",
+                        default=os.environ.get("RS_BASE_HOST", cfg.comms.base_host),
+                        help="base station host for WiFi bulk transfers (blank = radio only)")
+    parser.add_argument("--base-port", type=int,
+                        default=int(os.environ.get("RS_BASE_PORT", cfg.comms.base_port)),
+                        help="base station TCP port for WiFi bulk transfers")
     parser.add_argument("--mode", default=os.environ.get("RS_START_MODE", cfg.start_mode),
                         choices=["teleop", "object_align", "shooter_align",
                                  "waypoint", "routine"])
@@ -151,6 +161,8 @@ def main():
     cfg.robot_id = args.robot_id
     cfg.comms.port = args.port
     cfg.comms.baud = args.baud
+    cfg.comms.base_host = args.base_host
+    cfg.comms.base_port = args.base_port
     cfg.start_mode = args.mode
     cfg.loop_hz = args.hz
     cfg.telemetry_hz = args.telemetry_hz
@@ -260,10 +272,12 @@ def main():
             vision += f" [{cfg.vision.target_label}]"
     fpv = f"{cfg.fpv.base_host}:{cfg.fpv.base_port}" if cfg.fpv.enabled else "off"
     shooter = f"ch{cfg.shooter.channel}" if cfg.shooter.enabled else "off"
+    bulk = (f"{cfg.comms.base_host}:{cfg.comms.base_port}"
+            if cfg.comms.base_host else "radio")
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "
           f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} "
           f"heading={cfg.heading_source} vision={vision} "
-          f"fpv={fpv} shooter={shooter}")
+          f"fpv={fpv} shooter={shooter} bulk={bulk}")
     Robot(cfg).run()
 
 

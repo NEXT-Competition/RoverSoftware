@@ -1,7 +1,13 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
 [project]
 name = "roversoftware"
+# Bumped by the release workflow from the git tag; the value here is the
+# development default, so a local `pip install -e .` still works.
 version = "0.1.0"
-description = "Add your description here"
+description = "Ground-robot stack and fleet base station: XBee teleop, GPS and vision autonomy, and a dashboard that declares the hardware and programs the behaviour"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -46,6 +52,41 @@ convert = [
     "pillow>=10.0",         # representative-dataset image loading
     "ultralytics>=8.3",
 ]
+
+[project.scripts]
+# The same two names the systemd units use, so `pip install roversoftware` and
+# `apt install roversoftware-robot` give you the same command.
+roversoftware-robot = "run_robot:main"
+roversoftware-basestation = "run_basestation:main"
+
+[project.urls]
+Homepage = "https://github.com/NEXT-Competition/RoverSoftware"
+Documentation = "https://next-competition.github.io/RoverSoftware/"
+
+[tool.hatch.build.targets.wheel]
+# There is no src/ layout: the two packages and the two entry points sit at the
+# repo root, and the .deb copies them verbatim to /opt. The wheel mirrors that
+# rather than inventing a second arrangement.
+#
+# only-include, not include: `include` ADDS to hatchling's default selection,
+# which sweeps up packaging/ and anything else at the root. This is an
+# allowlist.
+only-include = ["robot", "basestation", "run_robot.py", "run_basestation.py"]
+
+[tool.hatch.build.targets.sdist]
+# Also an allowlist, for the same reason — and because the default selection
+# reaches into basestation-ui/node_modules, which is 120 files of nobody's
+# business. The UI's *source* is included; its dependencies are not.
+only-include = [
+    "robot", "basestation", "tools", "packaging", "tests", "docs",
+    "basestation-ui/src", "basestation-ui/server", "basestation-ui/public",
+    "basestation-ui/package.json", "basestation-ui/package-lock.json",
+    "basestation-ui/deno.json", "basestation-ui/tsconfig.json",
+    "basestation-ui/vite.config.ts", "basestation-ui/index.html",
+    "run_robot.py", "run_basestation.py", "start-basestation.sh",
+    "Justfile", "requirements.txt", "README.md",
+]
+exclude = ["docs/book", "**/__pycache__", "**/*.pyc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

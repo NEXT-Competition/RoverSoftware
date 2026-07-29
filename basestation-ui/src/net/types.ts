@@ -288,13 +288,136 @@ export interface SettingsMessage {
   } | null;
   configs: Record<string, RobotConfigEntry>; // by robot_id
   documents: Record<string, RobotDocuments>; // by robot_id
+  /** Named field positions, shared by the whole fleet (basestation/places.py). */
+  places: Place[];
+  places_result: PlacesResult | null;
   gamepad: GamepadState | null;
+}
+
+/** What a place is, so the map can draw it differently and an operator can
+ *  find the buckets among the markers. Mirrors basestation/places.py::KINDS. */
+export type PlaceKind = "bucket" | "marker" | "start" | "hazard";
+
+/** A point somebody stood a rover on and named.
+ *
+ *  Fleet property, not robot property: the whole point is that one rover is
+ *  driven up to a bucket in teleop and every OTHER rover can then use where it
+ *  was. They live on the base station and are resolved into plain lat/lon when
+ *  a routine is saved, so a robot never has to learn the word. */
+export interface Place {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  kind: PlaceKind;
+}
+
+/** Outcome of the last set_places — which entries the bridge refused, and
+ *  whether the file was written. Same shape idea as settings_result. */
+export interface PlacesResult {
+  count: number;
+  rejected: Record<string, string>;
+  save_error: string | null;
 }
 
 /** Streamed at ui_hz, but only to clients that asked (watch_gamepad). */
 export interface GamepadMessage {
   type: "gamepad";
   gamepad: GamepadState | null;
+}
+
+// ---- Commanding by voice, by typing, or from an AI over MCP. ----
+// Mirrors basestation/command/executor.py. Event-driven rather than a channel:
+// these frames go out when somebody says something, and are silent otherwise.
+
+/** What became of one order. `status` is the whole story:
+ *  done — it was dispatched; pending — a human has to approve it;
+ *  refused — it was understood and rejected (unknown rover, no such place);
+ *  unheard — nothing recognisable was said; error — the model or mic failed.
+ *
+ *  `refused` and `unheard` are deliberately distinct: "you may not do that" and
+ *  "I didn't understand you" call for different things from the operator. */
+export interface CommandOutcome {
+  status: "done" | "pending" | "refused" | "unheard" | "error";
+  say: string;
+  intent: string | null;
+  args: Record<string, unknown>;
+  /** Exactly what was (or would be) dispatched — the operator's proof that the
+   *  sentence and the command agree. Entries with a `ui` key never leave the
+   *  base station; they move this screen (see applyUiActions in state/command.ts). */
+  actions: CommandAction[];
+  confirm_id: string | null;
+  /** voice | text | mcp | ui — who gave the order. Rendered on every row,
+   *  because "an AI did that" is the first thing you want to know. */
+  source: string;
+  transcript: string;
+  /** fastpath | model | direct | confirmed — which path recognised it. */
+  route: string;
+  at: number;
+  /** How long recognition took, ms. Null when nothing had to be recognised. */
+  ms: number | null;
+}
+
+/** One planned step. Either a bridge action (same shape as `Action` below) or a
+ *  `ui` instruction that only moves this screen. */
+export interface CommandAction {
+  ui?: "camera" | "view" | "status" | (string & {});
+  view?: string;
+  robot_id?: string;
+  action?: string;
+  [k: string]: unknown;
+}
+
+export interface PendingCommand {
+  id: string;
+  intent: string;
+  say: string;
+  source: string;
+  at: number;
+  expires_in: number;
+}
+
+/** What the operator is allowed to say right now — the live half, built from
+ *  the fleet and the saved places (basestation/command/vocabulary.py). */
+export interface CommandVocabulary {
+  robots: string[];
+  online: string[];
+  selected: string | null;
+  places: { id: string; name: string }[];
+  routines: Record<string, string[]>;
+  labels: string[];
+  modes: string[];
+}
+
+export interface SttStatus {
+  available: boolean;
+  model: string;
+  error: string | null;
+  sample_rate: number;
+}
+
+export interface CommandMessage {
+  type: "command";
+  /** False when the language model is switched off. The keyword fast path still
+   *  runs — stop, rover names, modes and the camera never needed a model. */
+  enabled: boolean;
+  model_ok: boolean;
+  model: string | null;
+  /** The loaded model's id, or why it couldn't be reached. */
+  model_note: string;
+  base_url: string;
+  pending: PendingCommand[];
+  history: CommandOutcome[];
+  vocabulary: CommandVocabulary;
+  stt: SttStatus;
+  /** Present on the frame sent the moment a transcript is ready, before the
+   *  model has classified it — so the operator sees what was heard while the
+   *  model is still thinking. */
+  heard?: string;
+  heard_conf?: number;
+  stt_error?: string;
+  /** Present on the frame that reports one command's result. */
+  outcome?: CommandOutcome;
 }
 
 /** The single message type the bridge pushes at ui_hz (default 30 Hz). */
@@ -351,7 +474,29 @@ export type Action =
   | { action: "jog"; robot_id: string; mech: string; actuator?: string; power: number }
   // Base-station settings + gamepad mapping. Local; no radio involved.
   | { action: "set_settings"; settings: Record<string, SettingValue> }
+  // Named field positions. Local like set_settings — no radio, no robot: a
+  // place only ever reaches a robot as the lat/lon a saved routine resolved it
+  // into. Sent as the whole list, because that is what the map is holding.
+  | { action: "set_places"; places: Place[] }
   // Subscribe this socket to raw gamepad frames (mapping editor only).
-  | { action: "watch_gamepad"; on: boolean };
+  | { action: "watch_gamepad"; on: boolean }
+  // ---- commanding in words ----
+  // Push-to-talk. Between {on:true} and {on:false} this socket sends binary
+  // frames of raw 16 kHz PCM (net/audio.ts); the bridge transcribes on release.
+  | { action: "mic"; on: boolean }
+  // A typed order, or one an MCP client wrote. Goes through exactly the same
+  // recogniser a spoken one does.
+  | { action: "command_text"; text: string; source?: string }
+  // A structured intent — from a UI button, or a client that already knows what
+  // it wants. Skips recognition, NOT the confirmation gate.
+  | { action: "command_intent"; intent: string; args: Record<string, unknown>; source?: string }
+  // A human approving (or dismissing) a gated command.
+  | { action: "command_confirm"; id: string }
+  | { action: "command_cancel"; id: string }
+  // Turn the language model off — the fast path keeps working without it.
+  | { action: "command_enable"; on: boolean }
+  // Re-check whether a model server has appeared. Explicit, never polled: it is
+  // a button pressed after starting LM Studio.
+  | { action: "command_check" };
 
 export type ConnState = "connecting" | "live" | "reconnecting";

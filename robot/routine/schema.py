@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import RoutineConfig
-from .actions import ARMING_ACTIONS, Effect, compile_action
+from .actions import ARMING_ACTIONS, Effect, compile_action, parse_waypoints
 from .conditions import Predicate, compile_condition
 
 VERSION = 1
@@ -149,8 +149,16 @@ def _parse_drive(raw: Any, state_id: str, controllers: Tuple[str, ...],
     return "stop", "", 0.0, 0.0
 
 
+# Counting is a per-visit act, so it belongs in on_enter. In on_tick a counter
+# climbs at the control-loop rate, turning "do this three times" into "do this
+# for three ticks" — a bounded loop that ends 50x too early, which reads at the
+# bench as the routine skipping states rather than as a slot mistake.
+_ONCE_PER_VISIT_ACTIONS = frozenset({"count", "count_set"})
+
+
 def _parse_actions(raw: Any, slot: str, state_id: str, allow_arm: bool,
-                   delegate: str, errors: List[str]) -> List[Effect]:
+                   delegate: str, errors: List[str],
+                   warnings: Optional[List[str]] = None) -> List[Effect]:
     out: List[Effect] = []
     if raw is None:
         return out
@@ -178,6 +186,23 @@ def _parse_actions(raw: Any, slot: str, state_id: str, allow_arm: bool,
                     "drives with shooter_align, which is what enforces dwell, "
                     "cooldown and the magazine")
                 continue
+        if verb == "set_route" and not problems and warnings is not None:
+            # Legal, and what the starter template ships, but worth saying out
+            # loud: an empty route makes `route_done` true on the first tick,
+            # so a state that waits for the drive to finish falls straight
+            # through and the rover never moves.
+            points, _ = parse_waypoints(spec.get("waypoints"))
+            if not points:
+                warnings.append(
+                    f"state {state_id!r}: 'set_route' has no waypoints, so the "
+                    "route is finished the moment it loads — pick the places "
+                    "this route should visit")
+        if (verb in _ONCE_PER_VISIT_ACTIONS and slot == "on_tick"
+                and warnings is not None):
+            warnings.append(
+                f"state {state_id!r}: {verb!r} in on_tick counts once per control "
+                f"tick, not once per visit — move it to on_enter unless you "
+                f"really mean to count at the loop rate")
         if not problems:
             out.append(effect)
     return out
@@ -256,7 +281,8 @@ def _parse_routine(raw: Any, cfg: RoutineConfig, controllers: Tuple[str, ...],
         for slot, attr in (("on_enter", "on_enter"), ("on_tick", "on_tick"),
                            ("on_exit", "on_exit")):
             setattr(state, attr, _parse_actions(
-                raw_state.get(slot), slot, sid, cfg.allow_arm, controller, errors))
+                raw_state.get(slot), slot, sid, cfg.allow_arm, controller, errors,
+                warnings))
         state.transitions = _parse_transitions(
             raw_state.get("transitions"), sid, errors)
         states[sid] = state

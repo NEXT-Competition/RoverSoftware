@@ -36,7 +36,7 @@ export function ActionRow(
         args={spec?.args ?? []}
         values={action as Record<string, unknown>}
         states={states}
-        onChange={(key, value) => onChange({ ...action, [key]: value })}
+        onChange={(patch) => onChange({ ...action, ...patch })}
       />
 
       <button type="button" class="btn ghost small danger" onClick={onRemove}>

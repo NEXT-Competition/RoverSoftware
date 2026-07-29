@@ -15,6 +15,7 @@ import pytest
 
 from robot import tuning
 from robot.config import RobotConfig
+from robot.control.commands import DriveCommand
 from robot.control.object_align import ObjectAlignController
 from robot.control.shooter_align import ShooterAlignController
 from robot.control.teleop import TeleopController
@@ -206,3 +207,79 @@ def test_saved_values_are_the_clamped_ones(rover, tmp_path):
     """What is persisted must be what the robot is doing, not what was asked."""
     deliver(rover, {"type": "set_config", "config": {"align.pid.kp": 500}})
     assert json.loads((tmp_path / "tuning.json").read_text()) == {"align.pid.kp": 5.0}
+
+
+# --- which link carries what ------------------------------------------------
+
+class FakeIP:
+    """Stands in for IPLink: records frames, and can go down mid-transfer."""
+
+    def __init__(self, connected=True, fail_after=None):
+        self.connected = connected
+        self.fail_after = fail_after
+        self.sent = []
+
+    def is_connected(self):
+        return self.connected
+
+    def send(self, msg):
+        if self.fail_after is not None and len(self.sent) >= self.fail_after:
+            self.connected = False
+            return False
+        self.sent.append(msg)
+        return True
+
+
+def test_config_dump_goes_over_wifi_when_there_is_wifi(rover):
+    """The whole point: ~2.9 KB of config stops costing shared airtime."""
+    rover.ip_link = FakeIP()
+    deliver(rover, {"type": "get_config"})
+    assert len(rover.ip_link.sent) > 1  # the multi-frame snapshot
+    assert rover.sent == []  # and none of it touched the radio
+
+
+def test_config_dump_uses_the_radio_with_no_wifi(rover):
+    """Unchanged behaviour when the base station isn't reachable."""
+    rover.ip_link = FakeIP(connected=False)
+    deliver(rover, {"type": "get_config"})
+    assert rover.ip_link.sent == []
+    assert len(rover.sent) > 1
+
+
+def test_no_ip_link_at_all_is_the_old_path(rover):
+    assert rover.ip_link is None  # not configured by default
+    deliver(rover, {"type": "get_config"})
+    assert len(rover.sent) > 1
+
+
+def test_wifi_drains_the_whole_snapshot_in_one_tick(rover):
+    """On the radio this is paced at OUTBOX_PER_TICK; on WiFi there's no airtime
+    to protect, which is what makes the settings page fill instantly."""
+    rover.ip_link = FakeIP()
+    rover._inbox.put({"type": "get_config"})
+    rover._drain_inbox()
+    queued = len(rover._outbox)
+    assert queued > 2, "expected a multi-frame snapshot to pace against"
+    rover._drain_outbox()  # ONE tick
+    assert not rover._outbox
+    assert len(rover.ip_link.sent) == queued
+
+
+def test_wifi_dropping_mid_transfer_falls_back_to_the_radio(rover):
+    """No frame may be lost in the handover — that's what leaves a blank page."""
+    rover.ip_link = FakeIP(fail_after=2)
+    deliver(rover, {"type": "get_config"})
+    assert len(rover.ip_link.sent) == 2
+    assert rover.sent  # the remainder went out over the radio
+    total = len(rover.ip_link.sent) + len(rover.sent)
+    params = {k for f in (rover.ip_link.sent + rover.sent) for k in f["config"]}
+    assert total > 2 and params == set(tuning.snapshot(rover.cfg))
+
+
+def test_telemetry_never_leaves_the_radio(rover):
+    """It is realtime and it is what you need at range; WiFi is neither."""
+    rover.ip_link = FakeIP()
+    rover.link.send(rover._telemetry(DriveCommand.stopped()))
+    assert rover.ip_link.sent == []
+    assert len(rover.sent) == 1
+    assert rover.sent[0]["type"] == "telemetry"

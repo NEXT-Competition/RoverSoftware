@@ -40,6 +40,13 @@ class RoutineContext:
     state_elapsed: float = 0.0
     # Events delivered since the current state was entered, cleared on entry.
     events: set = field(default_factory=set)
+    # Named counters, owned by the engine and cleared when a routine starts.
+    # This is what lets a graph loop a BOUNDED number of times: without a count
+    # the only way to say "do this three times" is to draw the same three states
+    # three times, and a routine you have to redraw to re-tune is one nobody
+    # re-tunes. Deliberately per-run, not persisted — a counter that survived a
+    # restart would make the same routine behave differently on its second run.
+    counters: Dict[str, int] = field(default_factory=dict)
 
     def align(self):
         """Whichever alignment controller this build has, or None.
@@ -183,6 +190,18 @@ def _not(spec) -> Predicate:
     return lambda ctx: not all(p(ctx) for p in inner)
 
 
+def _counter(spec) -> Predicate:
+    """True once a named counter has reached `at_least`.
+
+    Paired with the `count` action, this is the bounded loop: a state does the
+    work and counts, and the transition out fires on the count. An unknown
+    counter reads as 0 rather than erroring, so a graph half-drawn still runs.
+    """
+    name = str(spec.get("name", ""))
+    at_least = int(_num(spec, "at_least", 1))
+    return lambda ctx: ctx.counters.get(name, 0) >= at_least
+
+
 # name -> (builder, required numeric/string fields for validation)
 BUILDERS: Dict[str, Tuple[Callable[[dict], Predicate], Tuple[str, ...]]] = {
     "always": (_always, ()),
@@ -201,6 +220,7 @@ BUILDERS: Dict[str, Tuple[Callable[[dict], Predicate], Tuple[str, ...]]] = {
     "all": (_all, ("of",)),
     "any": (_any, ("of",)),
     "not": (_not, ("of",)),
+    "counter": (_counter, ("name", "at_least")),
 }
 
 CONDITIONS = tuple(sorted(BUILDERS))

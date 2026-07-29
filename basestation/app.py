@@ -19,21 +19,37 @@ moves. `{"type":"settings"}` is the cold one: the base station's own settings,
 the gamepad layout, and each robot's ~2.4 KB tunable config, sent on connect and
 then only when something actually changes. Restating a config nobody is looking
 at 30 times a second would be the single largest thing on this socket.
+
+(There is a third, `{"type":"command"}`, but it is event-driven rather than a
+channel: it goes out when somebody says something, and is silent otherwise.)
+
+--- Voice, and the sockets that carry it ---
+This endpoint takes binary frames as well as JSON. A binary frame is raw 16 kHz
+mono PCM from a held microphone button (basestation/command/stt.py explains the
+format and why it isn't Opus); everything else is unchanged. Speech recognition
+and the local language model both block for hundreds of milliseconds, so they
+run on threads — the broadcaster must keep pushing telemetry at 30 Hz while
+somebody is mid-sentence, or the map freezes every time an order is given.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 from collections import deque
-from typing import Set
+from typing import Any, Optional, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
 from robot.comms.doc_transfer import split
 
+from .command import CommandExecutor
+from .command.stt import Transcriber, Utterance
 from .fleet import FleetManager
+from .places import PlaceStore
 from .settings import SettingsStore
 from .tiles import TileStore, attribution_for, content_type
 
@@ -44,7 +60,9 @@ DOC_FRAMES_PER_CYCLE = 2
 
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None,
-              settings: SettingsStore | None = None) -> FastAPI:
+              settings: SettingsStore | None = None, ip_server=None,
+              places: PlaceStore | None = None, llm=None,
+              transcriber: "Transcriber | None" = None) -> FastAPI:
     app = FastAPI(title="RoverSoftware base station")
     clients: Set[WebSocket] = set()
     # Clients with the gamepad mapping editor open (see watch_gamepad).
@@ -57,6 +75,10 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                   if k in ("drive_hz", "ui_hz", "video_hz", "tiles")},
         load=False,
     )
+    # Named field positions, fleet-wide (basestation/places.py). Same fallback
+    # rule as settings: an embedder that passes nothing still gets a working
+    # app, and the tests don't write to a developer's home directory.
+    places = places or PlaceStore(load=False)
 
     # Offline map tiles: serves /tiles/{z}/{x}/{y}.png from a local .mbtiles cache,
     # optionally filling misses from an upstream server. Constructed even when no
@@ -76,6 +98,21 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         if robot_id:
             link.send({**msg, "to": robot_id})
 
+    def dispatch_bulk(robot_id, msg: dict) -> bool:
+        """Send a bulk frame over WiFi if that robot is on it; else the radio.
+
+        Returns True when WiFi took it, which is also the signal that there is
+        no airtime to pace against — see drain_documents. A robot at the far end
+        of the field simply isn't in `ip_server`, so it keeps getting documents
+        over the radio with no special handling here.
+        """
+        if not robot_id:
+            return False
+        if ip_server is not None and ip_server.send({**msg, "to": robot_id}):
+            return True
+        dispatch(robot_id, msg)
+        return False
+
     # Outbound document fragments, paced rather than dispatched in a loop. The
     # robot's own outbox does this in the other direction and for the same
     # reason: XBeeLink drops a frame the radio isn't draining, so a 10-fragment
@@ -92,11 +129,15 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             _doc_queue.append((robot_id, frame))
 
     async def drain_documents() -> None:
-        for _ in range(DOC_FRAMES_PER_CYCLE):
-            if not _doc_queue:
-                return
+        # The pacing exists to protect radio airtime. A fragment that went over
+        # WiFi cost none, so it doesn't count against the budget and the next
+        # one goes immediately — a layout push over WiFi completes in one cycle
+        # instead of being metered out over a second.
+        budget = DOC_FRAMES_PER_CYCLE
+        while _doc_queue and budget > 0:
             robot_id, frame = _doc_queue.popleft()
-            dispatch(robot_id, frame)
+            if not dispatch_bulk(robot_id, frame):
+                budget -= 1
 
     # ---- gamepad -> currently selected robot ----
     # Rate-limit drive frames so we don't flood a slow XBee link (at 9600 baud a
@@ -151,6 +192,9 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # was clamped or refused. Robot config results ride on the robot's own
     # entry (fleet.configs); this is the base station's equivalent.
     _settings_result: dict = {"v": None}
+    # Same idea for the places list, so a refused coordinate is reported rather
+    # than silently dropped from the map.
+    _places_result: dict = {"v": None}
 
     def on_settings_change(applied: dict) -> None:
         if controller is not None and any(p.startswith("controller.") for p in applied):
@@ -223,6 +267,104 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # refused value the same way it reports one a robot refused.
             _settings_result["v"] = settings.apply(data.get("settings") or {})
             _settings_dirty["v"] = True
+        elif action == "set_places":
+            # Named field positions, edited from the map. Local like
+            # set_settings — no radio, no robot involved. A place only ever
+            # reaches a robot as the plain lat/lon the editor resolved it into
+            # when a routine was saved, so nothing here has to be pushed out.
+            _places_result["v"] = places.replace(data.get("places") or [])
+            _settings_dirty["v"] = True
+
+    # ---- spoken and typed orders -> the same handle_action above ----
+    # Constructed here rather than passed in fully wired because the executor's
+    # whole point is that it can only do what handle_action can do; giving it
+    # any other sink would be the bug this design exists to prevent.
+    #
+    # `ui` actions never reach a robot — they move the operator's screen (show a
+    # camera, switch views). They ride out to the browsers on the command frame
+    # instead, inside the outcome the UI is already rendering.
+    executor = CommandExecutor(fleet, places, dispatch=handle_action,
+                               llm=llm, enabled=bool(web_cfg.get("voice", True)))
+    stt = transcriber or Transcriber(
+        model_name=os.environ.get("RS_STT_MODEL", "base.en"))
+
+    # Outcomes queued from worker threads and drained by the broadcaster. A
+    # thread cannot touch a WebSocket, and `asyncio.run_coroutine_threadsafe`
+    # would need the loop handle plumbed through — a deque drained at ui_hz puts
+    # a spoken command on screen within 33 ms, which is well under the time it
+    # took to say it.
+    _command_out: "deque[dict]" = deque(maxlen=32)
+
+    def command_frame(outcome=None) -> dict:
+        frame = {"type": "command", **executor.status(),
+                 "stt": stt.status()}
+        if outcome is not None:
+            frame["outcome"] = outcome.to_json()
+        return frame
+
+    executor.on_outcome = lambda outcome: _command_out.append(command_frame(outcome))
+
+    async def run_command(text: str, source: str) -> None:
+        """Recognise off the event loop — the model can block for a second."""
+        await asyncio.to_thread(executor.recognise, text, source)
+
+    async def run_utterance(pcm: bytes) -> None:
+        """Transcribe held audio, then treat it exactly like typed text.
+
+        The transcript is pushed to the browsers before recognition starts, so
+        the operator sees what was heard while the model is still thinking. When
+        a command goes wrong, knowing whether the microphone or the model was at
+        fault is most of the debugging.
+        """
+        vocab = executor.vocabulary()
+        # Bias Whisper toward the words that are currently legal. Proper nouns
+        # are exactly what it gets wrong, and these are all proper nouns.
+        hints = [*vocab.robots, *(p.get("name") or p["id"] for p in vocab.places),
+                 *vocab.labels, *[m.replace("_", " ") for m in vocab.modes]]
+        try:
+            text, conf = await asyncio.to_thread(stt.transcribe, pcm, hints)
+        except Exception as e:  # STTUnavailable, or a model that failed to load
+            _command_out.append({"type": "command", **executor.status(),
+                                 "stt": stt.status(),
+                                 "heard": "", "stt_error": str(e)})
+            return
+        _command_out.append({"type": "command", **executor.status(),
+                             "stt": stt.status(),
+                             "heard": text, "heard_conf": round(conf, 2)})
+        if text:
+            await run_command(text, "voice")
+
+    def handle_command(data: dict) -> Optional[Any]:
+        """The command actions. Returns a coroutine to await, or None.
+
+        Split out from handle_action because these are the only actions that are
+        asynchronous — everything else is a synchronous write to the radio.
+        """
+        action = data.get("action")
+        if action == "command_text":
+            text = str(data.get("text") or "")
+            return run_command(text, str(data.get("source") or "text"))
+        if action == "command_intent":
+            # A structured intent, from a UI button or a client that already
+            # knows what it wants. Skips recognition, not the confirm gate.
+            executor.execute(str(data.get("intent") or ""), data.get("args") or {},
+                             source=str(data.get("source") or "ui"))
+        elif action == "command_confirm":
+            executor.confirm(str(data.get("id") or ""))
+        elif action == "command_cancel":
+            executor.cancel(str(data.get("id") or ""))
+        elif action == "command_enable":
+            executor.enabled = bool(data.get("on", True))
+            _command_out.append(command_frame())
+        elif action == "command_check":
+            # "Is the model there yet?" — cheap, explicit, and never polled: it
+            # is a button in the command view, pressed after starting LM Studio.
+            return _check_model()
+        return None
+
+    async def _check_model() -> None:
+        await asyncio.to_thread(executor.check_model)
+        _command_out.append(command_frame())
 
     def settings_frame() -> dict:
         """The cold channel: everything the settings page edits or displays."""
@@ -230,6 +372,12 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             "type": "settings",
             "settings": settings.snapshot(),
             "settings_result": _settings_result["v"],
+            # Named field positions. Cold channel because they change when
+            # somebody saves one, not thirty times a second — but they ride
+            # here rather than in `settings` because they are a list the map
+            # draws, not a flat whitelist of scalars the settings page edits.
+            "places": places.snapshot(),
+            "places_result": _places_result["v"],
             "configs": fleet.configs(),
             # Layouts, routines and the field descriptors for whatever actuators
             # the operator declared. Cold channel with the configs, for the same
@@ -297,6 +445,14 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                     for ws in list(watchers):
                         await send_to(ws, gp)
 
+                # Command outcomes queued by worker threads. Everyone sees them,
+                # not just whoever spoke: on a two-tablet setup, the person who
+                # did not give the order is the one who needs to know it was given.
+                while _command_out:
+                    frame = _command_out.popleft()
+                    for ws in list(clients):
+                        await send_to(ws, frame)
+
                 await asyncio.sleep(1.0 / max(settings.base.ui_hz, 1.0))
         except asyncio.CancelledError:
             pass
@@ -304,43 +460,110 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     @app.on_event("startup")
     async def _startup():
         link.start()
+        if ip_server is not None:
+            ip_server.start()
         if controller is not None:
             controller.start()
         if video_rx is not None:
             video_rx.start()
         app.state.broadcaster = asyncio.create_task(broadcast_loop())
 
+        # Warm the voice stack in the background. Both of these can take
+        # seconds — loading ~150 MB of Whisper weights, and a round trip to a
+        # model server that may not be running — and neither may delay the
+        # bridge coming up. A base station that won't accept a teleop connection
+        # because it is downloading a speech model is a base station that misses
+        # its match.
+        async def _warm() -> None:
+            await asyncio.to_thread(stt.preload)
+            await asyncio.to_thread(executor.check_model)
+            _command_out.append(command_frame())
+
+        app.state.warm = asyncio.create_task(_warm())
+
     @app.on_event("shutdown")
     async def _shutdown():
-        task = getattr(app.state, "broadcaster", None)
-        if task:
-            task.cancel()
+        for name in ("broadcaster", "warm"):
+            task = getattr(app.state, name, None)
+            if task:
+                task.cancel()
         if controller is not None:
             controller.stop()
         if video_rx is not None:
             video_rx.stop()
+        if ip_server is not None:
+            ip_server.stop()
         link.stop()
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket):
         await ws.accept()
         clients.add(ws)
+        # One microphone buffer per socket, so two tablets holding their mic
+        # buttons at once don't interleave audio into one another's command.
+        utterance = Utterance()
         # Settings up front so a page that opens straight onto the settings tab
         # renders filled in, rather than blank until the next edit.
         await send_to(ws, settings_frame())
+        await send_to(ws, command_frame())
         try:
             while True:
-                data = await ws.receive_json()
+                # receive() rather than receive_json(): this socket now carries
+                # binary microphone frames as well as JSON actions, and
+                # receive_json on a binary frame raises and drops the socket —
+                # which mid-drive is the operator losing the dashboard.
+                message = await ws.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+
+                chunk = message.get("bytes")
+                if chunk is not None:
+                    # Raw 16 kHz mono PCM while the mic button is held. Dropped
+                    # silently when no utterance is open — a late frame arriving
+                    # after the release is normal, not an error.
+                    utterance.feed(chunk)
+                    continue
+
+                text = message.get("text")
+                if text is None:
+                    continue
+                try:
+                    data = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
                 # A frame that isn't an object would raise out of the loop and
                 # drop the socket — which, mid-drive, is the operator losing
                 # the dashboard because something sent a stray array.
                 if not isinstance(data, dict):
                     continue
-                if data.get("action") == "watch_gamepad":
+
+                action = data.get("action")
+                if action == "watch_gamepad":
                     (watchers.add if data.get("on") else watchers.discard)(ws)
                     continue
+                if action == "mic":
+                    # Push-to-talk. The button going down opens a buffer; going
+                    # up closes it and starts recognition on a thread, so the
+                    # socket is free to keep receiving telemetry acks and — the
+                    # point of the whole exercise — a following "stop".
+                    if data.get("on"):
+                        utterance.begin()
+                    elif utterance.active or utterance.seconds:
+                        pcm = utterance.end()
+                        asyncio.create_task(run_utterance(pcm))
+                    continue
+                if isinstance(action, str) and action.startswith("command_"):
+                    pending = handle_command(data)
+                    if pending is not None:
+                        asyncio.create_task(pending)
+                    continue
+
                 handle_action(data)
         except WebSocketDisconnect:
+            pass
+        except RuntimeError:
+            # Starlette raises this if receive() is called after the client has
+            # already gone. Same outcome as a clean disconnect.
             pass
         finally:
             clients.discard(ws)
@@ -391,4 +614,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             media_type="text/plain",
         )
 
+    # Reachable for tests and for anything embedding the bridge. Not a second
+    # way in: everything it can do, it does by calling handle_action above.
+    app.state.commands = executor
+    app.state.stt = stt
     return app
