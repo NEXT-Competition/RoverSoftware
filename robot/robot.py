@@ -12,6 +12,7 @@ from typing import Callable, Dict, Optional, Tuple
 from . import layout, tuning
 from .config import PIDConfig, RobotConfig
 from .comms.doc_transfer import Reassembler, split
+from .comms.ip_link import IPLink
 from .comms.xbee_link import XBeeLink
 from .control.controller import Controller
 from .control.manager import ControlManager
@@ -161,6 +162,17 @@ class Robot:
         # loop by funneling through a thread-safe queue.
         self._inbox: "queue.Queue[dict]" = queue.Queue()
         self.link = XBeeLink(config.comms.port, config.comms.baud, self._inbox.put)
+        # Bulk transfers go over WiFi when the base station is reachable, so a
+        # ~2.9 KB config snapshot stops costing half a second of shared airtime
+        # (and stops being the thing that makes telemetry frames get dropped).
+        # Unconfigured or unreachable -> every send() declines and the radio
+        # carries it, which is byte-for-byte the old behaviour. Inbound frames
+        # join the SAME inbox, so _drain_inbox can't tell how one arrived.
+        self.ip_link: Optional[IPLink] = (
+            IPLink(config.comms.base_host, config.comms.base_port,
+                   self._inbox.put, config.robot_id)
+            if config.comms.base_host else None
+        )
         self._running = False
 
         # Adafruit Ultimate GPS feeds waypoint navigation, position telemetry and
@@ -369,10 +381,24 @@ class Robot:
         over ticks instead. Telemetry still goes direct: it is one small frame,
         it is the thing an operator most needs to be current, and delaying it
         behind a config dump is the wrong trade.
+
+        This queue is also exactly the traffic that moves to WiFi when there is
+        any — bulk, non-realtime, and too big for the shared channel. See
+        _drain_outbox.
         """
         self._outbox.append(msg)
 
     def _drain_outbox(self) -> None:
+        """Empty the outbox: over WiFi if we have it, otherwise paced onto the radio.
+
+        On WiFi there is no airtime to protect and no write timeout to lose
+        frames to, so the whole queue goes at once — a config snapshot that took
+        ~100 ms of paced radio ticks lands in one. If the link drops mid-drain,
+        send() declines and the remainder simply waits for the radio path below.
+        """
+        if self.ip_link is not None and self.ip_link.is_connected():
+            while self._outbox and self.ip_link.send(self._outbox[0]):
+                self._outbox.popleft()
         for _ in range(OUTBOX_PER_TICK):
             if not self._outbox:
                 return
@@ -668,6 +694,12 @@ class Robot:
         self.drive.arm()
         print(f"[Robot] opening XBee link on {self.cfg.comms.port} @ {self.cfg.comms.baud}...")
         self.link.start()
+        # Opportunistic, and started after the radio on purpose: the radio is the
+        # link the robot cannot run without, this one only makes bulk transfers
+        # cheaper. It retries in the background, so a base station that isn't up
+        # yet costs nothing here.
+        if self.ip_link is not None:
+            self.ip_link.start()
         if self.gps is not None:
             self.gps.start()
         if self.imu is not None:
@@ -757,6 +789,8 @@ class Robot:
         if self.camera is not None:
             self.camera.stop()
         self.link.stop()
+        if self.ip_link is not None:
+            self.ip_link.stop()
         if self.gps is not None:
             self.gps.stop()
         if self.imu is not None:

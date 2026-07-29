@@ -59,6 +59,10 @@ class RoutineEngine:
         self.finished = False
         self.reason = ""
         self._started_at = self._now()
+        # Counters are per-RUN, not per-engine: a routine re-run from the
+        # dashboard must behave exactly as it did the first time, and a loop
+        # that inherited last run's count would fall straight through.
+        self.ctx.counters.clear()
         self._enter(self.routine.states.get(self.routine.start))
 
     def stop(self, reason: str = "stopped") -> None:

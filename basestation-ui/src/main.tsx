@@ -2,7 +2,7 @@ import { render } from "preact";
 
 // Bundled locally (no CDN) so the native binary and offline Pi kiosk render
 // identically. Variable fonts: Space Grotesk for UI, JetBrains Mono for numbers.
-import "@fontsource-variable/space-grotesk";
+import "@fontsource-variable/archivo";
 import "@fontsource-variable/jetbrains-mono";
 import "leaflet/dist/leaflet.css";
 import "./styles/theme.css";

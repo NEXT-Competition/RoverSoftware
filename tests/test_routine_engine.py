@@ -378,3 +378,67 @@ def test_status_names_the_live_state_for_the_dashboard():
     assert status["state"] == "seek"
     assert status["drive"] == "object_align"
     assert status["done"] is False
+
+
+# --- counters: the bounded loop ---------------------------------------------
+
+def test_counter_and_count_make_a_bounded_loop():
+    """Three laps of one state, then out. Without counters this needs the same
+    state drawn three times, and a routine you redraw to re-tune is one nobody
+    re-tunes."""
+    ctx = RoutineContext()
+    engine, _ = build([
+        {"id": "work", "on_enter": [{"do": "count", "name": "lap"}],
+         "transitions": [
+             {"when": "counter", "name": "lap", "at_least": 3, "to": "done"},
+             {"when": "always", "to": "work"}]},
+        {"id": "done", "terminal": True},
+    ], ctx=ctx)
+    assert ctx.counters["lap"] == 1  # counted on entry, once per visit
+    for _ in range(8):
+        engine.update(0.02)
+        if engine.state is None or engine.state.id == "done":
+            break
+    assert engine.state is not None and engine.state.id == "done"
+    assert ctx.counters["lap"] == 3
+
+
+def test_counters_reset_on_every_run():
+    """A re-run must behave exactly as the first did — a loop inheriting the
+    previous count would fall straight through."""
+    ctx = RoutineContext()
+    engine, _ = build([{"id": "a", "on_enter": [{"do": "count", "name": "n"}],
+                        "transitions": []}], ctx=ctx)
+    assert ctx.counters["n"] == 1
+    engine.start()
+    assert ctx.counters["n"] == 1
+
+
+def test_count_set_rearms_a_loop():
+    ctx = RoutineContext()
+    build([{"id": "a",
+            "on_enter": [{"do": "count", "name": "n", "by": 5},
+                         {"do": "count_set", "name": "n", "to": 0}],
+            "transitions": []}], ctx=ctx)
+    assert ctx.counters["n"] == 0
+
+
+def test_unknown_counter_reads_as_zero():
+    """A half-drawn graph still runs rather than refusing to compile."""
+    from robot.routine.conditions import compile_condition
+    pred, problems = compile_condition(
+        {"when": "counter", "name": "nope", "at_least": 1})
+    assert problems == []
+    assert pred(RoutineContext()) is False
+
+
+def test_counting_on_tick_is_warned_about_not_refused():
+    """It is legal — you might mean to count at the loop rate — but it is the
+    mistake that makes a 3-lap loop end 50x early, so it must be said out loud."""
+    doc = {"version": 1, "routines": [{
+        "id": "r", "start": "a", "states": [
+            {"id": "a", "on_tick": [{"do": "count", "name": "n"}],
+             "transitions": []}]}]}
+    result = schema.parse(doc, RoutineConfig(), CONTROLLERS)
+    assert result.ok
+    assert any("on_tick" in w and "count" in w for w in result.warnings), result.warnings

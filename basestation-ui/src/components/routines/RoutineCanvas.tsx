@@ -17,8 +17,41 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { RoutineSpec } from "../../net/types.ts";
 import { describeCondition } from "../../routines/vocab.ts";
+import { Palette } from "./Palette.tsx";
+import { groupForState, type VerbGroup } from "../../routines/vocab.ts";
+
+/** The per-kind mark on a node, matching Palette.tsx's icons exactly. Drawn in
+ *  ink rather than a signal colour: this is a category, not a condition. */
+function CategoryMark({ group }: { group: VerbGroup | null }) {
+  if (group === null) return null;
+  const cx = 18, cy = 27;
+  if (group === "mechanism") {
+    return <circle class="rc-kind" cx={cx} cy={cy} r={5} />;
+  }
+  if (group === "logic") {
+    return (
+      <rect
+        class="rc-kind hollow"
+        x={cx - 5}
+        y={cy - 5}
+        width={10}
+        height={10}
+        rx={3}
+      />
+    );
+  }
+  return (
+    <rect
+      class={`rc-kind${group === "navigation" ? "" : " quiet"}`}
+      x={cx - 5}
+      y={cy - 5}
+      width={10}
+      height={10}
+      rx={3}
+    />
+  );
+}
 import {
-  addState,
   connect,
   NODE_H,
   NODE_W,
@@ -341,13 +374,9 @@ export function RoutineCanvas(
           the auto-layout likes to put nodes, and "my click did nothing" is an
           unfair puzzle to hand someone. */}
       <div class="canvas-bar">
-        <button
-          type="button"
-          class="btn small"
-          onClick={() => addState(viewCentre())}
-        >
-          + State
-        </button>
+        {/* Pick the capability first, get a state already configured for it —
+            see Palette.tsx for why a blank box was the wrong default. */}
+        <Palette at={viewCentre} />
         <span class="canvas-hint">
           Drag a box to move it · drag from its right edge onto another to wire
           them · tap a wire to set its condition
@@ -484,8 +513,14 @@ export function RoutineCanvas(
                   rx={10}
                   onPointerDown={(e) => onNodeDown(e, state.id)}
                 />
-                <text class="rc-id" x={11} y={23}>{state.id}</text>
-                <text class="rc-sub" x={11} y={41}>
+                {/* Category mark, in the same shapes the palette uses — a
+                    circle for a mechanism, a filled square for driving, an
+                    outline for counting. It says what KIND of step this is;
+                    the stroke and fill still say what STATE it is in, and the
+                    two never share a channel. */}
+                <CategoryMark group={groupForState(state)} />
+                <text class="rc-id" x={30} y={23}>{state.id}</text>
+                <text class="rc-sub" x={30} y={41}>
                   {mode === "stop" || mode === "hold" ? mode : mode.replace(/_/g, " ")}
                   {actions > 0 ? ` · ${actions} action${actions === 1 ? "" : "s"}` : ""}
                 </text>

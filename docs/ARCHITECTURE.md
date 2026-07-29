@@ -536,6 +536,34 @@ call from the main loop while the reader thread runs). Transient read errors are
 logged and skipped so the link survives glitches. To move to API-mode XBee you'd
 swap the transport internals; the `start/stop/send + on_message` interface stays.
 
+**`ip_link.py` — bulk transfers over WiFi.** The radio is the *control* link:
+drive, telemetry, mode, e-stop. Config snapshots, layouts and routine documents
+are none of those — they're bulky, bursty and not realtime — and a ~2.9 KB
+snapshot is roughly half a second of exclusive airtime on a channel shared with
+every robot, during which telemetry frames are the ones `XBeeLink.send` drops.
+So that traffic rides a TCP socket over the same WiFi the FPV video already uses:
+
+```
+robot                                     base station
+IPLink(comms.base_host, 5006)  --TCP-->   IPServer(5006)
+```
+
+Same `protocol.py` framing, so a `config` frame is the identical dict whichever
+way it travelled and `FleetManager` can't tell the difference. The robot **dials
+out** (mirroring the video path, and avoiding having to discover a rover's
+address on a DHCP field network); the base station keys sockets by the `from` on
+anything a robot sends, plus a `hello` on connect so the mapping exists before
+the first document push.
+
+**The fallback is the design.** `send()` returns a *bool* rather than raising:
+`False` means "not connected — you send it". So `comms.base_host` being blank, a
+base station that isn't up, and a rover driving out of WiFi range all degrade to
+exactly the pre-existing radio behaviour, decided per frame. Only the pacing
+changes with it — `Robot._drain_outbox` meters frames onto the radio at
+`OUTBOX_PER_TICK`, but empties the whole queue over WiFi, because there's no
+airtime to protect. A config snapshot that took ~100 ms of paced ticks lands in
+one.
+
 ### 4.6 Sensors
 
 **`gps.py` — Adafruit Ultimate GPS reader.** See [§6](#6-gps-waypoint-autonomy).
@@ -548,6 +576,12 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 `"all"`); robots stamp telemetry with `from`. The base station's baud
 (`basestation.env`, default **57600**) **must match each robot's** `RS_XBEE_BAUD`
 — a mismatch delivers only garbage frames.
+
+> The same message set also travels over WiFi when both ends are configured for
+> it, but only the bulk half: `config`, `fields`, `layout`, `routines` and their
+> `put_*`/`*_result` counterparts. Realtime frames — `drive`, `telemetry`,
+> `mode`, `estop` — never leave the radio, because the radio is what has the
+> range. See [§4.5](#45-comms-layer).
 
 ```jsonc
 // base station -> robot
@@ -1038,6 +1072,7 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
+| `RS_BASE_HOST` / `RS_BASE_PORT` | *(blank)* / `5006` | Base station host for WiFi bulk transfers (config, layouts, routines). Blank keeps everything on the radio; unreachable falls back to it per frame. |
 | `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint` \| `routine`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |

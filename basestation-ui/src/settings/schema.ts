@@ -407,6 +407,14 @@ export const ROBOT_GROUPS: Group[] = [
         live: false,
         help: "Must match the base station's, or the slower side's buffer backs up and latency grows without bound.",
       }),
+      t("comms.base_host", "Base station host (WiFi)", {
+        live: false,
+        help: "Send config, layouts and routines over WiFi instead of the radio — a snapshot is ~2.9 KB, which is half a second of shared airtime. Blank disables it. Out of WiFi range these fall back to the radio automatically; driving and telemetry never move off it.",
+      }),
+      i("comms.base_port", "Base station port (WiFi)", 1, 65535, {
+        live: false,
+        help: "Must match the base station's --bulk-port (default 5006).",
+      }),
     ],
   },
 ];
