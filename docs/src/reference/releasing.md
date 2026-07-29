@@ -49,8 +49,9 @@ to release, and CI does not read them.
 
 ## One-time setup
 
-Three secrets on the **RoverSoftware** repository. Without them the workflow
-builds fine but cannot publish.
+Three things on the **RoverSoftware** repository. Without them the workflows
+build fine but cannot publish — and each one fails with a step that tells you
+exactly what is missing, rather than `Input required and not supplied: token`.
 
 ### 1 · A signing key for the apt repository
 
@@ -83,9 +84,14 @@ with:
 - Repository access: `NEXT-Competition/NEXT-Competition.github.io`
 - Permissions: **Contents → Read and write**
 
-Save it as **`SITE_DEPLOY_TOKEN`**. A deploy key on the site repo works too if
-you would rather not use a PAT — swap the `token:` line in both workflows for
-`ssh-key:`.
+Save it as **`SITE_DEPLOY_TOKEN`** under
+*Settings → Secrets and variables → Actions*. A deploy key on the site repo
+works too if you would rather not use a PAT — swap the `token:` line in both
+workflows for `ssh-key:`.
+
+Fine-grained tokens expire. When one does, both workflows fail at their
+"Check the deploy token exists" step with the same instructions; generate a new
+token and update the secret.
 
 ### 3 · Pages enabled on the site repo
 
