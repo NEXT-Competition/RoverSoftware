@@ -274,14 +274,18 @@ def _plan_start_routine(args, vocab):
     said = args.get("routine")
     routine = vocab.resolve_routine(rid, str(said) if said else None)
     if said and routine is None:
-        known = ", ".join(vocab.routines.get(rid, [])) or "none loaded"
+        known = ", ".join(vocab.routine_names(rid)) or "none loaded"
         raise IntentError(f"no routine matching '{said}' on {rid} — loaded: {known}")
     actions: List[Dict[str, Any]] = []
     if routine:
         actions.append({"action": "select_routine", "robot_id": rid, "id": routine})
     actions.append({"action": "routine_cmd", "robot_id": rid, "cmd": "start"})
     actions.append({"action": "mode", "robot_id": rid, "mode": "routine"})
-    return actions, f"start routine {routine or '(the selected one)'} on {rid}"
+    # Named back the way it was said, not by id: the confirm card is the
+    # operator's only check that the right routine is about to drive the robot,
+    # and "routine2" is not something they can check against anything.
+    spoken = dict(vocab.routine_pairs(rid)).get(routine or "", routine)
+    return actions, f"start routine {spoken or '(the selected one)'} on {rid}"
 
 
 def _plan_stop_routine(args, vocab):
@@ -399,9 +403,12 @@ INTENTS: Dict[str, Intent] = {i.name: i for i in [
 
     # --- everything below needs a human to tap confirm --------------------
     _register(Intent(
-        "start_routine", "Run a routine (autonomous state machine) on a rover.",
+        "start_routine",
+        "Run a routine (autonomous state machine) on a rover, named by the "
+        "operator when they built it. The live list is in the vocabulary.",
         ("robot", "routine"), Authority.CONFIRM,
-        ("run the collect routine on rover2", "start the auto sequence"),
+        ("run the collect routine on rover2", "start the auto sequence",
+         "run collect cones", "rover2 execute return home"),
     ), _plan_start_routine),
 
     _register(Intent(

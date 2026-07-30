@@ -20,7 +20,8 @@ import type {
   RoutineStateSpec,
   TransitionSpec,
 } from "../net/types.ts";
-import { robotDocuments, selectedRobot, send } from "../net/ws.ts";
+import { robotDocuments, robots, selectedRobot, send } from "../net/ws.ts";
+import { driveTakesTarget } from "../routines/vocab.ts";
 import { missingPlaces, placeById, resolvePlaces } from "./places.ts";
 import { layout } from "./hardware.ts";
 import { targetRobot } from "./settings.ts";
@@ -96,7 +97,26 @@ export function discardRoutines(): void {
 
 export function refreshRoutines(): void {
   const rid = targetRobot.value;
-  if (rid) send({ action: "get_routines", robot_id: rid });
+  if (rid) requestRoutines(rid);
+}
+
+/** Ask one named robot for its routines.
+ *
+ * Separate from `refreshRoutines` because the driving view wants the routines
+ * of the rover being DRIVEN, while the editor wants the one being edited, and
+ * those are deliberately allowed to differ (state/settings.ts::configTarget).
+ */
+export function requestRoutines(robotId: string): void {
+  send({ action: "get_routines", robot_id: robotId });
+}
+
+/** The routines loaded on a robot, as the driving view lists them. Reads the
+ *  document straight off the fleet rather than through the editor's draft: the
+ *  buttons must run what the ROBOT is carrying, not what somebody has
+ *  half-edited on another tab and not yet saved. */
+export function routinesOn(robotId: string | null): RoutineSpec[] {
+  if (!robotId) return [];
+  return robotDocuments.value[robotId]?.routines?.routines ?? [];
 }
 
 /** Re-resolve every place reference into the coordinates the robot will drive.
@@ -152,15 +172,27 @@ export function routinesAccepted(): void {
 export function runRoutine(): void {
   const rid = targetRobot.value;
   const id = current.value?.id;
-  if (!rid || !id) return;
-  // Select first, then switch modes: arriving in `routine` with nothing chosen
-  // would hold the robot still and look like the button did nothing.
-  send({ action: "select_routine", robot_id: rid, id });
-  send({ action: "mode", robot_id: rid, mode: "routine" });
+  if (rid && id) startRoutine(rid, id);
 }
 
-export function stopRoutine(): void {
-  const rid = targetRobot.value;
+/** Run one named routine on one named robot — the driving view's buttons.
+ *
+ * Select first, then switch modes: arriving in `routine` with nothing chosen
+ * would hold the robot still and look like the button did nothing.
+ *
+ * Two messages cover both cases exactly once, which is why there is no
+ * `routine_cmd start` here. A robot already in routine mode starts on the
+ * select itself, so tapping the running routine restarts it; one that isn't
+ * starts when the mode change activates the controller
+ * (robot/control/routine_controller.py).
+ */
+export function startRoutine(robotId: string, id: string): void {
+  send({ action: "select_routine", robot_id: robotId, id });
+  send({ action: "mode", robot_id: robotId, mode: "routine" });
+}
+
+export function stopRoutine(robotId?: string): void {
+  const rid = robotId ?? targetRobot.value;
   if (!rid) return;
   send({ action: "routine_cmd", robot_id: rid, cmd: "stop" });
   send({ action: "mode", robot_id: rid, mode: "teleop" });
@@ -386,11 +418,29 @@ export function setStateField<K extends keyof RoutineStateSpec>(
 export function setDrive(id: string, mode: string): void {
   editCurrent((routine) => {
     const state = routine.states.find((s) => s.id === id);
-    if (state) {
-      state.drive = mode === "manual"
-        ? { mode, throttle: 0, steer: 0 }
-        : { mode };
-    }
+    if (!state) return;
+    // The target is carried across a switch between the two aligning modes —
+    // "line up on the bucket" then "shoot the bucket" is one thought, and
+    // retyping the object because you changed which controller aims is busywork.
+    // It is dropped for any other mode, because the robot refuses a target
+    // there (robot/routine/schema.py) and a document that will not save is
+    // worse than a field that cleared.
+    const target = driveTakesTarget(mode) ? state.drive?.target : undefined;
+    state.drive = mode === "manual" ? { mode, throttle: 0, steer: 0 } : { mode };
+    if (target) state.drive.target = target;
+  });
+}
+
+/** What an aligning state locks onto. Blank removes the key entirely rather
+ *  than storing "", so a routine that does not name a target is byte-identical
+ *  to one written before the field existed. */
+export function setDriveTarget(id: string, target: string): void {
+  editCurrent((routine) => {
+    const state = routine.states.find((s) => s.id === id);
+    if (!state?.drive) return;
+    const trimmed = target.trim();
+    if (trimmed) state.drive.target = trimmed;
+    else delete state.drive.target;
   });
 }
 
@@ -496,6 +546,24 @@ export function removeTransition(id: string, index: number): void {
 /** Mechanisms this robot's layout declares, for the action pickers. The
  *  built-in launcher is added because it is registered under a reserved name
  *  rather than declared in the layout (see robot/layout.py). */
+/** Object classes the fleet has actually reported seeing, for the target field's
+ *  suggestions.
+ *
+ *  Suggestions, not a menu: this is what the cameras happen to have detected,
+ *  not the model's label list — the robot knows that list but has never had a
+ *  reason to spend radio on it. So the field stays free text, and a label the
+ *  model cannot report is caught by the detector saying so in its log
+ *  ("nothing will ever match"), which is where a wrong label becomes obvious.
+ */
+export const seenLabels = computed<string[]>(() => {
+  const out: string[] = [];
+  for (const robot of robots.value) {
+    const label = robot.vision?.label;
+    if (label && !out.includes(label)) out.push(label);
+  }
+  return out.sort();
+});
+
 export const availableMechanisms = computed<MechanismSpec[]>(() => {
   const declared = layout.value?.mechanisms ?? [];
   const robot = selectedRobot.value;

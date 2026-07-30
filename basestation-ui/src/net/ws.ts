@@ -20,8 +20,10 @@ import type {
   RobotDocuments,
   SettingsMessage,
   SettingValue,
+  WifiState,
 } from "./types.ts";
 import { applyCommandFrame } from "../state/command.ts";
+import { recordPidTraces } from "../state/pid.ts";
 
 export const conn = signal<ConnState>("connecting");
 export const robots = signal<Robot[]>([]);
@@ -54,6 +56,9 @@ export const robotConfigs = signal<Record<string, RobotConfigEntry>>({});
  *  channel as the configs, and for the same reason: kilobytes that change when
  *  someone presses Save, not thirty times a second. */
 export const robotDocuments = signal<Record<string, RobotDocuments>>({});
+/** Each robot's WiFi state — the answer to the last thing the Network page
+ *  asked it. Cold channel with the configs; see basestation/fleet.py::wifi. */
+export const robotWifi = signal<Record<string, WifiState>>({});
 /** Named field positions, fleet-wide. The bridge owns the list and persists it
  *  (basestation/places.py); this is the mirror every map and picker reads. */
 export const places = signal<Place[]>([]);
@@ -117,6 +122,7 @@ export function connect(): void {
         settingsResult.value = msg.settings_result ?? null;
         robotConfigs.value = msg.configs ?? {};
         robotDocuments.value = msg.documents ?? {};
+        robotWifi.value = msg.wifi ?? {};
         places.value = msg.places ?? [];
         placesResult.value = msg.places_result ?? null;
         if (msg.gamepad) gamepad.value = msg.gamepad;
@@ -138,6 +144,11 @@ export function connect(): void {
       videoRobots.value = msg.video ?? [];
       driveHz.value = typeof msg.drive_hz === "number" && msg.drive_hz > 0 ? msg.drive_hz : null;
       if (selected.value == null) selected.value = msg.selected;
+      // Fold the frame's closed-loop traces into their history. Here rather
+      // than in a computed, because the robot sends one step per frame and a
+      // graph needs the ones before it — accumulation is not something a
+      // derived value can do.
+      recordPidTraces(msg.robots ?? [], Date.now());
     });
   };
 }

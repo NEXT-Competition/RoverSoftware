@@ -66,12 +66,15 @@ def main():
                         help="XBee serial port")
     parser.add_argument("--baud", type=int,
                         default=int(os.environ.get("RS_XBEE_BAUD", cfg.comms.baud)))
-    # Bulk transfers over WiFi (config snapshots, layouts, routines). Falls back
-    # to the radio whenever the base station isn't reachable, so this is safe to
-    # set permanently; see robot/comms/ip_link.py.
+    # Bulk transfers over WiFi (config snapshots, layouts, routines). This is
+    # the ONLY path they take — blank or unreachable means the robot can't be
+    # configured until it's on WiFi, while driving and telemetry carry on over
+    # the radio regardless. The base station can set this over the radio and it
+    # applies live; see robot/comms/ip_link.py.
     parser.add_argument("--base-host",
                         default=os.environ.get("RS_BASE_HOST", cfg.comms.base_host),
-                        help="base station host for WiFi bulk transfers (blank = radio only)")
+                        help="base station host for WiFi bulk transfers "
+                             "(blank = config/layouts/routines don't transfer)")
     parser.add_argument("--base-port", type=int,
                         default=int(os.environ.get("RS_BASE_PORT", cfg.comms.base_port)),
                         help="base station TCP port for WiFi bulk transfers")
@@ -273,7 +276,7 @@ def main():
     fpv = f"{cfg.fpv.base_host}:{cfg.fpv.base_port}" if cfg.fpv.enabled else "off"
     shooter = f"ch{cfg.shooter.channel}" if cfg.shooter.enabled else "off"
     bulk = (f"{cfg.comms.base_host}:{cfg.comms.base_port}"
-            if cfg.comms.base_host else "radio")
+            if cfg.comms.base_host else "off (not configurable until set)")
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "
           f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} "
           f"heading={cfg.heading_source} vision={vision} "

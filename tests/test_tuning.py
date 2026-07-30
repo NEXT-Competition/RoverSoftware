@@ -146,8 +146,14 @@ def test_live_parameters_are_reachable_from_push_live_config():
         "drive.", "shooter.", "vision.", "fpv.", "loop_hz", "telemetry_hz",
         "mech.", "routines.",
     )
+    # Same reason, named exactly rather than by prefix. `nav.pid_trace` is read
+    # off cfg by _telemetry on every frame it builds, but the rest of `nav.` is
+    # gains that DO have to be pushed onto a live PID — exempting the prefix
+    # would stop this test checking the parameters it exists for.
+    reads_config_directly_exactly = ("nav.pid_trace",)
     for param in tuning.PARAMS:
-        if not param.live or param.path.startswith(reads_config_directly):
+        if (not param.live or param.path.startswith(reads_config_directly)
+                or param.path in reads_config_directly_exactly):
             continue
         leaf = param.path.rsplit(".", 1)[-1]
         assert leaf in pushed, f"{param.path} is marked live but never pushed"

@@ -1,13 +1,31 @@
 // Robot tab: the selected robot's tunable parameters, grouped.
 //
-// The config is FETCHED, not pushed — it is ~2.4 KB over a radio shared with
-// telemetry, so it arrives only when this tab asks for it (on open, and on the
-// Refresh button). Until then the page says so rather than rendering a form
-// full of zeroes that would look like real values.
+// The config is FETCHED, not pushed — it is ~2.4 KB, so it arrives only when
+// this tab asks for it (on open, and on the Refresh button). Until then the
+// page says so rather than rendering a form full of zeroes that would look like
+// real values. It travels over the robot's WiFi link and never over the radio,
+// so a rover out of WiFi range reports that instead (see the banner below);
+// driving and telemetry are unaffected by any of this.
 
-import { useEffect, useState } from "preact/hooks";
-import { conn, robotConfigs, robotDocuments, robots } from "../../net/ws.ts";
-import { robotGroupsFor } from "../../settings/schema.ts";
+import { useState } from "preact/hooks";
+import { robotConfigs, robotDocuments, robots } from "../../net/ws.ts";
+import { type Group, robotGroupsFor } from "../../settings/schema.ts";
+import { PidGraph } from "./PidGraph.tsx";
+
+/**
+ * The tuning path of the PID loop this group owns, or null.
+ *
+ * Found from the fields themselves — a group with an `<x>.kp` in it is a group
+ * about the loop `<x>` — rather than from a table of group titles. A title is
+ * prose somebody will reword; the gain path is the same string the robot names
+ * its trace with (robot/control/waypoint.py::pid_traces), so matching on it is
+ * what guarantees the graph and the knobs beneath it are the same loop.
+ */
+function loopIn(group: Group): string | null {
+  const gain = group.fields.find((f) => f.path.endsWith(".kp"));
+  return gain ? gain.path.slice(0, -3) : null;
+}
+import { useRadioFetch } from "../../state/fetch.ts";
 import {
   configTarget,
   refreshRobotConfig,
@@ -15,6 +33,7 @@ import {
   targetRobot,
 } from "../../state/settings.ts";
 import { SettingField } from "./Field.tsx";
+import { Waiting } from "./Waiting.tsx";
 
 function GroupCard(
   { title, blurb, children, open, onToggle }: {
@@ -47,6 +66,9 @@ export function RobotSettings() {
   const rejected = entry?.result?.rejected ?? {};
   const restart = new Set(entry?.result?.restart ?? []);
   const saveError = entry?.result?.save_error ?? null;
+  // Not "the robot is offline" — it may well be driving. Config does not travel
+  // over the radio, so this is specifically "no WiFi link to it".
+  const unreachable = entry?.result?.error ?? null;
   // The groups this robot actually has. A stock build's are the hand-written
   // ones; a build running its own layout describes its actuators and those
   // groups are generated from the description. See settings/schema.ts.
@@ -58,19 +80,19 @@ export function RobotSettings() {
     [groups[0].title]: true,
   });
 
-  // Ask once per robot when the tab mounts, the target changes, or the socket
-  // comes back. Guarded on having no cached config so revisiting the tab
-  // doesn't spend radio airtime re-fetching something we already have. The
-  // field descriptors ride along on the same trigger: without them a custom
-  // layout's actuators would arrive as values with nothing to render them.
-  useEffect(() => {
-    if (rid && !entry && conn.value === "live") refreshRobotConfig();
-  }, [rid, conn.value]);
-  useEffect(() => {
-    if (rid && !documents?.fields_rev && conn.value === "live") {
-      refreshRobotFields();
-    }
-  }, [rid, conn.value]);
+  // Ask per robot when the tab mounts, the target changes, or the socket comes
+  // back. Guarded on having no cached config so revisiting the tab doesn't
+  // spend radio airtime re-fetching something we already have, and retried a
+  // couple of times because the snapshot arrives in pieces and a piece lost to
+  // a busy radio otherwise leaves this page blank for good. The field
+  // descriptors ride along: without them a custom layout's actuators would
+  // arrive as values with nothing to render them.
+  const fetch = useRadioFetch(rid && `${rid}:config`, !!entry, refreshRobotConfig);
+  useRadioFetch(
+    rid && `${rid}:fields`,
+    !!documents?.fields_rev,
+    refreshRobotFields,
+  );
 
   if (!rid) {
     return <p class="hint pad">No robot selected — pick one on the driving view first.</p>;
@@ -97,6 +119,7 @@ export function RobotSettings() {
         </button>
       </div>
 
+      {unreachable && <p class="banner error">{unreachable}</p>}
       {restart.size > 0 && (
         <p class="banner warn">
           {restart.size} change{restart.size === 1 ? "" : "s"} saved but not
@@ -112,10 +135,16 @@ export function RobotSettings() {
 
       {!entry
         ? (
-          <p class="hint pad">
-            Fetching {rid}'s configuration… If it stays empty, the robot is
-            offline or running a build without live tuning.
-          </p>
+          <Waiting
+            what="configuration"
+            robot={rid}
+            fetch={fetch}
+            note={
+              <p class="hint">
+                A build without live tuning also answers nothing here.
+              </p>
+            }
+          />
         )
         : groups.map((group) => (
           <GroupCard
@@ -126,6 +155,18 @@ export function RobotSettings() {
             onToggle={() =>
               setOpen((prev) => ({ ...prev, [group.title]: !prev[group.title] }))}
           >
+            {/* A group that owns a closed loop leads with what that loop is
+                doing. Above the gains rather than below them: you read the
+                curve, then reach for the knob — and the two cannot be about
+                different loops, because the graph is identified by the same
+                path prefix the gain fields carry. */}
+            {loopIn(group) && (
+              <PidGraph
+                robotId={rid}
+                loop={loopIn(group)!}
+                unit={loopIn(group)!.startsWith("nav.") ? "°" : ""}
+              />
+            )}
             {group.fields.map((field) => (
               <SettingField
                 key={field.path}

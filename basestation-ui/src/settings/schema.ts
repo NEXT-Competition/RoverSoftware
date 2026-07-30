@@ -164,6 +164,15 @@ export const ROBOT_GROUPS: Group[] = [
         unit: "s",
         help: "Stop if no drive command arrives within this long. Must stay above the base station's 0.25 s keepalive.",
       }),
+      // Lives here, next to the telemetry rate, because that is what it spends:
+      // it adds the active loop's setpoint, error, output and P/I/D split to
+      // every frame. The graphs it feeds appear in the loop groups below.
+      b("nav.pid_trace", "Graph the loops", {
+        help:
+          "Report the active mode's PID loop so the graphs in Object align and " +
+          "Waypoint navigation can draw it. Costs radio airtime on every frame — " +
+          "switch it on to tune, off to race.",
+      }),
       e("heading_source", "Heading source", ["auto", "gps", "imu"], {
         help: "auto = IMU when calibrated, else the GPS track angle.",
       }),
@@ -383,15 +392,26 @@ export const ROBOT_GROUPS: Group[] = [
   },
   {
     title: "FPV video",
-    blurb: "Needs shared WiFi — the XBee radio cannot carry video.",
+    blurb:
+      "The picture needs shared WiFi — the XBee radio cannot carry video. " +
+      "Switching it on and pointing it somewhere do not: those go over the " +
+      "radio and take effect on the next frame.",
     fields: [
+      b("fpv.enabled", "Streaming enabled", {
+        help:
+          "Starts and stops the feed on the robot, opening its camera the " +
+          "first time it is needed. No restart either way.",
+      }),
+      t("fpv.base_host", "Base station host", {
+        help:
+          "Hostname or IP of the machine running this base station — the one " +
+          "the robot fires video at. Change it here and the rover re-aims.",
+      }),
+      i("fpv.base_port", "UDP port", 1, 65535),
       i("fpv.fps", "Frame rate", 1, 60, { unit: "fps" }),
       i("fpv.jpeg_quality", "JPEG quality", 1, 100, {
         help: "Lower is smaller packets and less bandwidth.",
       }),
-      b("fpv.enabled", "Streaming enabled", { live: false }),
-      t("fpv.base_host", "Base station host", { live: false }),
-      i("fpv.base_port", "UDP port", 1, 65535, { live: false }),
     ],
   },
   {

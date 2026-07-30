@@ -225,8 +225,11 @@ can drive from a tablet with no gamepad (up = throttle, sideways = steer; it
 release-to-zeros and rate-limits to ~30 Hz to match the radio), a floating
 always-visible **E-STOP**, responsive **landscape / portrait (bottom-sheet)**
 layouts with iPad safe-area insets, and locally-bundled map + fonts (no CDN, so
-it works fully offline). Physical gamepads still work via the browser Gamepad
-API, and the server-side gamepad path is unchanged.
+it works fully offline). A **physical gamepad plugs into the base station**, not
+into the tablet: it is read there by pygame and goes straight out over the radio,
+so nothing about driving with a controller depends on a browser being awake or a
+WebSocket being healthy. Its bindings are still edited from *Settings →
+Controller*.
 
 ### Commanding by voice — the Command tab
 
@@ -330,9 +333,20 @@ for the rest — so field tuning survives the next power cycle.
   what makes it move on — after a delay, when lined up, once the route finishes,
   after N shots, or when you press a button. Saved routines run **on the robot**,
   so they survive losing the radio, and the box the robot is actually in lights
-  up as it runs. Transitions are checked in order, one per tick, and a condition
+  up as it runs. Every routine a rover carries then appears by name on the
+  driving view beside the mode buttons, and answers to that name out loud —
+  naming a routine is how you invoke it. Transitions are checked in order, one per tick, and a condition
   can be required to hold continuously before it counts — the same reason the
   launcher waits half a second before firing.
+- **Network** — put a rover on the WiFi in front of you, from the dashboard.
+  Scan, pick, connect; it reports what NetworkManager said and the address it
+  got. Works on a rover that is on **no network at all**, because the request
+  falls back to the radio — which is the point, since a rover cannot be told
+  about a network over that network. The password is sent, applied and
+  forgotten: never saved on the base station, never in a config snapshot, never
+  echoed back. It does cross the radio in the clear when there is no WiFi yet
+  (the XBee is unencrypted unless you set its AES key), and the page says so
+  before you type one.
 - **Controller** — remap the gamepad by *pressing the control you want*, with a
   live view of every axis and button and the throttle/steer the current mapping
   produces. Also dead zone, trigger rest value, throttle/steer authority and

@@ -52,7 +52,7 @@ The math (bearing + haversine distance) is real; the sensor source is injected
 from __future__ import annotations
 
 import math
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .commands import DriveCommand
 from .controller import Controller
@@ -138,6 +138,10 @@ class WaypointController(Controller):
         self._last_heading: Optional[float] = None
         self._since_sample = 0.0
         self._steer = 0.0
+        # The bearing the loop is steering towards, kept only so the tuning
+        # graphs can show a setpoint. The PID itself never sees it — it is given
+        # the error between this and the heading — so nothing else reads it.
+        self._last_bearing: Optional[float] = None
 
     def set_pose_provider(self, provider: PoseProvider) -> None:
         self.pose_provider = provider
@@ -155,6 +159,7 @@ class WaypointController(Controller):
         self._last_heading = None
         self._since_sample = 0.0
         self._steer = 0.0
+        self._last_bearing = None
 
     def on_activate(self) -> None:
         self._idx = 0
@@ -214,7 +219,9 @@ class WaypointController(Controller):
             self._reset_loop()
             return DriveCommand.arcade(self.acquire_speed, 0.0)
 
-        err = _heading_error_deg(bearing_deg(lat, lon, tlat, tlon), heading)
+        bearing = bearing_deg(lat, lon, tlat, tlon)
+        self._last_bearing = bearing
+        err = _heading_error_deg(bearing, heading)
         steer = self._steer_for(err, heading, dt, absolute)
 
         # Point-then-go: a large heading error means pivot in place to face the
@@ -229,6 +236,27 @@ class WaypointController(Controller):
         if abs(err) > self.pivot_threshold_deg:
             return DriveCommand.arcade(0.0 if absolute else self.acquire_speed, steer)
         return DriveCommand.arcade(self.cruise_speed, steer)
+
+    def pid_traces(self) -> Dict[str, dict]:
+        """Whichever heading loop is actually steering, for the tuning graphs.
+
+        One, not both. They have separate gains for a real reason — an IMU
+        attitude and a GPS course over ground are different signals at different
+        rates — and only one of them is running at any moment, so reporting the
+        idle one would put a frozen curve on screen next to a live one and spend
+        radio airtime doing it. Which one is live is itself the useful fact: a
+        rover you thought was steering on the IMU showing the GPS loop is a
+        rover whose IMU never finished calibrating.
+
+        Keyed by the loop's own tuning path, so the graph and the gain fields
+        cannot drift apart — the name IS the answer to "which knobs move this".
+        """
+        if self._last_bearing is None:
+            return {}
+        pid = self.heading_pid if self._absolute else self.gps_heading_pid
+        name = "nav.heading_pid" if self._absolute else "nav.gps_heading_pid"
+        return {name: pid.trace(setpoint=self._last_bearing,
+                                measured=self._last_heading)}
 
     def _steer_for(self, err: float, heading: float, dt: float, absolute: bool) -> float:
         """Advance the appropriate heading loop and return the steering output.

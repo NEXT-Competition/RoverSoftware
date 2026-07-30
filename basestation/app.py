@@ -44,6 +44,7 @@ from typing import Any, Optional, Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 
+from robot import tuning
 from robot.comms.doc_transfer import split
 
 from .command import CommandExecutor
@@ -53,11 +54,12 @@ from .places import PlaceStore
 from .settings import SettingsStore
 from .tiles import TileStore, attribution_for, content_type
 
-# Document fragments handed to the radio per broadcast cycle (30 Hz by default,
-# so ~60 frames a second of headroom). Sized to empty a layout in well under a
-# second without ever giving the link more than it can write.
-DOC_FRAMES_PER_CYCLE = 2
-
+# What the dashboard says when a robot can't be configured. One sentence, and it
+# names the fix: the radio is up (you can see the rover moving) but config does
+# not travel on it, so "offline" would be a lie and "no response" unhelpful.
+OFFLINE_HINT = ("This robot is not on WiFi. Configuration, layouts and routines "
+                "travel over the WiFi link, not the radio — bring it into range, "
+                "or set comms.base_host to point it at this base station.")
 
 def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=None,
               settings: SettingsStore | None = None, ip_server=None,
@@ -98,46 +100,142 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         if robot_id:
             link.send({**msg, "to": robot_id})
 
-    def dispatch_bulk(robot_id, msg: dict) -> bool:
-        """Send a bulk frame over WiFi if that robot is on it; else the radio.
+    def _in_process_link() -> bool:
+        """True for the simulator: robots in this process, with no wire at all.
 
-        Returns True when WiFi took it, which is also the signal that there is
-        no airtime to pace against — see drain_documents. A robot at the far end
-        of the field simply isn't in `ip_server`, so it keeps getting documents
-        over the radio with no special handling here.
+        There is no radio to protect and no socket to dial in on, so none of the
+        rules below apply to it — everything goes straight down `link.send`.
+        """
+        return getattr(link, "send_bulk", None) is None
+
+    def _bulk_ready(robot_id) -> bool:
+        """Is there a link that will carry kilobytes to this robot right now?"""
+        if _in_process_link():
+            return True
+        return bool(robot_id and ip_server is not None
+                    and ip_server.is_connected(robot_id))
+
+    def dispatch_bulk(robot_id, msg: dict) -> bool:
+        """Offer one bulk frame to the WiFi link. False means "not now, keep it".
+
+        Documents go over WiFi or not at all. A layout is kilobytes on a channel
+        shared with every robot's telemetry, and unlike a drive frame nothing
+        about it is urgent — so a robot out at the far end of the field waits
+        for WiFi rather than spending the radio on it. Undeliverable frames are
+        reported to the editor (see `deliver_or_report`) instead of queueing
+        against a link that isn't coming back this match.
+
+        The False-means-keep-it rule still holds for a robot that IS on WiFi:
+        half a layout is not a smaller layout, and a fragment dropped because a
+        socket was mid-reconnect is one nobody re-requests.
+        """
+        if not robot_id:
+            return True  # nowhere to send it; drop it rather than queue forever
+        if _in_process_link():
+            link.send({**msg, "to": robot_id})
+            return True
+        return bool(ip_server is not None and ip_server.send({**msg, "to": robot_id}))
+
+    def dispatch_config(robot_id, msg: dict) -> bool:
+        """Send one config command over WiFi. False means it could not be sent.
+
+        The radio carries driving, telemetry and the e-stop. Configuration —
+        get_config, set_config, and the document/field requests whose REPLIES
+        are kilobytes — carries none of that urgency and all of the weight, so
+        it rides the WiFi link (robot/comms/ip_link.py) and waits when there
+        isn't one.
+
+        One exception, and it is the reason this function exists rather than
+        just calling `ip_server.send`: a set_config carrying nothing but
+        comms.base_host/base_port is how a rover is TOLD where the WiFi link is.
+        That one cannot require the link it configures, so it goes over the
+        radio — ~60 bytes, by hand, once. See tuning.BOOTSTRAP_PATHS.
         """
         if not robot_id:
             return False
+        if _in_process_link():
+            link.send({**msg, "to": robot_id})
+            return True
         if ip_server is not None and ip_server.send({**msg, "to": robot_id}):
             return True
-        dispatch(robot_id, msg)
+        if tuning.is_bootstrap(msg.get("config")):
+            link.send({**msg, "to": robot_id})
+            return True
         return False
 
-    # Outbound document fragments, paced rather than dispatched in a loop. The
+    def dispatch_or_radio(robot_id, msg: dict) -> None:
+        """WiFi if there is a link, the radio if there isn't.
+
+        For the one kind of command that cannot require the link it configures.
+        WiFi is preferred rather than merely allowed, and that is a security
+        property, not an optimisation: a `set_wifi` carries a password, the XBee
+        runs unencrypted by default, and a rover already on a network can be
+        moved to another one without that password ever going out over the air.
+        """
+        if not robot_id:
+            return
+        if not _in_process_link() and ip_server is not None \
+                and ip_server.send({**msg, "to": robot_id}):
+            return
+        link.send({**msg, "to": robot_id})
+
+    def deliver_or_report(robot_id, msg: dict) -> None:
+        """dispatch_config, but a failure reaches the operator's page.
+
+        A settings page that just stays blank is the failure mode this whole
+        path is trying not to have. `fleet.note_unreachable` puts the reason
+        where the config result already renders, so "the rover is not on WiFi"
+        is something the dashboard says rather than something you infer.
+        """
+        if not dispatch_config(robot_id, msg):
+            fleet.note_unreachable(robot_id, OFFLINE_HINT)
+
+    # Outbound document fragments, metered rather than dispatched in a loop. The
     # robot's own outbox does this in the other direction and for the same
-    # reason: XBeeLink drops a frame the radio isn't draining, so a 10-fragment
-    # layout fired at once is the shape that arrives incomplete.
-    _doc_queue: "deque[tuple]" = deque()
+    # reason: a radio handed more than it can write drops frames, and a
+    # 10-fragment layout fired at once is the shape that arrives incomplete.
+    # Bounded for the same reason the robot's outbox is: a link that has stopped
+    # taking frames must not turn a queue into a leak. The oldest go first —
+    # they belong to a save the operator has long since given up on.
+    _doc_queue: "deque[tuple]" = deque(maxlen=512)
     _txid = {"n": 0}
 
     def send_document(robot_id, action: str, doc: dict, save: bool) -> None:
+        mtype = "put_layout" if action == "set_layout" else "put_routines"
         if not robot_id:
             return
+        if not _bulk_ready(robot_id):
+            # Refuse up front rather than queueing against a link that isn't
+            # there. The editor's Save button gets an answer either way; a
+            # document sitting in a queue for a rover that never comes back on
+            # WiFi is the version that looks saved and isn't.
+            fleet.note_doc_unreachable(robot_id, mtype, OFFLINE_HINT)
+            return
         _txid["n"] += 1
-        mtype = "put_layout" if action == "set_layout" else "put_routines"
         for frame in split(doc, mtype, txid=f"B{_txid['n']}", save=save):
             _doc_queue.append((robot_id, frame))
 
     async def drain_documents() -> None:
-        # The pacing exists to protect radio airtime. A fragment that went over
-        # WiFi cost none, so it doesn't count against the budget and the next
-        # one goes immediately — a layout push over WiFi completes in one cycle
-        # instead of being metered out over a second.
-        budget = DOC_FRAMES_PER_CYCLE
-        while _doc_queue and budget > 0:
-            robot_id, frame = _doc_queue.popleft()
-            if not dispatch_bulk(robot_id, frame):
-                budget -= 1
+        # Frames leave the queue only once a link has taken them, so a cycle
+        # where a socket is briefly busy simply defers the rest to the next one.
+        # A refusal that ISN'T transient — the robot has dropped off WiFi — means
+        # the rest of this document has nowhere to go: drop what is queued for
+        # that robot and say so, because a half-sent layout is one the robot
+        # will never assemble and nobody will re-request.
+        while _doc_queue:
+            robot_id, frame = _doc_queue[0]
+            if dispatch_bulk(robot_id, frame):
+                _doc_queue.popleft()
+                continue
+            if _bulk_ready(robot_id):
+                return  # transient; keep our place and try again next cycle
+            dropped = {f.get("type") for rid_, f in _doc_queue if rid_ == robot_id}
+            survivors = [item for item in _doc_queue if item[0] != robot_id]
+            _doc_queue.clear()
+            _doc_queue.extend(survivors)
+            for mtype in dropped:
+                fleet.note_doc_unreachable(robot_id, mtype or "put_layout",
+                                           OFFLINE_HINT)
 
     # ---- gamepad -> currently selected robot ----
     # Rate-limit drive frames so we don't flood a slow XBee link (at 9600 baud a
@@ -152,11 +250,40 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     DRIVE_KEEPALIVE = 0.25  # seconds; must stay below the robot's command_timeout
     _drive = {"throttle": None, "steer": None, "t": -1.0}
 
+    # ---- who owns the drive channel ----
+    # Two inputs can command drive: the pad below, and {"action":"drive"} from a
+    # browser. Nothing arbitrated between them, so they interleaved frame for
+    # frame on the radio — a held trigger and an idle touch joystick arrived as
+    # alternating throttle 1.0 / 0.0 and the rover stuttered instead of driving.
+    #
+    # The pad wins while it is being used. It is a real control surface in
+    # somebody's hands, whereas a browser is often a tablet lying on a bench, and
+    # of the two the pad is the one whose operator is watching the rover. The
+    # claim lapses GAMEPAD_HOLD seconds after the pad last asked for movement, so
+    # letting go of the stick hands the channel straight back to the touch
+    # joystick. It is scoped to the robot the pad is actually driving.
+    #
+    # Deliberately narrow: `drive` only. E-STOP, mode changes, jogs and every
+    # other action still come through from any client at any moment — a spoken
+    # "stop" is an `estop`, not a drive frame (see command/fastpath.py), and
+    # must never wait on who is holding the stick.
+    GAMEPAD_HOLD = 1.0  # seconds
+    _pad_claim: dict = {"rid": None, "t": -1.0}
+
+    def _pad_owns_drive(rid) -> bool:
+        return (rid is not None and rid == _pad_claim["rid"]
+                and (time.monotonic() - _pad_claim["t"]) < GAMEPAD_HOLD)
+
     def on_drive(throttle: float, steer: float) -> None:
         rid = fleet.selected
         if not rid:
             return
         now = time.monotonic()
+        # Claim on what the operator is asking for, not on what we transmit: the
+        # rate limit below drops most frames, and a claim renewed only by those
+        # would lapse between them and let the browser back in mid-corner.
+        if throttle or steer:
+            _pad_claim.update(rid=rid, t=now)
         dt = now - _drive["t"]
         min_interval = 1.0 / max(settings.base.drive_hz, 1.0)
         changed = (_drive["throttle"] is None
@@ -221,9 +348,13 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         elif action == "route":
             dispatch(rid, {"type": "route", "waypoints": data.get("waypoints", [])})
         elif action == "drive":
-            dispatch(rid, {"type": "drive",
-                           "throttle": float(data.get("throttle", 0)),
-                           "steer": float(data.get("steer", 0))})
+            # Dropped, not queued, while the base-station pad has this robot:
+            # a stale drive frame is worth nothing a moment later, and the whole
+            # point is to keep it off the wire. See GAMEPAD_HOLD above.
+            if not _pad_owns_drive(rid):
+                dispatch(rid, {"type": "drive",
+                               "throttle": float(data.get("throttle", 0)),
+                               "steer": float(data.get("steer", 0))})
         elif action in ("arm_shooter", "disarm_shooter", "fire"):
             # Pass-through: the robot owns every firing rule (arm latch, dwell,
             # cooldown, magazine). Duplicating any of that here would give two
@@ -231,25 +362,34 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # is the one that can be out of date or disconnected.
             dispatch(rid, {"type": action})
         # ---- configuration ----
+        # All of it over WiFi (dispatch_config), because all of it is kilobytes
+        # of something nobody is waiting on. Still explicit, never polled: the
+        # pages ask once when they open.
         elif action == "get_config":
-            # Explicit, never polled: the reply is ~2.4 KB and the radio is
-            # shared with telemetry. The settings page asks once when opened.
-            dispatch(rid, {"type": "get_config"})
+            deliver_or_report(rid, {"type": "get_config"})
         elif action == "set_config":
             values = data.get("config")
             if isinstance(values, dict) and values:
-                dispatch(rid, {"type": "set_config", "config": values,
-                               "save": bool(data.get("save", True))})
+                deliver_or_report(rid, {"type": "set_config", "config": values,
+                                        "save": bool(data.get("save", True))})
         # ---- documents (hardware layout, FSM routines) ----
         elif action in ("get_layout", "get_routines", "get_fields"):
-            # Explicit, never polled — same rule as get_config. These are
-            # kilobytes on a radio shared with telemetry, and the editors ask
-            # once when they open.
-            dispatch(rid, {"type": action})
+            deliver_or_report(rid, {"type": action})
         elif action in ("set_layout", "set_routines"):
             doc = data.get("doc")
             if isinstance(doc, dict):
                 send_document(rid, action, doc, bool(data.get("save", True)))
+        # ---- WiFi ----
+        # The one configuration path that must work with NO WiFi, because its
+        # whole job is to get the rover onto some. So: WiFi when there is one
+        # (which keeps a password off the air), the radio when there isn't.
+        #
+        # Same exception the base_host bootstrap gets and for the same reason —
+        # a rover cannot be told about a network over that network — except one
+        # layer down, since base_host is useless until the Pi is on a LAN at all.
+        elif action in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
+            payload = {k: v for k, v in data.items() if k != "action"}
+            dispatch_or_radio(rid, payload | {"type": action})
         elif action in ("select_routine", "routine_cmd", "routine_event"):
             # Pass-through: the robot owns every rule about what a routine may
             # do. Duplicating any of it here would give two sources of truth,
@@ -383,6 +523,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # the operator declared. Cold channel with the configs, for the same
             # reason: kilobytes that change on Save, not thirty times a second.
             "documents": fleet.documents(),
+            # Which network each rover is on, and what it can see. Cold for the
+            # same reason, and separate from `configs` on purpose: WiFi is not a
+            # tunable path and its credentials must never be in a snapshot that
+            # is echoed to every browser (robot/comms/wifi.py).
+            "wifi": fleet.wifi(),
             # Live gamepad axes/buttons, so the mapping editor can offer
             # "press the button you want" instead of asking for an index.
             "gamepad": controller.state() if controller is not None else None,
@@ -618,4 +763,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # way in: everything it can do, it does by calling handle_action above.
     app.state.commands = executor
     app.state.stt = stt
+    # The one entry point itself, for the same reason — an embedder driving the
+    # bridge without a browser, and tests that need to interleave a browser
+    # action with a gamepad frame without standing up a WebSocket.
+    app.state.handle_action = handle_action
     return app

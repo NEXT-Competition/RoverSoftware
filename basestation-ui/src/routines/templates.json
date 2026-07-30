@@ -62,6 +62,7 @@
     "key": "find",
     "title": "Find and approach a target",
     "blurb": "Waits for the camera to see something, drives at it with object align, and stops at the standoff distance. Falls back to searching if the target is lost.",
+    "needs": "What to align to — put the object's detector label in “at object” on the first two steps. Left blank, they aim at whatever the camera happens to see.",
     "spec": {
       "id": "find_target",
       "name": "Find and approach a target",
@@ -123,7 +124,7 @@
     "key": "bucket",
     "title": "Drive to a bucket, line up, shoot",
     "blurb": "The full play. GPS gets the rover to roughly the right place, the camera does the last few metres — align on the bucket and creep to the standoff distance — and only then does it fire. GPS is metres-accurate and a bucket is not, which is exactly why the two halves are separate steps.",
-    "needs": "A saved place for the bucket. Drive a rover to one in teleop, press “Save rover position”, then pick it in the first step.",
+    "needs": "A saved place for the bucket — drive a rover to one in teleop, press “Save rover position”, then pick it in the first step. Also the bucket's detector label, in “at object” on the aiming steps.",
     "spec": {
       "id": "bucket_run",
       "name": "Drive to a bucket, line up, shoot",

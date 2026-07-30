@@ -88,6 +88,35 @@ sheet collapses, the map keeps the space, and the stop button stays where it
 was. Large tap targets, iPad safe-area insets, and locally-bundled map and fonts
 — no CDN, so it works fully offline.
 
+## Arriving somewhere new
+
+The rovers are on last week's WiFi and nothing that rides it — configuration,
+layouts, routines, the camera feed — works until each Pi is told about the
+network in front of you. *Settings → Network* does that from the dashboard,
+per rover:
+
+1. **Scan.** The rover lists what it can see, strongest first.
+2. Pick one, type the password, **Connect**. It reports what NetworkManager
+   said — including "Secrets were required, but not provided.", which is a wrong
+   password — and shows the address it got.
+3. **Forget** the old network if the rover keeps preferring it.
+
+This works on a rover that is on **no network at all**, which is the whole point:
+the request goes over the radio when there is no WiFi to carry it, the same
+exception `comms.base_host` gets, one layer down. Driving and the e-stop are
+untouched throughout — they never left the radio.
+
+> **The password crosses the radio in the clear** when the rover is not already
+> on WiFi, because the XBee is unencrypted unless you have set its AES key. The
+> page says so before you type one. A rover already on some network is moved to
+> another over WiFi instead, and nothing goes on air.
+
+Two things that save an afternoon: set the **country** once (with no regulatory
+domain a Pi has 5 GHz soft-blocked, so a venue's 5 GHz network is *missing from
+the scan* rather than refusing to connect), and note that this needs
+NetworkManager — Raspberry Pi OS Bookworm or later. An older dhcpcd image says
+so on the page rather than pretending to work.
+
 ## When the loop is over
 
 Once the code is worth handing to someone else, tag it and let CI build the

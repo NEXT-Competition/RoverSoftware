@@ -33,7 +33,12 @@ class FakeFleet:
         return {"selected": self._selected, "robots": [dict(r) for r in self._robots]}
 
     def documents(self):
-        return {"rover2": {"routines": {"routines": [{"id": "collect"}]}}}
+        return {"rover2": {"routines": {"routines": [
+            {"id": "collect"},
+            # The shape the editor actually produces: a generated id, and the
+            # name the operator typed and will say out loud.
+            {"id": "routine2", "name": "Collect cones"},
+        ]}}}
 
 
 class FakePlaces:
@@ -193,6 +198,34 @@ def test_a_stop_buried_in_a_sentence_still_stops(rig):
     assert out.status == "done"
     assert out.route == "fastpath"
     assert sent == [{"action": "estop", "robot_id": "rover1"}]
+
+
+def test_a_routine_is_run_by_name_with_no_model_and_one_confirmation(rig):
+    """The whole feature, end to end: an operator programs a routine, names it,
+    and says that name. It reaches the radio as exactly what the Routines panel
+    would have sent — and only after a human taps confirm, because a routine
+    drives the robot on its own."""
+    ex, sent = rig
+    out = ex.recognise("rover 2 run collect cones")
+    assert out.route == "fastpath", "starting a routine must not need a model"
+    assert out.status == "pending"
+    assert sent == []
+    # Named back as it was said. "routine2" is not something an operator can
+    # check a confirm card against.
+    assert "Collect cones" in out.say
+    ex.confirm(out.confirm_id)
+    assert sent[0] == {"action": "select_routine", "robot_id": "rover2",
+                       "id": "routine2"}
+    assert {"action": "mode", "robot_id": "rover2", "mode": "routine"} in sent
+
+
+def test_a_routine_named_for_another_rover_is_refused_not_redirected(rig):
+    """rover1 carries no routines. Starting "collect cones" on it because
+    rover2 happens to have one is how the wrong machine drives off."""
+    ex, sent = rig
+    out = ex.execute("start_routine", {"robot": "rover1", "routine": "collect cones"})
+    assert out.status == "refused"
+    assert sent == []
 
 
 def test_making_something_safe_is_never_gated():

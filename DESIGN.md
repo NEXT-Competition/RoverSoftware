@@ -19,6 +19,9 @@ colors:
   accent-lift: "#86f6e0"
   on-accent: "#04211c"
   data: "#f0a53a"
+  chart-1: "#3987e5"
+  chart-2: "#d95926"
+  chart-3: "#199e70"
   ok: "#35d68a"
   warn: "#f5b43f"
   danger: "#ff4256"
@@ -218,6 +221,22 @@ A graphite field with one signal marker, one plan colour, and three flag signals
   "wrong."
 - **Flag Red** (`{colors.danger}`): stopped, refused, offline, invalid. The only
   colour permitted a large saturated fill, and only on the e-stop.
+
+### Chart series
+`{colors.chart-1}` / `{colors.chart-2}` / `{colors.chart-3}`, assigned in that
+fixed order and never cycled — today the P, I and D contributions on the PID
+tuning graphs. They are deliberately none of the above: the accent means "the
+rover you are calling", Plan Amber means "drawn", and the flags mean robot
+state. A data series that borrowed any of them would claim a meaning it does not
+have.
+
+Both renditions are stepped for their own surface rather than lightened from
+each other, and the set is validated for colour-vision deficiency across **every
+pair**, not just neighbouring ones, because three lines share one plot. Adding a
+fourth slot means re-validating, not picking a fourth nice colour. Everything a
+chart can say structurally it says structurally: a reference line is dashed and
+muted, a total is ink, and a difference between two lines is the shaded gap
+between them — hue is spent only on identity that has nowhere else to live.
 
 ### Ink on fills
 `{colors.on-accent}`, `{colors.on-danger}` and `{colors.on-ok}` exist because the

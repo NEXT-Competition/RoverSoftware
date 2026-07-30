@@ -298,6 +298,151 @@ def test_arming_reaches_the_controller_when_the_gate_is_on():
                for m in spies["shooter_align"].messages)
 
 
+# --- what an aligning state aims at ------------------------------------------
+#
+# The routine BORROWS the detector's target label. Every test here is really
+# about the same claim: whatever a routine points the camera at, the operator's
+# own choice is what is there afterwards.
+
+
+class FakeVision:
+    """Stands in for VisionConfig — the one field the routine touches."""
+
+    def __init__(self, target_label=""):
+        self.target_label = target_label
+
+
+def test_an_aligning_state_points_the_detector_at_its_target():
+    rc, _ = make([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    vision = FakeVision()
+    rc.set_vision_config(vision)
+    rc.on_activate()
+    rc.update(0.02)
+    assert vision.target_label == "bucket"
+
+
+def test_the_operators_own_target_comes_back_when_the_routine_ends():
+    """The operator chose "cone" in Settings. A routine that aimed at a bucket
+    for four seconds must not leave the detector filtering on buckets for the
+    rest of the match, with nothing on screen to explain why."""
+    rc, _ = make([
+        # Held on an event rather than `always`: the engine takes its transition
+        # inside the same tick it entered on, so an `always` state is never
+        # observably inhabited — and the point here is what happens WHILE it is.
+        # An event, not a delay, because the engine reads a real clock (see
+        # tests/test_routine_engine.py) and this controller owns its own engine.
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "event", "name": "go", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    vision = FakeVision("cone")
+    rc.set_vision_config(vision)
+    rc.on_activate()
+    rc.update(0.02)
+    assert vision.target_label == "bucket"
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)  # reaches the terminal state, so the run ends
+    assert vision.target_label == "cone"
+
+
+def test_the_target_comes_back_on_an_estop_too():
+    """Every exit path, not just the tidy one."""
+    rc, _ = make([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    vision = FakeVision("cone")
+    rc.set_vision_config(vision)
+    rc.on_activate()
+    rc.update(0.02)
+    rc.on_estop()
+    assert vision.target_label == "cone"
+
+
+def test_leaving_routine_mode_hands_the_target_back():
+    rc, _ = make([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    vision = FakeVision("cone")
+    rc.set_vision_config(vision)
+    rc.on_activate()
+    rc.update(0.02)
+    rc.on_deactivate()
+    assert vision.target_label == "cone"
+
+
+def test_consecutive_states_may_aim_at_different_things():
+    """And the value restored at the end is the operator's, not the first
+    state's — the bug this test exists to catch is treating each state's
+    predecessor as the thing to put back."""
+    rc, _ = make([
+        {"id": "find", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "event", "name": "go", "to": "shoot"}]},
+        {"id": "shoot", "drive": {"mode": "shooter_align", "target": "goal"},
+         "transitions": [{"when": "event", "name": "go", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    vision = FakeVision("cone")
+    rc.set_vision_config(vision)
+    rc.on_activate()
+    rc.update(0.02)
+    assert vision.target_label == "bucket"
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)
+    assert vision.target_label == "goal"
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)
+    assert vision.target_label == "cone"
+
+
+def test_a_state_with_no_target_restores_rather_than_clearing():
+    """"" means "whatever is already selected", not "anything". A state that
+    doesn't care must not silently widen the filter the operator set."""
+    rc, _ = make([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "always", "to": "coast"}]},
+        {"id": "coast", "drive": {"mode": "object_align"},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    vision = FakeVision("cone")
+    rc.set_vision_config(vision)
+    rc.on_activate()
+    rc.update(0.02)
+    rc.update(0.02)
+    assert vision.target_label == "cone"
+
+
+def test_the_target_is_set_before_the_delegate_is_activated():
+    """An alignment controller resets its search timers in on_activate and then
+    looks for whatever the detector is filtering on. Setting the label second
+    means the first moments of every aiming state hunt the wrong object."""
+    seen = []
+    rc, spies = make([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    vision = FakeVision()
+    rc.set_vision_config(vision)
+    spies["object_align"].on_activate = lambda: seen.append(vision.target_label)
+    rc.on_activate()
+    rc.update(0.02)
+    assert seen == ["bucket"]
+
+
+def test_a_build_with_no_vision_runs_the_routine_anyway():
+    """A target on a robot with no camera is worth a line in the log, not a
+    refusal — the rest of the routine still does its job."""
+    rc, _ = make([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "always", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    rc.on_activate()
+    rc.update(0.02)
+    rc.update(0.02)  # must not raise on the way out either
+
+
 # --- integration with the robot ---------------------------------------------
 
 @pytest.fixture
@@ -316,9 +461,41 @@ def rover(monkeypatch, tmp_path):
         presets={"in": {"roller": 1.0}})}
     bot = Robot(cfg)
     sent = []
-    bot.link.send = sent.append
+
+    def take(message):
+        sent.append(message)
+        return True
+
+    bot.link.send = take
+    # Bulk frames are metered against the radio's real byte rate, so the real
+    # link would refuse most of a multi-frame reply on any one tick. A test
+    # isn't waiting out that pacing; tests/test_airtime.py exercises it.
+    bot.link.send_bulk = take
     bot.sent = sent
+    # Documents travel over the robot's WiFi link, never the radio (see
+    # robot/robot.py::_drain_outbox), so a rover with no link would drop every
+    # reply below. `bot.sent` is what the base station receives either way.
+    bot.ip_link = _FakeIP(sent)
     return bot
+
+
+class _FakeIP:
+    """A connected IPLink that records into the same list as the fake radio.
+
+    Which link carried what is tested in tests/test_robot_config.py; here it
+    only has to exist, so the reply lands somewhere the assertions can see it.
+    """
+
+    def __init__(self, sink):
+        self.sent = sink
+        self.host, self.port = "base.local", 5006
+
+    def is_connected(self):
+        return True
+
+    def send(self, msg):
+        self.sent.append(msg)
+        return True
 
 
 def deliver(bot, msg):

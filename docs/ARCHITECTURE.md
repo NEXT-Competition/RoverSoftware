@@ -556,14 +556,31 @@ address on a DHCP field network); the base station keys sockets by the `from` on
 anything a robot sends, plus a `hello` on connect so the mapping exists before
 the first document push.
 
-**The fallback is the design.** `send()` returns a *bool* rather than raising:
-`False` means "not connected — you send it". So `comms.base_host` being blank, a
-base station that isn't up, and a rover driving out of WiFi range all degrade to
-exactly the pre-existing radio behaviour, decided per frame. Only the pacing
-changes with it — `Robot._drain_outbox` meters frames onto the radio at
-`OUTBOX_PER_TICK`, but empties the whole queue over WiFi, because there's no
-airtime to protect. A config snapshot that took ~100 ms of paced ticks lands in
-one.
+**Over WiFi or not at all.** `send()` returns a *bool* rather than raising:
+`False` means "not connected". There is no radio fallback for bulk traffic — a
+snapshot is half a second of a channel shared with every robot's telemetry, and
+nothing about it is urgent, so a rover with a blank `comms.base_host`, a base
+station that isn't up, or a drive out of WiFi range simply **isn't configurable
+until the link is back**. It keeps driving, reporting and answering the e-stop
+throughout, because that is what the radio is for. Both ends say so rather than
+going quiet: the robot logs the dropped frames (`Robot._drain_outbox`) and the
+base station puts the reason where the settings page renders it
+(`FleetManager.note_unreachable`), so "not on WiFi" is stated, not inferred.
+
+Pacing follows from the same split. `Robot._drain_outbox` empties the whole
+queue over WiFi in one tick because there's no airtime to protect; the metering
+in `airtime.py` now only applies to the one frame type below.
+
+**The bootstrap exception.** A `set_config` carrying nothing but
+`comms.base_host` / `comms.base_port` *does* go over the radio — it is how a
+rover is told where the WiFi link is, and requiring the link to configure the
+link is a chicken-and-egg that ends with an SSH session and a text editor. The
+test is all-or-nothing (`tuning.is_bootstrap`): a frame that slips a PID gain in
+beside the hostname is an ordinary config edit and waits for WiFi like one.
+~60 bytes, sent by hand, once. Both settings are `live=True` — `Robot`
+re-dials on the spot (`_retarget_ip_link`, on its own thread because `stop()`
+can block on a parked reader), so the new address takes effect without the
+service restart that would have meant walking out to the rover anyway.
 
 ### 4.6 Sensors
 
@@ -578,11 +595,13 @@ Newline-delimited JSON over one shared serial channel. `to` addresses a robot (o
 (`basestation.env`, default **57600**) **must match each robot's** `RS_XBEE_BAUD`
 — a mismatch delivers only garbage frames.
 
-> The same message set also travels over WiFi when both ends are configured for
-> it, but only the bulk half: `config`, `fields`, `layout`, `routines` and their
-> `put_*`/`*_result` counterparts. Realtime frames — `drive`, `telemetry`,
-> `mode`, `estop` — never leave the radio, because the radio is what has the
-> range. See [§4.5](#45-comms-layer).
+> Only the realtime half of this message set actually travels on the radio:
+> `drive`, `telemetry`, `mode`, `estop`. The bulk half — `config`, `fields`,
+> `layout`, `routines` and their `put_*`/`*_result` counterparts — travels over
+> WiFi and does not fall back here, because the radio is what has the range and
+> a config dump is what spends it. The single exception is a `set_config`
+> carrying only `comms.base_host`/`comms.base_port`, which is how a rover is
+> told where the WiFi link is. See [§4.5](#45-comms-layer).
 
 ```jsonc
 // base station -> robot
@@ -630,18 +649,30 @@ motor; partially applying it is exactly how two motors end up on one channel. So
 `comms/doc_transfer.py` slices the JSON text into numbered fragments and applies
 nothing until every fragment is in hand. The receiver is bounded: one transfer at
 a time, a 5 s timeout, a 32 KB cap. Acking is whole-document — the robot replies
-`layout_result` / `routines_result` after validating, and the base station
-retries the entire document once after 3 s of silence. No per-part NAKs: a save
-is a rare deliberate action, and whole-doc retry is a tenth of the code for the
-same reliability at this scale.
+`layout_result` / `routines_result` after validating. No per-part NAKs: a save is
+a rare deliberate action, and the editor holds its draft until the ack arrives,
+so a save that got lost is visible as a Save button that stayed dirty.
 
-**Multi-frame replies are paced, not burst.** `XBeeLink.send` drops the frame and
-flushes when the radio isn't draining inside its 0.2 s write timeout, so firing
-ten frames inside one tick is precisely the shape that arrives incomplete.
-`Robot` queues them and drains two per control tick; the base station does the
-same in the other direction. Telemetry still goes direct — it is one small frame,
-it is what an operator most needs to be current, and delaying it behind a config
-dump is the wrong trade.
+**Multi-frame traffic is metered against the line, not counted in frames.**
+`comms/airtime.py` is a token bucket denominated in bytes and refilled at the
+link's own baud rate. Both ends used to pace in *frames per tick*, which reads
+like pacing and isn't: the robot's two frames per 50 Hz tick is 100 frames a
+second, and at ~430 bytes a frame that is 43 kB/s offered to a link that carries
+5.8. The buffer fills, `serial.write` hits its 0.2 s timeout, and the frame is
+dropped to keep the control loop alive — and what gets dropped is a fragment of
+a document, which is all-or-nothing, so the settings page stays blank forever.
+
+So `XBeeLink` has two doors. `send()` is realtime (drive, telemetry, e-stop):
+it goes now and is *charged* afterwards, so bulk gives way to it rather than
+competing. `send_bulk()` answers whether the caller is **done with the frame** —
+`False` means the link is merely busy and the frame stays at the head of the
+queue, `True` means written *or* unwritable (a dead port never will take it, and
+hoarding it would turn a queue into a leak). Both `Robot._drain_outbox` and the
+base station's `drain_documents` pop only on `True`.
+
+The dashboard closes the loop from the other side: `state/fetch.ts` re-asks a
+document that hasn't arrived, three times over eight seconds, and then says so
+with a button instead of leaving "Fetching…" on screen forever.
 
 The base station rate-limits `drive` frames it sends (see [§7](#7-the-base-station))
 so a fast gamepad stream doesn't back up a slow radio.
@@ -836,7 +867,29 @@ robot wins) and `app.py` relays them as browser-native MJPEG at
 `/video/{robot_id}.mjpg`, which the dashboard shows in an `<img>`. FPV is
 independent of the model — it needs only a camera and OpenCV, so live view works
 with no `.eim` at all. Off by default (`RS_FPV_ENABLED`), since it needs the base
-station's IP.
+station's IP — but that is a starting position, not a commitment; see below.
+
+Whether it streams and where it streams are both **live**, driven from the
+Tuning tab over the radio. `_push_live_config` hands `fpv.base_host` /
+`fpv.base_port` to `FPVStreamer.retarget()`, which rebuilds its `VideoSender` on
+the next frame, and `fpv.enabled` to `start()` / `stop(wait=False)`. This matters
+more than it sounds: the address belongs to whichever laptop is running the base
+station today, the robot only ever learns it over the radio, and a rover that
+needed a service restart to switch its camera on or re-aim it is one you cannot
+see out of at exactly the moment you cannot go and get it. Rebuilding rather
+than adjusting is also how a hostname that only started resolving later gets
+picked up — `VideoSender` resolves once, in its constructor.
+
+Three details make the switch safe. The `Camera` is *constructed* whenever one
+is configured but only *opened* by its first consumer, so a robot that booted
+with no detector and no feed leaves the device shut and still gets a picture
+when you ask for one an hour later — `Camera.start()` is idempotent and opens on
+its own thread, so the control loop never blocks on it. The off switch does not
+join: the streamer sleeps up to a frame interval, and waiting that out would
+stall a control tick to save nothing, so the loop notices the flag and closes
+its own socket in a `finally`. And `start()` on a loop that is still winding
+down re-arms the flag instead of spawning a second one, which is what makes
+flipping the switch off and straight back on harmless.
 
 When a model *is* running, the streamer draws the detection boxes onto each
 frame before encoding (green for the tracked target, amber for the rest). The
@@ -951,6 +1004,17 @@ it works on a Mac or a display-less Pi. Emits `(throttle, steer)` at 40 Hz
 (throttle = R2 minus L2, steer = right stick X) and fires edge-triggered actions
 (e-stop / clear / mode / arm / fire). Hot-plugging reconnects automatically. The
 app binds these to the **currently selected** robot.
+
+This is the *only* physical-controller path. The dashboard once polled the
+browser Gamepad API and forwarded `drive` frames over `/ws` as a second reader;
+that was removed. A controller is a real-time control surface, and routing one
+through a browser, the Deno front door and a WebSocket put three things that can
+stall or reconnect between a trigger pull and the radio — while giving two
+independent readers authority over the same robot whenever both saw the pad. The
+browser now sends `drive` only for its own on-screen joystick, whose input has
+nowhere else to come from. The mapping is untouched by this: it lives in
+`SettingsStore` and is still edited from *Settings → Controller*, which reads the
+pad through `state()` below.
 
 Axis and button indices come from the `ControllerMapping` above, not from
 constants: they describe a *driver*, not a controller — the same pad enumerates
@@ -1189,7 +1253,7 @@ Each maps to a CLI flag on the respective entry point.
 |---|---|---|
 | `RS_ROBOT_ID` | `rover1` | Unique id on the shared channel. |
 | `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `9600` | XBee serial. Baud must match the base station. |
-| `RS_BASE_HOST` / `RS_BASE_PORT` | *(blank)* / `5006` | Base station host for WiFi bulk transfers (config, layouts, routines). Blank keeps everything on the radio; unreachable falls back to it per frame. |
+| `RS_BASE_HOST` / `RS_BASE_PORT` | *(blank)* / `5006` | Base station host for WiFi bulk transfers (config, layouts, routines). Blank or unreachable means those simply don't move — driving, telemetry and the e-stop are unaffected. Settable from the base station over the radio (the one config that is) and applied without a restart. |
 | `RS_START_MODE` | `teleop` | `teleop` \| `object_align` \| `shooter_align` \| `waypoint` \| `routine`. |
 | `RS_LOOP_HZ` / `RS_TELEMETRY_HZ` | `50` / `5` | Control-loop and telemetry rates. |
 | `RS_MOCK_MOTORS` | `0` | Force mock servos (no HAT). |

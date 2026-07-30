@@ -19,6 +19,9 @@ ONLINE_TIMEOUT = 3.0  # seconds without telemetry before a robot is "offline"
 # Chunked documents a robot sends, and the verdicts it returns on ones we sent.
 _DOC_TYPES = ("layout", "routines", "fields")
 _DOC_RESULTS = {"layout_result": "layout", "routines_result": "routines"}
+# The same two documents named by what we SEND, which is what a delivery failure
+# knows about — there is no reply to key on when nothing was delivered.
+_DOC_SENDS = {"put_layout": "layout", "put_routines": "routines"}
 
 
 @dataclass
@@ -54,6 +57,18 @@ class RobotState:
     # copy would show a state machine still running one the robot has left.
     mech: Optional[dict] = None
     routine: Optional[dict] = None
+    # Live closed-loop traces {loop_path: {sp, e, o, p, i, d, m, sat}}, present
+    # only while the robot has nav.pid_trace on AND is in a mode that runs a
+    # loop. Non-sticky like the two above: a frozen curve left on screen after
+    # the loop stopped is a graph that lies about what the robot is doing.
+    pid: Optional[dict] = None
+    # The robot's WiFi state, as it last reported it: {ok, ssid, ip, signal,
+    # networks, error}. Sticky, unlike the blocks above, and for the opposite
+    # reason — this is an ANSWER to something the operator asked, so it has to
+    # stay on screen until the next answer replaces it. It never contains a
+    # credential (robot/comms/wifi.py).
+    wifi: Optional[dict] = None
+    wifi_rev: int = 0
     last_seen: float = 0.0
     trail: List[Tuple[float, float]] = field(default_factory=list)
     # The robot's tunable parameters (robot/tuning.py), flat dotted paths ->
@@ -135,6 +150,7 @@ class FleetManager:
             st.shooter = msg.get("shooter")
             st.mech = msg.get("mech")
             st.routine = msg.get("routine")
+            st.pid = msg.get("pid")
             if msg.get("lat") is not None and msg.get("lon") is not None:
                 st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
                 st.trail.append((st.lat, st.lon))
@@ -151,10 +167,31 @@ class FleetManager:
         mtype = msg.get("type")
         if mtype == "config":
             self.update_from_config(msg)
+        elif mtype == "wifi":
+            self.update_from_wifi(msg)
         elif mtype in _DOC_TYPES or mtype in _DOC_RESULTS:
             self.update_from_document(msg)
         else:
             self.update_from_telemetry(msg, now)
+
+    def update_from_wifi(self, msg: dict) -> Optional[str]:
+        """Absorb a {"type":"wifi"} frame — a scan, a status, or the verdict on
+        a join attempt.
+
+        Replaced whole rather than merged: unlike a config frame these are not
+        partial views of one state, they are separate answers to separate
+        questions, and merging a failed join into a successful scan would leave
+        a panel showing both at once.
+        """
+        robot_id = msg.get("from") or msg.get("robot_id")
+        if not robot_id:
+            return None
+        with self._lock:
+            st = self._ensure(robot_id)
+            st.wifi = {k: v for k, v in msg.items()
+                       if k not in ("type", "from", "to", "robot_id")}
+            st.wifi_rev += 1
+        return robot_id
 
     def update_from_config(self, msg: dict) -> Optional[str]:
         """Absorb a {"type":"config"} frame from a robot; returns its id.
@@ -177,9 +214,49 @@ class FleetManager:
                 "rejected": msg.get("rejected") or {},
                 "restart": msg.get("restart") or [],
                 "save_error": msg.get("save_error"),
+                # Cleared explicitly: a real answer from the robot is proof the
+                # link is back, and a stale "not on WiFi" banner sitting above a
+                # page that has just updated is worse than no banner at all.
+                "error": None,
             }
             st.config_rev += 1
         return robot_id
+
+    def note_unreachable(self, robot_id: Optional[str], reason: str) -> None:
+        """Record that a config command could not be delivered.
+
+        Written into the same `config_result` the robot's own answers land in,
+        because it is the same question the page is asking — "what happened to
+        my edit?" — and the answer wants to appear in the same place. The rev
+        bump is what pushes it: `configs()` only reports robots whose rev has
+        moved, so this also makes the entry exist for a robot that has never
+        managed to send a config at all.
+        """
+        if not robot_id:
+            return
+        with self._lock:
+            st = self._ensure(robot_id)
+            st.config_result = {"rejected": {}, "restart": [],
+                                "save_error": None, "error": reason}
+            st.config_rev += 1
+
+    def note_doc_unreachable(self, robot_id: Optional[str], mtype: str,
+                             reason: str) -> None:
+        """Same, for a layout or routine document that could not be sent.
+
+        Shaped exactly like the robot's own verdict on a document it rejected,
+        so the editors need no second code path for "it never got there".
+        """
+        field_name = _DOC_SENDS.get(mtype)
+        if not robot_id or field_name is None:
+            return
+        with self._lock:
+            st = self._ensure(robot_id)
+            setattr(st, f"{field_name}_result", {
+                "ok": False, "errors": [reason], "warnings": [],
+                "save_error": None, "restart_required": False,
+            })
+            setattr(st, f"{field_name}_rev", getattr(st, f"{field_name}_rev") + 1)
 
     def update_from_document(self, msg: dict) -> Optional[str]:
         """Absorb a document fragment, or a robot's verdict on one we sent.
@@ -251,9 +328,26 @@ class FleetManager:
         with self._lock:
             return {
                 st.robot_id: (st.config_rev, st.layout_rev, st.routines_rev,
-                              st.fields_rev)
+                              st.fields_rev, st.wifi_rev)
                 for st in self._robots.values()
             }
+
+    def wifi(self) -> Dict[str, dict]:
+        """Per-robot WiFi state, for the Network page.
+
+        On the cold channel with the configs: a scan result is a few hundred
+        bytes that changes when somebody presses Scan, and restating it thirty
+        times a second would spend the dashboard's bandwidth on an answer nobody
+        asked twice.
+
+        The revision rides along so the dashboard can tell a NEW answer from the
+        same one being re-pushed by an unrelated change. Without it, a Scan the
+        rover never answered looks identical to one it answered with the same
+        result, and the button either spins forever or stops spinning too early.
+        """
+        with self._lock:
+            return {st.robot_id: {"rev": st.wifi_rev, **st.wifi}
+                    for st in self._robots.values() if st.wifi is not None}
 
     def configs(self) -> Dict[str, dict]:
         """Per-robot config + the last edit's result, for the settings page.
@@ -313,6 +407,7 @@ class FleetManager:
                     "shooter": st.shooter,
                     "mech": st.mech,
                     "routine": st.routine,
+                    "pid": st.pid,
                     "online": st.online(now),
                     "age": round(now - st.last_seen, 2) if st.last_seen else None,
                     "trail": st.trail,

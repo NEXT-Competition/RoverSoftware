@@ -4,14 +4,16 @@
 // actually in it, which is the difference between an editor and a debugger.
 
 import type { RoutineStateSpec } from "../../net/types.ts";
-import { DRIVE_MODES } from "../../routines/vocab.ts";
+import { DRIVE_MODES, driveTakesTarget } from "../../routines/vocab.ts";
 import {
   addAction,
   addTransition,
   removeAction,
   removeTransition,
+  seenLabels,
   setAction,
   setDrive,
+  setDriveTarget,
   setDriveValue,
   setStateField,
   setTransition,
@@ -92,6 +94,31 @@ export function StateCard(
             ))}
           </select>
         </label>
+
+        {/* The answer to "align to WHAT". Directly beside the mode that raises
+            the question, because a state that aims at nothing in particular
+            aims at whatever the detector was last left filtering on — which is
+            a routine whose behaviour depends on what somebody typed in Settings
+            an hour ago. */}
+        {driveTakesTarget(mode) && (
+          <label class="arg">
+            <span>at object</span>
+            <input
+              class="field-input tiny"
+              type="text"
+              list={`labels-${state.id}`}
+              placeholder="any object"
+              maxLength={40}
+              value={state.drive?.target ?? ""}
+              onInput={(e) =>
+                setDriveTarget(state.id, (e.target as HTMLInputElement).value)}
+              title="A detector class name, as the model reports it. Left blank, this state aims at whatever is already selected — and whatever it aims at, the operator's own choice is put back when the state is left."
+            />
+            <datalist id={`labels-${state.id}`}>
+              {seenLabels.value.map((label) => <option key={label} value={label} />)}
+            </datalist>
+          </label>
+        )}
 
         {mode === "manual" && (
           <>

@@ -1,12 +1,16 @@
 import { selected, selectedRobot, send } from "../net/ws.ts";
 import type { Mode } from "../net/types.ts";
 
+// The four modes that are a way of DRIVING. `routine` is the fifth
+// (net/types.ts, and MODES in basestation/command/vocabulary.py) but it is not
+// a button here, because "routine" on its own is not a thing an operator wants
+// — a particular routine is. RoutineControls below lists them by name, and
+// entering the mode is what tapping one does.
 const MODES: { key: Mode; label: string }[] = [
   { key: "teleop", label: "Teleop" },
   { key: "object_align", label: "Object align" },
   { key: "shooter_align", label: "Shooter" },
   { key: "waypoint", label: "Waypoint" },
-  { key: "routine", label: "Routine" },
 ];
 
 export function ModeControls() {

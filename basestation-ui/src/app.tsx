@@ -11,6 +11,7 @@ import { ControllerStatus } from "./components/ControllerStatus.tsx";
 import { FleetPanel } from "./components/FleetPanel.tsx";
 import { FPV } from "./components/FPV.tsx";
 import { ModeControls } from "./components/ModeControls.tsx";
+import { RoutineControls } from "./components/RoutineControls.tsx";
 import { PitBoard } from "./components/PitBoard.tsx";
 import { PlacesPanel } from "./components/PlacesPanel.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
@@ -115,6 +116,10 @@ function ControlSection() {
         <span class="eyebrow">{sel ?? "—"}</span>
       </div>
       <ModeControls />
+      {/* Directly under the modes, because that is what these are: modes the
+          operator wrote themselves. */}
+      <div style="height:12px" />
+      <RoutineControls />
       <div style="height:14px" />
       {/* Renders nothing unless the robot is in shooter_align (see the component). */}
       <ShooterControls />

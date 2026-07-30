@@ -6,6 +6,7 @@ import collections
 import os
 import queue
 import signal
+import threading
 import time
 from typing import Callable, Dict, Optional, Tuple
 
@@ -14,6 +15,7 @@ from .config import PIDConfig, RobotConfig
 from .comms.doc_transfer import Reassembler, split
 from .comms.ip_link import IPLink
 from .comms.xbee_link import XBeeLink
+from .comms import wifi
 from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
@@ -39,11 +41,12 @@ from .sensors.pose import PoseEstimator
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
 SLOW_TICK_S = 0.1
 
-# Frames drained from the outbox per control tick. At 50 Hz this is 100 frames
-# a second of headroom, which empties a ~10-frame config snapshot in 100 ms
-# while never handing the radio more than it can write inside one tick. See
-# Robot._queue for why bursting is the failure mode worth designing against.
-OUTBOX_PER_TICK = 2
+# Ceiling on queued bulk frames. The outbox is only ever fed by an explicit
+# request from the base station, so in normal use it holds one document; this
+# exists so a robot whose radio has died doesn't grow a queue for the rest of
+# the match. The oldest frames go first, which is the right end to lose — they
+# belong to a transfer the other side has long since given up on.
+OUTBOX_MAX = 256
 
 # How long a bench jog runs before it stops itself. The Hardware tab repeats the
 # command while the control is held, so this is the same shape as teleop's
@@ -100,10 +103,11 @@ class Robot:
             self._registry["shooter"] = self.shooter
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
-        # Multi-frame replies (a config snapshot, a layout, a routine set) are
-        # drained a couple of frames per tick rather than burst at the radio.
-        # See _queue.
-        self._outbox: "collections.deque[dict]" = collections.deque()
+        # Multi-frame replies (a config snapshot, a layout, a routine set) wait
+        # here for the WiFi link. Each entry is (frame, radio_ok), where the flag
+        # marks the one kind of frame still allowed onto the radio. See _queue.
+        self._outbox: "collections.deque[Tuple[dict, bool]]" = collections.deque(
+            maxlen=OUTBOX_MAX)
 
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
@@ -162,18 +166,24 @@ class Robot:
         # loop by funneling through a thread-safe queue.
         self._inbox: "queue.Queue[dict]" = queue.Queue()
         self.link = XBeeLink(config.comms.port, config.comms.baud, self._inbox.put)
-        # Bulk transfers go over WiFi when the base station is reachable, so a
-        # ~2.9 KB config snapshot stops costing half a second of shared airtime
-        # (and stops being the thing that makes telemetry frames get dropped).
-        # Unconfigured or unreachable -> every send() declines and the radio
-        # carries it, which is byte-for-byte the old behaviour. Inbound frames
-        # join the SAME inbox, so _drain_inbox can't tell how one arrived.
+        # Bulk transfers go over WiFi, full stop: a ~2.9 KB config snapshot is
+        # half a second of airtime on a channel shared with every robot, and it
+        # is telemetry that gets dropped to make room. Unconfigured or
+        # unreachable means config and documents simply don't move — the radio
+        # keeps carrying driving, telemetry and the e-stop, which is what it is
+        # for. The one exception is the address of this link itself; see
+        # tuning.BOOTSTRAP_PATHS and _retarget_ip_link. Inbound frames join the
+        # SAME inbox, so _drain_inbox can't tell how one arrived.
         self.ip_link: Optional[IPLink] = (
             IPLink(config.comms.base_host, config.comms.base_port,
                    self._inbox.put, config.robot_id)
             if config.comms.base_host else None
         )
         self._running = False
+        # One WiFi request at a time (see _wifi_command). Plain bool rather than
+        # a lock: only the inbox drain sets it True, and only the worker clears
+        # it, so there is no window where two threads could both claim it.
+        self._wifi_busy = False
 
         # Adafruit Ultimate GPS feeds waypoint navigation, position telemetry and
         # the track-angle heading. Reads on its own thread; pose() is a cheap
@@ -211,9 +221,11 @@ class Robot:
         # something actually wants frames; it reads on its own thread so the
         # 50 Hz loop never touches the device.
         mock_det = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on")
-        need_camera = config.camera.enabled and (
-            (config.vision.enabled and not mock_det) or config.fpv.enabled
-        )
+        # Constructing a Camera opens nothing — start() does, on its own thread —
+        # so one is built whenever the robot has a camera configured, even if
+        # nothing wants frames yet. That is what lets FPV be switched on from the
+        # base station later: the first consumer to arrive opens the device.
+        self._detector_wants_frames = config.vision.enabled and not mock_det
         # Which detector we run also decides which capture backend to open (an
         # IMX500 detector needs the camera that loaded the sensor's network), so
         # resolve it BEFORE constructing the camera. Skipped entirely for the
@@ -223,7 +235,7 @@ class Robot:
             if (config.vision.enabled and not mock_det) else "mock" if mock_det else "off"
         )
         self.camera: Optional[Camera] = (
-            Camera(config.camera, config.vision) if need_camera else None
+            Camera(config.camera, config.vision) if config.camera.enabled else None
         )
 
         # Object detection feeds object_align. Either backend reads from the
@@ -246,9 +258,12 @@ class Robot:
         # see what was detected — keyed on the overlays() capability rather than
         # a backend type, so both real detectors qualify and the mock (which has
         # no real frames to annotate) doesn't.
-        self.fpv: Optional[FPVStreamer] = (
-            FPVStreamer(config.fpv, self.camera, config.robot_id) if config.fpv.enabled else None
-        )
+        # Built whether or not the feed is currently on, so the base station can
+        # switch it on later — there is nothing to construct at that point, and a
+        # streamer that only existed when it was already running would make
+        # `fpv.enabled` a restart-only setting for no reason but this line.
+        self.fpv: Optional[FPVStreamer] = FPVStreamer(
+            config.fpv, self.camera, config.robot_id)
         overlays = getattr(self.detector, "overlays", None)
         if self.fpv is not None and overlays is not None:
             self.fpv.set_overlay_provider(overlays)
@@ -288,6 +303,11 @@ class Robot:
             if self.pose_provider is not None:
                 self.routine_controller.set_pose_provider(self.pose_provider)
             self.routine_controller.set_estop_provider(lambda: self.manager.estop)
+            # What a state aligns to. The config object, shared by reference
+            # with the detector, so a state's target takes effect on the frame
+            # after it is set and is put back when the state is left.
+            if config.vision.enabled:
+                self.routine_controller.set_vision_config(config.vision)
         # Documents the base station has saved on this robot. A layout needs a
         # restart to take effect, so it is loaded in run_robot.py before the
         # hardware is built; routines are just data, so they load here.
@@ -353,6 +373,11 @@ class Robot:
                 self._send_doc("routines", self._routine_doc, self._routine_rev)
             elif mtype in ("put_layout", "put_routines"):
                 self._receive_doc(mtype, msg)
+            # WiFi. Handled here for the same reason config is — it reaches past
+            # every controller — and worked off-thread because nmcli blocks for
+            # seconds (see _wifi_task).
+            elif mtype in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
+                self._wifi_command(msg)
             elif mtype == "jog":
                 self._jog(msg)
             else:
@@ -367,47 +392,91 @@ class Robot:
         return {"type": "config", "from": self.cfg.robot_id, "config": values, **extra}
 
     def _send_config(self) -> None:
-        """Answer get_config, split into radio-sized frames (see tuning.chunks)."""
+        """Answer get_config, split into small frames (see tuning.chunks).
+
+        The chunking predates the WiFi link and outlives it: it is also what
+        keeps a partial transfer useful, since the base station MERGES config
+        frames rather than replacing on each one.
+        """
         for part in tuning.chunks(tuning.snapshot(self.cfg)):
             self._queue(self._config_frame(part))
 
-    def _queue(self, msg: dict) -> None:
+    def _queue(self, msg: dict, radio_ok: bool = False) -> None:
         """Hand a frame to the paced outbox instead of the radio directly.
 
-        XBeeLink.send drops the frame and flushes when the radio isn't draining
-        within its 0.2 s write timeout, so firing a whole multi-frame reply
-        inside one tick is exactly the shape that vanishes under congestion —
-        leaving the settings page permanently blank. The outbox spreads them
-        over ticks instead. Telemetry still goes direct: it is one small frame,
-        it is the thing an operator most needs to be current, and delaying it
-        behind a config dump is the wrong trade.
+        A multi-frame reply written all at once overruns the radio: the write
+        blocks, hits XBeeLink's 0.2 s timeout, and the frame is dropped to keep
+        the control loop alive — which is exactly how a settings page ends up
+        permanently blank, because a fragment of a document is not something the
+        other side knows to ask for again. The outbox meters them out at the
+        line rate instead (comms/airtime.py). Telemetry still goes direct: it is
+        one small frame, it is the thing an operator most needs to be current,
+        and delaying it behind a config dump is the wrong trade.
 
-        This queue is also exactly the traffic that moves to WiFi when there is
-        any — bulk, non-realtime, and too big for the shared channel. See
+        This queue is the traffic that belongs on WiFi: bulk, non-realtime, and
+        too big for a channel shared with every robot on the field. It now goes
+        there or nowhere — `radio_ok=True` is the bootstrap exception (see
+        tuning.BOOTSTRAP_PATHS) and nothing else should set it. See
         _drain_outbox.
         """
-        self._outbox.append(msg)
+        self._outbox.append((msg, radio_ok))
 
     def _drain_outbox(self) -> None:
-        """Empty the outbox: over WiFi if we have it, otherwise paced onto the radio.
+        """Empty the outbox over WiFi. The radio carries only bootstrap frames.
 
         On WiFi there is no airtime to protect and no write timeout to lose
         frames to, so the whole queue goes at once — a config snapshot that took
-        ~100 ms of paced radio ticks lands in one. If the link drops mid-drain,
-        send() declines and the remainder simply waits for the radio path below.
+        the better part of a second on the radio lands in one tick.
+
+        Without WiFi, an ordinary bulk frame is DROPPED rather than sent, which
+        is the point of all this: the radio carries driving and telemetry, and a
+        2.9 KB config snapshot is half a second of the shared channel spent on
+        something nobody is being hurt by waiting for. Dropping is safe because
+        every request that produces one of these can only have arrived over the
+        same link — the base station won't ask over the radio (see
+        basestation/app.py dispatch_config), so the only way to get here is a
+        link that broke mid-transfer, and the operator's page re-asks.
+
+        The radio path stays for `radio_ok` frames — the acknowledgement of a
+        bootstrap set_config, which by definition has no WiFi to go back over.
+        A `False` from send_bulk means the radio has no airtime this tick, not
+        that the frame is gone, so it keeps its place in the queue.
         """
-        if self.ip_link is not None and self.ip_link.is_connected():
-            while self._outbox and self.ip_link.send(self._outbox[0]):
+        ip = self.ip_link if (self.ip_link is not None
+                              and self.ip_link.is_connected()) else None
+        dropped = 0
+        while self._outbox:
+            msg, radio_ok = self._outbox[0]
+            if ip is not None:
+                if ip.send(msg):
+                    self._outbox.popleft()
+                    continue
+                ip = None  # link broke mid-drain; the rest follows the rules below
+            if radio_ok:
+                if not self.link.send_bulk(msg):
+                    break  # no airtime this tick — keep it and try the next one
                 self._outbox.popleft()
-        for _ in range(OUTBOX_PER_TICK):
-            if not self._outbox:
-                return
-            self.link.send(self._outbox.popleft())
+                continue
+            self._outbox.popleft()
+            dropped += 1
+        if dropped:
+            print(f"[Robot] dropped {dropped} bulk frame(s): no link to "
+                  f"{self.cfg.comms.base_host or '(no base_host set)'} "
+                  f"— config and documents do not go over the radio")
 
     def _set_config(self, msg: dict) -> None:
-        applied, rejected = tuning.apply(self.cfg, msg.get("config") or {})
+        requested = msg.get("config") or {}
+        # A frame that carries only the bulk link's address is the bootstrap
+        # case: it is the one thing the base station may send over the radio,
+        # because it is how a rover is told where the WiFi link even is. Its
+        # acknowledgement has to go back the same way — there is by definition
+        # no WiFi to answer over yet. See tuning.BOOTSTRAP_PATHS.
+        bootstrap = tuning.is_bootstrap(requested)
+        applied, rejected = tuning.apply(self.cfg, requested)
         if applied:
             self._push_live_config()
+        if any(path in tuning.BOOTSTRAP_PATHS for path in applied):
+            self._retarget_ip_link()
         # Persist by default: an operator tuning gains in a field expects them
         # to survive the next power cycle. `"save": false` is the escape hatch
         # for trying a value without committing to it.
@@ -424,7 +493,132 @@ class Robot:
         for path, why in rejected.items():
             print(f"[Robot] config rejected {path}: {why}")
         self._queue(self._config_frame(
-            applied, rejected=rejected, restart=restart, save_error=error))
+            applied, rejected=rejected, restart=restart, save_error=error),
+            radio_ok=bootstrap)
+
+    # --- WiFi ---------------------------------------------------------------
+
+    def _wifi_command(self, msg: dict) -> None:
+        """Run one WiFi request on a worker thread and report the result.
+
+        Off-thread without exception. `nmcli device wifi connect` takes seconds
+        — association, then a DHCP lease — and a scan with `--rescan yes` takes
+        a few more. Any of that inside the control loop stops the drivetrain
+        being commanded for long enough to trip the teleop failsafe, which on a
+        moving rover means it coasts to a halt mid-manoeuvre because somebody
+        pressed a button on a settings page.
+
+        One at a time: two overlapping `connect` calls would fight over the same
+        interface, and the second answer would describe a state the first one was
+        still changing.
+        """
+        if self._wifi_busy:
+            self._queue(self._wifi_frame(
+                {"ok": False, "error": "still working on the last WiFi request"}),
+                radio_ok=True)
+            return
+        self._wifi_busy = True
+        threading.Thread(target=self._wifi_task, args=(msg,),
+                         name="wifi", daemon=True).start()
+
+    def _wifi_task(self, msg: dict) -> None:
+        mtype = msg.get("type")
+        try:
+            if mtype == "scan_wifi":
+                result = wifi.scan()
+                result["networks"] = result.get("networks") or []
+            elif mtype == "set_wifi":
+                # The country first, when one was given: with no regulatory
+                # domain set, a Pi has 5 GHz soft-blocked, so the network the
+                # operator is standing next to is simply missing from the scan.
+                country_error = None
+                if msg.get("country"):
+                    country_error = wifi.set_country(str(msg["country"]))
+                result = wifi.connect(str(msg.get("ssid") or ""),
+                                      str(msg.get("psk") or ""),
+                                      bool(msg.get("hidden")))
+                if country_error and result.get("ok"):
+                    result["error"] = country_error
+            elif mtype == "forget_wifi":
+                result = wifi.forget(str(msg.get("ssid") or ""))
+                result.update({k: v for k, v in wifi.status().items()
+                               if k in ("ssid", "ip", "signal")})
+            else:
+                result = wifi.status()
+        except Exception as e:  # nothing about a WiFi button may take a robot down
+            result = {"ok": False, "error": str(e)}
+        finally:
+            self._wifi_busy = False
+        # radio_ok, and this is the entire point of the feature: a rover that
+        # just failed to join a network has no WiFi to answer over, and a rover
+        # that succeeded has just changed which one it is on. Either way the
+        # answer goes by radio — it is one small frame, asked for by hand.
+        self._queue(self._wifi_frame(result), radio_ok=True)
+        # A successful join usually means a new address on the base station's
+        # network, so re-dial the bulk link rather than waiting for a restart.
+        if result.get("ok") and mtype == "set_wifi":
+            self._redial_ip_link()
+
+    def _wifi_frame(self, result: dict) -> dict:
+        """The reply. Never carries a credential — only what a scanner standing
+        next to the rover could see anyway."""
+        return {"type": "wifi", "from": self.cfg.robot_id,
+                **{k: v for k, v in result.items() if k != "psk"}}
+
+    def _redial_ip_link(self) -> None:
+        """Rebuild the bulk link on the same address after the network changed.
+
+        `_retarget_ip_link` returns early when the address is unchanged, which is
+        correct for a config edit and wrong here: the address is the same, the
+        network underneath it is not, and the old socket is dead.
+        """
+        old, self.ip_link = self.ip_link, None
+        host, port = self.cfg.comms.base_host, self.cfg.comms.base_port
+
+        def swap() -> None:
+            if old is not None:
+                old.stop()
+            if not host:
+                return
+            link = IPLink(host, port, self._inbox.put, self.cfg.robot_id)
+            link.start()
+            self.ip_link = link
+
+        threading.Thread(target=swap, name="ip-redial", daemon=True).start()
+
+    def _retarget_ip_link(self) -> None:
+        """Re-dial the bulk link after comms.base_host/base_port changed.
+
+        This is what makes the bootstrap worth having. Pointing a rover at a new
+        base station over the radio would be pointless if the new address only
+        took effect on the next start — you would have to walk out to the rover,
+        and at that point you may as well edit robot.env. So the link is torn
+        down and re-dialled here, including the case where there was no link at
+        all (a fresh install ships with base_host blank).
+
+        On its own thread because IPLink.stop() joins a reader that may be parked
+        in a blocking recv: up to a couple of seconds, which inside the control
+        loop is long enough to trip the teleop failsafe and stop the drivetrain
+        mid-command. The loop keeps ticking; the next _drain_outbox picks up
+        whichever link exists by then.
+        """
+        host, port = self.cfg.comms.base_host, self.cfg.comms.base_port
+        old = self.ip_link
+        if old is not None and old.host == host and old.port == port:
+            return
+        self.ip_link = None  # nothing goes out over the old link from here on
+
+        def swap() -> None:
+            if old is not None:
+                old.stop()
+            if not host:
+                print("[Robot] bulk link disabled (base_host cleared)")
+                return
+            link = IPLink(host, port, self._inbox.put, self.cfg.robot_id)
+            link.start()
+            self.ip_link = link
+
+        threading.Thread(target=swap, name="ip-retarget", daemon=True).start()
 
     # --- documents (layout, routines) ---------------------------------------
 
@@ -633,6 +827,22 @@ class Robot:
         # Safe to assign directly: tuning.py restricts this to the same enum
         # PoseEstimator validates against.
         self.pose_estimator.heading_source = cfg.heading_source
+        # The camera feed: whether it runs, and where it goes. Both are settable
+        # from the Tuning tab, over the radio, with no service restart — which is
+        # the whole point, since the address belongs to whichever laptop is
+        # running the base station today and the robot only learns it over the
+        # radio. The streamer resolves the host once when it builds its socket,
+        # so a new one is handed over rather than read out of cfg; and start() is
+        # idempotent and opens the camera itself, so switching the feed on works
+        # even on a robot that booted with nothing wanting frames.
+        if self.fpv is not None:
+            self.fpv.retarget(cfg.fpv.base_host, cfg.fpv.base_port)
+            if cfg.fpv.enabled:
+                self.fpv.start()
+            else:
+                # Not joined: this is the control loop, and waiting out a frame
+                # interval to save nothing would stall a tick.
+                self.fpv.stop(wait=False)
         if self.imu is not None:
             self.imu.heading_offset_deg = cfg.imu.heading_offset_deg
             self.imu.invert = cfg.imu.invert
@@ -687,6 +897,18 @@ class Robot:
         # state highlight that lags by a second is worse than none.
         if isinstance(active, RoutineController):
             t["routine"] = active.status()
+        # Whatever closed loops the active mode is running: setpoint, error,
+        # output and the P/I/D split, so a gain can be tuned against a picture
+        # of what it did rather than by watching the rover and guessing.
+        #
+        # Only the ACTIVE controller, only loops it is actually stepping, and
+        # only while `nav.pid_trace` is on. It is off by default: this is ~60
+        # bytes per loop per frame on a radio shared with driving, and a graph
+        # nobody is looking at is not worth the airtime a graph costs.
+        if self.cfg.nav.pid_trace:
+            traces = active.pid_traces() if active is not None else {}
+            if traces:
+                t["pid"] = traces
         return t
 
     def start(self) -> None:
@@ -706,8 +928,10 @@ class Robot:
             self.imu.start()
         # Camera before its consumers (detector, FPV) so frames are flowing when
         # they start; the detector is heaviest (it spawns the .eim subprocess, or
-        # waits on the sensor's network upload).
-        if self.camera is not None:
+        # waits on the sensor's network upload). Only opened for a consumer that
+        # actually wants frames — FPV starts it itself if it is switched on, now
+        # or later, so a robot with no detector and no feed leaves the device shut.
+        if self.camera is not None and self._detector_wants_frames:
             self.camera.start()
         if self.detector is not None:
             self.detector.start()

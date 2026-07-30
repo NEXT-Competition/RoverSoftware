@@ -425,6 +425,7 @@ function Readiness() {
  *  these are exactly the names the recogniser will accept this second. */
 function Sayable() {
   const vocab = vocabulary.value;
+  const routines = vocab.routines[vocab.selected ?? ""] ?? [];
   return (
     <div class="sayable">
       <div class="section-title">
@@ -441,6 +442,15 @@ function Sayable() {
           <>
             <dt>objects</dt>
             <dd class="mono">{vocab.labels.join(" · ")}</dd>
+          </>
+        )}
+        {/* Scoped to the rover that would be commanded, because that is the
+            list the recogniser will actually match against — a routine loaded
+            on rover2 is not sayable while rover1 is selected. */}
+        {routines.length > 0 && (
+          <>
+            <dt>routines</dt>
+            <dd class="mono">{routines.map((r) => r.name).join(" · ")}</dd>
           </>
         )}
       </dl>
