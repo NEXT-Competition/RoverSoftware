@@ -796,6 +796,13 @@ class Robot:
         only when a config frame arrives, never in the control loop.
         """
         cfg = self.cfg
+        # Wheel encoders. counts-per-rev is a calibration you get right by
+        # parking the rover, turning a wheel and typing what you counted, and
+        # the speed-matching mode is switched on, watched, and switched off
+        # again in the pit — neither is something to reboot for. Everything else
+        # the loop reads (mode, gains, limits) comes off the shared config
+        # object every tick, so this only has to reach what was cached.
+        self.drive.recalibrate()
         for c in self.manager.controllers.values():
             if isinstance(c, TeleopController):
                 c.command_timeout = cfg.comms.command_timeout
@@ -861,6 +868,14 @@ class Robot:
             "left": round(cmd.left, 3),
             "right": round(cmd.right, 3),
         }
+        # What the wheels ACTUALLY did with those two numbers, which is the
+        # whole reason encoders exist: `left`/`right` above are what the robot
+        # was told, and on real hardware they are not the same thing. Absent
+        # entirely on a build with no encoders wired, so it costs those builds
+        # nothing. See robot/drive/drivetrain.py::status.
+        encoders = self.drive.status()
+        if encoders is not None:
+            t["enc"] = encoders
         if self.pose_provider is not None:
             pose = self.pose_provider()
             if pose is not None:
@@ -907,6 +922,15 @@ class Robot:
         # nobody is looking at is not worth the airtime a graph costs.
         if self.cfg.nav.pid_trace:
             traces = active.pid_traces() if active is not None else {}
+            # The wheel-speed loop rides the same switch, but it is NOT the
+            # active controller's — it lives under the drivetrain and runs in
+            # every mode, which is exactly why it needs a graph of its own: the
+            # gains are the only ones here you cannot tune by watching, because
+            # what they act on is invisible from outside the rover.
+            trim = getattr(self.drive, "trim", None)
+            trace = trim.trace() if trim is not None else None
+            if trace is not None:
+                traces = {**traces, "drive.trim.pid": trace}
             if traces:
                 t["pid"] = traces
         return t
@@ -999,6 +1023,10 @@ class Robot:
     def shutdown(self) -> None:
         print("\n[Robot] shutting down; stopping motors")
         self.drive.stop()
+        # Then hand the encoder GPIO back. After stop(), never instead of it:
+        # releasing the pins is housekeeping, and the motors coming to rest is
+        # the only part of this that matters if the next line raises.
+        self.drive.shutdown()
         # Park every mechanism at rest before anything else winds down: leaving
         # a launcher at the fire angle stalls the servo and leaves the mechanism
         # cocked, and leaving an intake powered is worse.

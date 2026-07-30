@@ -16,7 +16,9 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
         MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED,
-    RS_ROUTINE_ALLOW_ARM/STATE_TIMEOUT
+    RS_ROUTINE_ALLOW_ARM/STATE_TIMEOUT,
+    RS_ENCODER_LEFT/RIGHT ("A,B" BCM pins), RS_ENCODER_CPR,
+    RS_ENCODER_LEFT_INVERT/RIGHT_INVERT, RS_TRIM_MODE, RS_TRIM_MAX_RPM
 
 Two files are read after all of that, in this order:
 
@@ -54,6 +56,45 @@ import os
 from robot import layout, tuning
 from robot.config import RobotConfig
 from robot.robot import Robot
+
+
+def _encoder_pins(value: str) -> tuple:
+    """Parse an "A,B" pair of BCM pins, or (-1, -1) if it is unusable.
+
+    Never raises. This runs at boot from a file somebody edited over SSH, and a
+    typo in an encoder pin must cost you closed-loop speed, not the rover.
+    """
+    try:
+        a, b = (int(part.strip()) for part in value.split(","))
+    except ValueError:
+        print(f"[Robot] ignoring encoder pins {value!r}: expected two BCM pin "
+              "numbers, e.g. 17,27")
+        return (-1, -1)
+    if a == b:
+        print(f"[Robot] ignoring encoder pins {value!r}: A and B must differ")
+        return (-1, -1)
+    return (a, b)
+
+
+def _apply_encoder_env(cfg: RobotConfig) -> None:
+    """Wire the stock left/right encoders and the speed loop from robot.env."""
+    sides = {"left": cfg.drive.roles.left, "right": cfg.drive.roles.right}
+    for side, names in sides.items():
+        raw = os.environ.get(f"RS_ENCODER_{side.upper()}", "").strip()
+        if not raw or not names:
+            continue
+        motor = cfg.drive.actuators.get(names[0])
+        if motor is None:
+            continue
+        motor.encoder_a, motor.encoder_b = _encoder_pins(raw)
+        motor.encoder_cpr = float(os.environ.get("RS_ENCODER_CPR",
+                                                 motor.encoder_cpr))
+        motor.encoder_invert = os.environ.get(
+            f"RS_ENCODER_{side.upper()}_INVERT", "").strip().lower() in (
+                "1", "true", "yes", "on")
+    cfg.drive.trim.mode = os.environ.get("RS_TRIM_MODE", cfg.drive.trim.mode)
+    cfg.drive.trim.max_rpm = float(
+        os.environ.get("RS_TRIM_MAX_RPM", cfg.drive.trim.max_rpm))
 
 
 def main():
@@ -246,6 +287,16 @@ def main():
                 print(f"[Robot] layout REJECTED: {error}")
             print("[Robot] layout: falling back to the built-in tank layout")
 
+    # Wheel encoders, applied AFTER the layout because a layout replaces
+    # cfg.drive wholesale and would otherwise take these with it. Env-only, and
+    # aimed at the first side of each role rather than at names: a stock build
+    # has no layout to edit yet, and "set two pins in robot.env and watch the
+    # RPM readout" is how you find out whether the encoders are wired before
+    # designing anything in the dashboard. Once a layout exists, its pins are
+    # the ones to edit — and a value saved from the settings page still wins
+    # over both, because it is applied last.
+    _apply_encoder_env(cfg)
+
     # Values tuned from the base station's settings page, saved on this robot.
     # Applied LAST, on purpose: they are the operator's most recent deliberate
     # decision, and the paths they can touch (gains, speeds, limits) are
@@ -277,10 +328,13 @@ def main():
     shooter = f"ch{cfg.shooter.channel}" if cfg.shooter.enabled else "off"
     bulk = (f"{cfg.comms.base_host}:{cfg.comms.base_port}"
             if cfg.comms.base_host else "off (not configurable until set)")
+    wired = [a.name for a in cfg.drive.actuators.values() if a.encoder_a != -1]
+    encoders = (f"{len(wired)} ({cfg.drive.trim.mode})" if wired
+                else "none")
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "
           f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} "
           f"heading={cfg.heading_source} vision={vision} "
-          f"fpv={fpv} shooter={shooter} bulk={bulk}")
+          f"fpv={fpv} shooter={shooter} encoders={encoders} bulk={bulk}")
     Robot(cfg).run()
 
 

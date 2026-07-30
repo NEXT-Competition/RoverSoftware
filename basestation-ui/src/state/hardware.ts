@@ -167,6 +167,100 @@ export const channelConflicts = computed<Set<number>>(() => {
   return clashes;
 });
 
+/** Every encoder GPIO claimed more than once, including A and B on one pin.
+ *
+ * A different bus from the PWM channels above, and a nastier failure: two
+ * actuators reading the same pin both count the same edges, so a robot with one
+ * genuinely dragging track reports both wheels at exactly the same speed — the
+ * single symptom that would convince you the encoders were working. The robot
+ * refuses such a layout (robot/layout.py::_resolve_encoder_pins); this is the
+ * same check, in time to stop you saving it. */
+export const encoderPinConflicts = computed<Set<number>>(() => {
+  const doc = layout.value;
+  const seen = new Set<number>();
+  const clashes = new Set<number>();
+  if (!doc) return clashes;
+  const all = [
+    ...doc.drive.actuators,
+    ...doc.mechanisms.flatMap((m) => m.actuators),
+  ];
+  for (const a of all) {
+    const pins = [a.encoder_a, a.encoder_b].filter(
+      (p): p is number => p != null && p >= 0,
+    );
+    // A and B on one pin is a clash with itself: a quadrature decoder needs two
+    // phases to have a phase relationship between them.
+    if (pins.length === 2 && pins[0] === pins[1]) clashes.add(pins[0]);
+    for (const pin of pins) {
+      if (seen.has(pin)) clashes.add(pin);
+      else seen.add(pin);
+    }
+  }
+  return clashes;
+});
+
+/** BCM pins an encoder may be offered, in the order they are handed out.
+ *
+ * Not every GPIO: 0 and 1 are the HAT ID EEPROM, 2 and 3 are the I²C bus the
+ * Fusion HAT and the IMU sit on, and 14/15 are the UART the GPS uses. Offering
+ * one of those as a default would produce a rover whose encoder works and whose
+ * compass stopped, which is a bad afternoon. 17 and 27 lead because they are
+ * the pair every encoder example on the internet uses. */
+const ENCODER_PINS = [17, 27, 22, 23, 24, 25, 5, 6, 12, 13, 16, 19, 20, 21, 26];
+
+/** The next two free encoder pins, so "Add encoder" starts on a valid layout. */
+export function freeEncoderPins(doc: LayoutDoc): [number, number] {
+  const used = new Set<number>();
+  const all = [
+    ...doc.drive.actuators,
+    ...doc.mechanisms.flatMap((m) => m.actuators),
+  ];
+  for (const a of all) {
+    for (const pin of [a.encoder_a, a.encoder_b]) {
+      if (pin != null && pin >= 0) used.add(pin);
+    }
+  }
+  const free = ENCODER_PINS.filter((p) => !used.has(p));
+  // Falling back to the head of the list when everything is taken hands back a
+  // conflict rather than silently picking a pin that is spoken for — the editor
+  // flags it and the robot refuses it, which is the visible failure.
+  return [free[0] ?? ENCODER_PINS[0], free[1] ?? ENCODER_PINS[1]];
+}
+
+/** Add or clear an actuator's encoder, whole.
+ *
+ * One action rather than four field edits from the card, because the halfway
+ * states are exactly the ones the robot refuses: one pin set, or counts-per-rev
+ * left behind after the pins were cleared. Doing it in a single edit means the
+ * draft is never in one of them.
+ */
+export function toggleEncoder(mech: string | null, name: string): void {
+  edit((doc) => {
+    const list = mech
+      ? doc.mechanisms.find((m) => m.name === mech)?.actuators
+      : doc.drive.actuators;
+    const actuator = list?.find((a) => a.name === name);
+    if (!actuator) return;
+    const fitted = (actuator.encoder_a ?? -1) >= 0 ||
+      (actuator.encoder_b ?? -1) >= 0;
+    if (fitted) {
+      actuator.encoder_a = -1;
+      actuator.encoder_b = -1;
+      actuator.encoder_cpr = 0;
+      actuator.encoder_invert = false;
+      return;
+    }
+    const [a, b] = freeEncoderPins(doc);
+    actuator.encoder_a = a;
+    actuator.encoder_b = b;
+    // Left at 0 deliberately: it is the one number nobody can guess for you,
+    // and a plausible-looking default would be a wrong RPM readout that reads
+    // as a working one.
+    actuator.encoder_cpr = actuator.encoder_cpr ?? 0;
+    actuator.encoder_invert = !!actuator.encoder_invert;
+  });
+}
+
 function allNames(doc: LayoutDoc): Set<string> {
   const names = new Set(doc.drive.actuators.map((a) => a.name));
   for (const m of doc.mechanisms) {

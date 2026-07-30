@@ -1,5 +1,5 @@
 import { selectedRobot } from "../net/ws.ts";
-import type { GpsStatus, VisionStatus } from "../net/types.ts";
+import type { EncoderStatus, GpsStatus, VisionStatus } from "../net/types.ts";
 
 function fmt(v: number | null | undefined, digits = 5): string {
   return v == null ? "—" : v.toFixed(digits);
@@ -42,6 +42,51 @@ function gps(g: GpsStatus): { text: string; color: string } {
   return { text: parts.join(" · "), color };
 }
 
+/**
+ * Wheel speed, and whether the two sides agree.
+ *
+ * The mismatch is the number, not the speeds: "142 / 137 rpm" reads as two
+ * facts you then have to subtract, and the thing you are watching for is the
+ * gap. So the gap leads, and it is what carries the colour — this is the
+ * readout you tune `drive.trim` against, and the one that tells you the rover
+ * is curving before the map does.
+ */
+function encoders(e: EncoderStatus): { text: string; color: string } {
+  if (e.fault) {
+    return {
+      text: `${e.fault} encoder not turning — matching off`,
+      color: "var(--danger)",
+    };
+  }
+  const speeds = Object.values(e.rpm);
+  if (speeds.length === 0) return { text: "no reading", color: "var(--muted)" };
+  const fastest = Math.max(...speeds);
+  const slowest = Math.min(...speeds);
+  const spread = fastest - slowest;
+  const parts = Object.entries(e.rpm).map(([k, v]) => `${k} ${v.toFixed(0)}`);
+  const text = speeds.length > 1
+    ? `Δ${spread.toFixed(0)} rpm · ${parts.join(" · ")}`
+    : `${parts[0]} rpm`;
+  // A tenth of the faster wheel is where a straight line becomes a visible arc.
+  // Scaled rather than absolute, because 5 rpm apart is nothing at 200 and a
+  // rover driving in a circle at 20. At a standstill everything is 0 and the
+  // ratio is meaningless, so say nothing rather than shout.
+  //
+  // Coloured whatever the mode, including `off`. That is deliberate: `off` is
+  // when a drift is going UNCORRECTED, so it is the one time the number most
+  // needs to catch an eye — greying it would hide precisely the reading that
+  // should send someone to switch the loop on.
+  const scale = Math.max(Math.abs(fastest), Math.abs(slowest));
+  const color = scale < 1
+    ? "var(--muted)"
+    : spread <= scale * 0.05
+    ? "var(--ok)"
+    : spread <= scale * 0.1
+    ? "var(--warn)"
+    : "var(--danger)";
+  return { text, color };
+}
+
 /** BNO085 fused-orientation calibration, 0-3. Below the robot's configured
  *  minimum the heading isn't trusted and navigation falls back to the GPS
  *  track angle — which only exists while moving. Worth a glance before a run. */
@@ -75,6 +120,7 @@ export function Telemetry() {
   if (!r) return null;
   const v = r.vision ? vision(r.vision) : null;
   const g = r.gps ? gps(r.gps) : null;
+  const e = r.enc ? encoders(r.enc) : null;
   return (
     <div class="telemetry">
       <Row k="mode">
@@ -86,6 +132,10 @@ export function Telemetry() {
         {r.imu_calib != null && <CalibPips level={r.imu_calib} />}
       </Row>
       {g && <Row k="gps" color={g.color}>{g.text}</Row>}
+      {/* Kept up with heading and position rather than down with vision: a
+          wheel mismatch turns into a heading that drifts off the line you
+          asked for, so these are the rows you read together. */}
+      {e && <Row k="wheels" color={e.color}>{e.text}</Row>}
       <Row k="battery">{r.battery == null ? "—" : r.battery.toFixed(1) + "%"}</Row>
       {v && <Row k="vision" color={v.color}>{v.text}</Row>}
       <Row k="link" color={r.online ? "var(--ok)" : "var(--danger)"}>

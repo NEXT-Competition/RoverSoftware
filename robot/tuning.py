@@ -117,6 +117,21 @@ def _actuator_params(prefix: str, group: str = "", label: str = "") -> Tuple[Par
         _f(f"{prefix}.max_forward", 0, 1, **meta("forward cap", step=0.01)),
         _f(f"{prefix}.max_reverse", 0, 1, **meta("reverse cap", step=0.01)),
         _i(f"{prefix}.channel", 0, 15, live=False, **meta("PWM channel")),
+        # --- quadrature encoder (sensors/encoder.py) ---
+        # Pins are BCM GPIO numbers on the Pi header, NOT Fusion HAT channels,
+        # and -1 means "no encoder". live=False for the same reason `channel`
+        # is: the pins are claimed once, by a constructor, at arm time.
+        _i(f"{prefix}.encoder_a", -1, 27, live=False,
+           **meta("encoder A pin", help="BCM GPIO; -1 = no encoder")),
+        _i(f"{prefix}.encoder_b", -1, 27, live=False,
+           **meta("encoder B pin", help="BCM GPIO; -1 = no encoder")),
+        # Counts per WHEEL revolution as an X4 decoder counts them. Live,
+        # because it is a calibration you get right by turning the wheel and
+        # reading a number, and a restart per attempt means nobody does it.
+        _f(f"{prefix}.encoder_cpr", 0, 100000,
+           **meta("encoder counts/rev", step=1,
+                  help="Measure it with tools/encoder_monitor.py; 0 = unknown")),
+        _b(f"{prefix}.encoder_invert", **meta("encoder inverted")),
     )
 
 
@@ -159,6 +174,26 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # --- drive ---
     _f("drive.slew_rate", 0, 20),
     _f("drive.arm_seconds", 0, 10, live=False),
+
+    # --- closed-loop wheel speed (needs encoders; see control/rpm_trim.py) ---
+    # The mode is live and that is the point: an operator switches it from `off`
+    # to `match`, watches the rover drive a straight line, and switches it back
+    # if it doesn't. A knob you have to restart the service to try is a knob
+    # nobody tries in a pit.
+    _e("drive.trim.mode", ("off", "match", "velocity")),
+    _f("drive.trim.max_rpm", 1, 20000),
+    _f("drive.trim.straight_tolerance", 0, 1),
+    _f("drive.trim.min_throttle", 0, 1),
+    _f("drive.trim.stall_seconds", 0, 10),
+    _f("drive.trim.rpm_window", 0.01, 1),
+    _f("drive.trim.rpm_tau", 0, 1),
+    # Gains against an error in RPM, so they are small — same situation as
+    # nav.heading_pid, whose error is in degrees. i_limit is in RPM-seconds.
+    _f("drive.trim.pid.kp", 0, 1),
+    _f("drive.trim.pid.ki", 0, 1),
+    _f("drive.trim.pid.kd", 0, 1),
+    _f("drive.trim.pid.out_limit", 0, 1),
+    _f("drive.trim.pid.i_limit", 0, 2000),
 
     # --- object / shooter alignment ---
     _f("align.forward_speed", 0, 1),

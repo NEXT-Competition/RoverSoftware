@@ -57,6 +57,11 @@ class RobotState:
     # copy would show a state machine still running one the robot has left.
     mech: Optional[dict] = None
     routine: Optional[dict] = None
+    # Measured wheel speed and what the speed-matching loop did about it:
+    # {rpm: {actuator: rpm}, mode, tl, tr, fault}. Non-sticky like the two
+    # above — the robot omits it entirely on a build with no encoders, and a
+    # held-over RPM readout is a speedometer that lies about a stopped rover.
+    enc: Optional[dict] = None
     # Live closed-loop traces {loop_path: {sp, e, o, p, i, d, m, sat}}, present
     # only while the robot has nav.pid_trace on AND is in a mode that runs a
     # loop. Non-sticky like the two above: a frozen curve left on screen after
@@ -151,6 +156,7 @@ class FleetManager:
             st.mech = msg.get("mech")
             st.routine = msg.get("routine")
             st.pid = msg.get("pid")
+            st.enc = msg.get("enc")
             if msg.get("lat") is not None and msg.get("lon") is not None:
                 st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
                 st.trail.append((st.lat, st.lon))
@@ -401,6 +407,7 @@ class FleetManager:
                     "mech": st.mech,
                     "routine": st.routine,
                     "pid": st.pid,
+                    "enc": st.enc,
                     "online": st.online(now),
                     "age": round(now - st.last_seen, 2) if st.last_seen else None,
                     "trail": st.trail,

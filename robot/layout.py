@@ -87,6 +87,26 @@ def layout_path() -> str:
 
 # --- serializing a config out -----------------------------------------------
 
+def _encoder_doc(m: MotorConfig) -> dict:
+    """This actuator's encoder wiring, or nothing at all if it has none.
+
+    Omitted rather than written as a row of -1s because a layout is capped at
+    MAX_DOC_BYTES and crosses a radio shared with telemetry: four extra fields
+    on every actuator of a sixteen-motor build is a few hundred bytes spent
+    saying "no encoder" over and over. A build that HAS encoders always carries
+    them, so a round-trip through the editor cannot quietly drop one.
+    """
+    if (m.encoder_a == -1 and m.encoder_b == -1
+            and not m.encoder_cpr and not m.encoder_invert):
+        return {}
+    return {
+        "encoder_a": m.encoder_a,
+        "encoder_b": m.encoder_b,
+        "encoder_cpr": m.encoder_cpr,
+        "encoder_invert": m.encoder_invert,
+    }
+
+
 def _actuator_doc(m: MotorConfig) -> dict:
     return {
         "name": m.name,
@@ -100,6 +120,9 @@ def _actuator_doc(m: MotorConfig) -> dict:
         "deadband": m.deadband,
         "max_forward": m.max_forward,
         "max_reverse": m.max_reverse,
+        # Encoder wiring is structural like `channel` — it names pins — so it
+        # belongs in the layout rather than in tuning.json.
+        **_encoder_doc(m),
     }
 
 
@@ -430,6 +453,45 @@ def _resolve_channels(drive: DriveConfig, mechanisms: Dict[str, MechanismConfig]
                 claimed[motor.channel] = f"{mname}.{aname}"
 
 
+def _resolve_encoder_pins(drive: DriveConfig,
+                          mechanisms: Dict[str, MechanismConfig],
+                          errors: List[str]) -> None:
+    """One actuator per encoder GPIO pin, and never A and B on the same one.
+
+    Same argument as `_resolve_channels`, one bus over: two actuators reading
+    the same pin both count the same edges, so a robot with a genuinely dragging
+    track reports both wheels turning at exactly the same speed — the one
+    symptom that would convince you the encoders are working. And an actuator
+    with A and B on one pin decodes nothing at all, because a quadrature decoder
+    needs two phases to have a phase relationship.
+
+    Refused rather than warned: unlike a PWM clash there is no "first one wins"
+    that leaves the rover drivable-but-odd. The measurement is simply wrong, and
+    a speed loop fed a wrong measurement steers.
+    """
+    claimed: Dict[int, str] = {}
+    everything = [(f"drive actuator {n!r}", m) for n, m in drive.actuators.items()]
+    for mname, mech in mechanisms.items():
+        everything += [(f"{mname}.{a}", m) for a, m in mech.actuators.items()]
+
+    for what, motor in everything:
+        pins = [p for p in (motor.encoder_a, motor.encoder_b) if p != -1]
+        if len(pins) == 2 and pins[0] == pins[1]:
+            errors.append(f"{what}: encoder A and B are both on GPIO {pins[0]} "
+                          "— a quadrature encoder needs two separate pins")
+            continue
+        if len(pins) == 1:
+            errors.append(f"{what}: only one encoder pin is set — both A and B "
+                          "are needed, or neither")
+            continue
+        for pin in pins:
+            owner = claimed.get(pin)
+            if owner is not None:
+                errors.append(f"GPIO {pin} is read by both {owner} and {what}")
+            else:
+                claimed[pin] = what
+
+
 def validate(doc: Any, reserved_channels: Optional[Dict[int, str]] = None) -> Validated:
     """Parse and check a layout document. Never raises.
 
@@ -500,6 +562,7 @@ def validate(doc: Any, reserved_channels: Optional[Dict[int, str]] = None) -> Va
             mechanisms[mech.name] = mech
 
     _resolve_channels(drive, mechanisms, reserved_channels or {}, errors)
+    _resolve_encoder_pins(drive, mechanisms, errors)
 
     return Validated(drive, mechanisms, errors, warnings)
 

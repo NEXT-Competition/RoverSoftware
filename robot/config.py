@@ -57,6 +57,117 @@ class MotorConfig:
     kind: str = "esc"
     label: str = ""  # what the dashboard calls it; "" => derived from `name`
 
+    # --- quadrature encoder, for closed-loop wheel speed (sensors/encoder.py) --
+    # BCM GPIO pin numbers for the encoder's two channels — Pi header pins, NOT
+    # Fusion HAT PWM channels; `channel` above is a different bus entirely. -1
+    # on either means this actuator has no encoder, which is the default and
+    # leaves the drivetrain exactly as open-loop as it has always been.
+    encoder_a: int = -1
+    encoder_b: int = -1
+    # Counts per revolution OF THE WHEEL, as an X4 decoder counts them: the
+    # disc's cycles per rev x 4 x the gear ratio. Measure it rather than
+    # computing it — tools/encoder_monitor.py, zero, turn the wheel once, read.
+    encoder_cpr: float = 0.0
+    # Flip the counting direction so "forward throttle" reads as a POSITIVE rpm.
+    # Independent of `inverted`: that mirrors the motor, this mirrors the sensor,
+    # and on a mirrored track motor you usually need both.
+    encoder_invert: bool = False
+
+
+@dataclass
+class PIDConfig:
+    """Gains for one PID loop (robot/control/pid.py).
+
+    Split out of the controllers so the loops are tunable from the base station
+    instead of being edit-and-redeploy constants. The defaults below ARE the
+    values the controllers used to hardcode, so behaviour is unchanged until
+    someone turns a knob.
+
+    Declared up here, above the drivetrain, only because `TrimConfig` needs it
+    and a dataclass annotation is resolved when the class is created.
+    """
+
+    kp: float = 0.0
+    ki: float = 0.0
+    kd: float = 0.0
+    out_limit: float = 1.0  # clamp on the loop's output
+    i_limit: float = 1.0  # clamp on the accumulated integral (anti-windup)
+
+
+@dataclass
+class TrimConfig:
+    """Closed-loop wheel speed: keep the tracks turning at the same rate.
+
+    A throttle is an open-loop wish. Two identical motors handed the same pulse
+    turn at different speeds — ESCs differ, gearboxes differ, one side carries
+    the battery, one track is on grass — and the rover curves away while every
+    number in the system insists it is going straight. With encoders fitted
+    (`MotorConfig.encoder_a/b`), this is the loop that closes that gap.
+    See robot/control/rpm_trim.py.
+
+    OFF by default and that is not timidity: it is the one feature here that can
+    ADD throttle the operator did not ask for, and it must be a decision someone
+    made after wiring an encoder and watching the RPM readout, not a default
+    that surprises a build which has no encoders at all.
+    """
+
+    # off      - measure only. RPM still reaches telemetry; nothing is corrected.
+    # match    - hold the two sides to EACH OTHER. Needs no calibration at all,
+    #            and only engages while driving straight (see straight_tolerance)
+    #            because a commanded turn is a difference you asked for.
+    # velocity - hold each side to `throttle x max_rpm`. Works while turning too,
+    #            but it is only as truthful as `max_rpm`, which you must measure.
+    mode: str = "off"
+    # Wheel RPM at full throttle, for `velocity`. MEASURE IT: drive flat out on
+    # the ground it will run on and read the RPM in telemetry. A value that is
+    # too high makes every setpoint unreachable and the loop saturates; too low
+    # and it throttles back against a wall that isn't there.
+    max_rpm: float = 200.0
+    # `match` only. Above this much difference between the two commanded sides,
+    # the robot is being asked to turn, so the loop stops correcting and holds
+    # its integral rather than fighting the steering. Slew-limited commands mean
+    # this wants a little room — a straight line is not exactly 0.000.
+    straight_tolerance: float = 0.05
+    # Below this commanded magnitude nothing is trimmed and the integrators are
+    # released. A stopped robot has no speed to match, and a loop that keeps
+    # integrating against a wheel held by the ground is a loop that lurches the
+    # moment the throttle comes back.
+    min_throttle: float = 0.05
+    # Fail-safe. Commanded above min_throttle for this long with the encoder
+    # still reading a standstill means the wheel is stalled or the encoder is
+    # unplugged — and a speed loop chasing a dead sensor winds that side to full
+    # throttle. Trip it and the drivetrain reverts to open-loop until it stops.
+    # 0 disables the check, which is only sensible on the bench.
+    stall_seconds: float = 1.0
+    # Speed is counts over an interval. A longer interval is finer resolution
+    # and more lag; see sensors/encoder.py.
+    rpm_window: float = 0.1
+    rpm_tau: float = 0.05  # extra smoothing, seconds; 0 = none
+    # The error this loop sees is in RPM, so useful gains are SMALL — the same
+    # reason nav.heading_pid's are (its error is in degrees). kp=0.002 answers
+    # 100 rpm of mismatch with 0.2 of throttle.
+    #
+    # The INTEGRAL is the term that matters here, and that is unusual enough to
+    # say out loud: a pair of mismatched motors is a constant bias, which is
+    # precisely what an integrator exists to cancel and what a proportional term
+    # can only ever half-fix. So ki carries the correction and kp is small
+    # damping around it. kd is 0 because its input would be a differenced RPM,
+    # and a differenced noisy measurement is noise with a gain on it.
+    #
+    # These settle the simulated 6% mismatch in about three seconds and sit an
+    # order of magnitude below where that plant starts to hunt — headroom left
+    # deliberately, because a real drivetrain has more dead time than a
+    # simulated one (a measurement window, a filter, and the ESC's own lag).
+    #
+    # out_limit is the whole authority this loop has over the drivetrain, and
+    # 0.2 is deliberately modest: the trim is a correction, not a second
+    # throttle. i_limit is in RPM-seconds and is sized just past out_limit/ki,
+    # so the integrator can reach full authority and cannot wind far beyond it.
+    pid: PIDConfig = field(
+        default_factory=lambda: PIDConfig(kp=0.002, ki=0.008, kd=0.0,
+                                          out_limit=0.2, i_limit=50.0)
+    )
+
 
 def _default_drive_actuators() -> "Dict[str, MotorConfig]":
     # motor1 -> channel 0 (left), motor2 -> channel 1 (right, mounted mirrored)
@@ -109,6 +220,11 @@ class DriveConfig:
     # value so the steering has authority instead of the robot sitting still
     # with its wheels turned. 0 disables (and object_align will then stall).
     min_pivot_throttle: float = 0.15
+    # Closed-loop wheel speed, off unless this build has encoders wired and
+    # somebody switched it on. A real field of DriveConfig rather than an
+    # actuator name, so `__getattr__` below never sees it — and so the layout
+    # validator's reserved-name check refuses an actuator called "trim".
+    trim: TrimConfig = field(default_factory=TrimConfig)
 
     def __getattr__(self, name: str) -> MotorConfig:
         """Resolve an unknown attribute to the actuator of that name.
@@ -428,23 +544,6 @@ class RoutineConfig:
     # accepted inside a state that delegates to shooter_align, and is dropped on
     # every state exit, mode exit and e-stop.
     allow_arm: bool = False
-
-
-@dataclass
-class PIDConfig:
-    """Gains for one PID loop (robot/control/pid.py).
-
-    Split out of the controllers so the loops are tunable from the base station
-    instead of being edit-and-redeploy constants. The defaults below ARE the
-    values the controllers used to hardcode, so behaviour is unchanged until
-    someone turns a knob.
-    """
-
-    kp: float = 0.0
-    ki: float = 0.0
-    kd: float = 0.0
-    out_limit: float = 1.0  # clamp on the loop's output
-    i_limit: float = 1.0  # clamp on the accumulated integral (anti-windup)
 
 
 @dataclass
