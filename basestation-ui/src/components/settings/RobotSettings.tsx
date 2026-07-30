@@ -164,7 +164,15 @@ export function RobotSettings() {
               <PidGraph
                 robotId={rid}
                 loop={loopIn(group)!}
-                unit={loopIn(group)!.startsWith("nav.") ? "°" : ""}
+                // The loops disagree on units, and a tracking plot with the
+                // wrong one on it is worse than a bare number: degrees for
+                // heading, RPM for wheel speed, a fraction of the frame for
+                // alignment (which has no name worth printing).
+                unit={loopIn(group)!.startsWith("nav.")
+                  ? "°"
+                  : loopIn(group)!.startsWith("drive.trim")
+                  ? "rpm"
+                  : ""}
               />
             )}
             {group.fields.map((field) => (

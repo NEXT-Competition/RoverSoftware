@@ -57,6 +57,117 @@ class MotorConfig:
     kind: str = "esc"
     label: str = ""  # what the dashboard calls it; "" => derived from `name`
 
+    # --- quadrature encoder, for closed-loop wheel speed (sensors/encoder.py) --
+    # BCM GPIO pin numbers for the encoder's two channels — Pi header pins, NOT
+    # Fusion HAT PWM channels; `channel` above is a different bus entirely. -1
+    # on either means this actuator has no encoder, which is the default and
+    # leaves the drivetrain exactly as open-loop as it has always been.
+    encoder_a: int = -1
+    encoder_b: int = -1
+    # Counts per revolution OF THE WHEEL, as an X4 decoder counts them: the
+    # disc's cycles per rev x 4 x the gear ratio. Measure it rather than
+    # computing it — tools/encoder_monitor.py, zero, turn the wheel once, read.
+    encoder_cpr: float = 0.0
+    # Flip the counting direction so "forward throttle" reads as a POSITIVE rpm.
+    # Independent of `inverted`: that mirrors the motor, this mirrors the sensor,
+    # and on a mirrored track motor you usually need both.
+    encoder_invert: bool = False
+
+
+@dataclass
+class PIDConfig:
+    """Gains for one PID loop (robot/control/pid.py).
+
+    Split out of the controllers so the loops are tunable from the base station
+    instead of being edit-and-redeploy constants. The defaults below ARE the
+    values the controllers used to hardcode, so behaviour is unchanged until
+    someone turns a knob.
+
+    Declared up here, above the drivetrain, only because `TrimConfig` needs it
+    and a dataclass annotation is resolved when the class is created.
+    """
+
+    kp: float = 0.0
+    ki: float = 0.0
+    kd: float = 0.0
+    out_limit: float = 1.0  # clamp on the loop's output
+    i_limit: float = 1.0  # clamp on the accumulated integral (anti-windup)
+
+
+@dataclass
+class TrimConfig:
+    """Closed-loop wheel speed: keep the tracks turning at the same rate.
+
+    A throttle is an open-loop wish. Two identical motors handed the same pulse
+    turn at different speeds — ESCs differ, gearboxes differ, one side carries
+    the battery, one track is on grass — and the rover curves away while every
+    number in the system insists it is going straight. With encoders fitted
+    (`MotorConfig.encoder_a/b`), this is the loop that closes that gap.
+    See robot/control/rpm_trim.py.
+
+    OFF by default and that is not timidity: it is the one feature here that can
+    ADD throttle the operator did not ask for, and it must be a decision someone
+    made after wiring an encoder and watching the RPM readout, not a default
+    that surprises a build which has no encoders at all.
+    """
+
+    # off      - measure only. RPM still reaches telemetry; nothing is corrected.
+    # match    - hold the two sides to EACH OTHER. Needs no calibration at all,
+    #            and only engages while driving straight (see straight_tolerance)
+    #            because a commanded turn is a difference you asked for.
+    # velocity - hold each side to `throttle x max_rpm`. Works while turning too,
+    #            but it is only as truthful as `max_rpm`, which you must measure.
+    mode: str = "off"
+    # Wheel RPM at full throttle, for `velocity`. MEASURE IT: drive flat out on
+    # the ground it will run on and read the RPM in telemetry. A value that is
+    # too high makes every setpoint unreachable and the loop saturates; too low
+    # and it throttles back against a wall that isn't there.
+    max_rpm: float = 200.0
+    # `match` only. Above this much difference between the two commanded sides,
+    # the robot is being asked to turn, so the loop stops correcting and holds
+    # its integral rather than fighting the steering. Slew-limited commands mean
+    # this wants a little room — a straight line is not exactly 0.000.
+    straight_tolerance: float = 0.05
+    # Below this commanded magnitude nothing is trimmed and the integrators are
+    # released. A stopped robot has no speed to match, and a loop that keeps
+    # integrating against a wheel held by the ground is a loop that lurches the
+    # moment the throttle comes back.
+    min_throttle: float = 0.05
+    # Fail-safe. Commanded above min_throttle for this long with the encoder
+    # still reading a standstill means the wheel is stalled or the encoder is
+    # unplugged — and a speed loop chasing a dead sensor winds that side to full
+    # throttle. Trip it and the drivetrain reverts to open-loop until it stops.
+    # 0 disables the check, which is only sensible on the bench.
+    stall_seconds: float = 1.0
+    # Speed is counts over an interval. A longer interval is finer resolution
+    # and more lag; see sensors/encoder.py.
+    rpm_window: float = 0.1
+    rpm_tau: float = 0.05  # extra smoothing, seconds; 0 = none
+    # The error this loop sees is in RPM, so useful gains are SMALL — the same
+    # reason nav.heading_pid's are (its error is in degrees). kp=0.002 answers
+    # 100 rpm of mismatch with 0.2 of throttle.
+    #
+    # The INTEGRAL is the term that matters here, and that is unusual enough to
+    # say out loud: a pair of mismatched motors is a constant bias, which is
+    # precisely what an integrator exists to cancel and what a proportional term
+    # can only ever half-fix. So ki carries the correction and kp is small
+    # damping around it. kd is 0 because its input would be a differenced RPM,
+    # and a differenced noisy measurement is noise with a gain on it.
+    #
+    # These settle the simulated 6% mismatch in about three seconds and sit an
+    # order of magnitude below where that plant starts to hunt — headroom left
+    # deliberately, because a real drivetrain has more dead time than a
+    # simulated one (a measurement window, a filter, and the ESC's own lag).
+    #
+    # out_limit is the whole authority this loop has over the drivetrain, and
+    # 0.2 is deliberately modest: the trim is a correction, not a second
+    # throttle. i_limit is in RPM-seconds and is sized just past out_limit/ki,
+    # so the integrator can reach full authority and cannot wind far beyond it.
+    pid: PIDConfig = field(
+        default_factory=lambda: PIDConfig(kp=0.002, ki=0.008, kd=0.0,
+                                          out_limit=0.2, i_limit=50.0)
+    )
+
 
 def _default_drive_actuators() -> "Dict[str, MotorConfig]":
     # motor1 -> channel 0 (left), motor2 -> channel 1 (right, mounted mirrored)
@@ -73,10 +184,11 @@ class DriveRoles:
     A role is a LIST because a side can have more than one motor — a six-wheel
     tank drives three motors per side off the same track speed.
     """
-    left: List[str] = field(default_factory=lambda: ["left"])    # tank
+
+    left: List[str] = field(default_factory=lambda: ["left"])  # tank
     right: List[str] = field(default_factory=lambda: ["right"])  # tank
-    throttle: List[str] = field(default_factory=list)            # servo_steer | single
-    steer: str = ""                                              # servo_steer
+    throttle: List[str] = field(default_factory=list)  # servo_steer | single
+    steer: str = ""  # servo_steer
 
 
 @dataclass
@@ -91,6 +203,7 @@ class DriveConfig:
     keeps every deployed tuning.json, every RS_* override and the whole
     existing test suite working unchanged.
     """
+
     # tank        - left/right track speeds, any number of motors per side
     # servo_steer - one or more drive motors plus a steering servo
     # single      - drive motors only; steering is ignored
@@ -109,6 +222,11 @@ class DriveConfig:
     # value so the steering has authority instead of the robot sitting still
     # with its wheels turned. 0 disables (and object_align will then stall).
     min_pivot_throttle: float = 0.15
+    # Closed-loop wheel speed, off unless this build has encoders wired and
+    # somebody switched it on. A real field of DriveConfig rather than an
+    # actuator name, so `__getattr__` below never sees it — and so the layout
+    # validator's reserved-name check refuses an actuator called "trim".
+    trim: TrimConfig = field(default_factory=TrimConfig)
 
     def __getattr__(self, name: str) -> MotorConfig:
         """Resolve an unknown attribute to the actuator of that name.
@@ -127,13 +245,14 @@ class DriveConfig:
         if actuators is not None and name in actuators:
             return actuators[name]
         raise AttributeError(
-            f"{type(self).__name__!s} has no attribute or actuator {name!r}")
+            f"{type(self).__name__!s} has no attribute or actuator {name!r}"
+        )
 
 
 @dataclass
 class CommsConfig:
     port: str = "/dev/ttyUSB0"  # XBee serial port (USB adapter; use /dev/serial0 for the GPIO header)
-    baud: int = 57600
+    baud: int = 115200
     command_timeout: float = (
         0.5  # Failsafe: stop if no drive command arrives within this many seconds
     )
@@ -163,16 +282,21 @@ class GPSConfig:
     # preferred heading source at a standstill; see RobotConfig.heading_source.
     enabled: bool = True
     port: str = "/dev/ttyAMA0"
-    baud: int = 9600
+    # NOT the module's factory 9600: 5 Hz of GGA+RMC+VTG is ~9500 bps of payload,
+    # which a 9600-baud line cannot hold. The driver sends PMTK251 on every start
+    # to move the module here, because that setting doesn't survive a power cycle
+    # without the breakout's CR1220 backup battery fitted.
+    baud: int = 57600
     fix_timeout: float = 5.0  # drop the fix (return None) after this long w/o an update
     min_move_mps: float = (
         0.5  # below this speed, the track angle is noise; hold last heading
     )
-    # Fix interval in ms (PMTK220). 1000 = 1 Hz, the module's default. Lower is a
-    # fresher heading, but the sentences have to fit the link: below ~200 ms they
-    # won't at 9600 baud, and truncated sentences read as "no fix". Ignored by a
-    # non-MTK receiver (a NEO-6M keeps whatever rate it was configured for).
-    update_rate_ms: int = 1000
+    # Fix interval in ms, sent as both PMTK300 (solve rate) and PMTK220 (output
+    # rate). 200 = 5 Hz, which is the ceiling on the Ultimate GPS's MTK3339 — ask
+    # for less and the sentences just repeat positions. A PA1616D (MT3333) does a
+    # genuine 10 Hz at 100. Ignored by a non-MTK receiver (a NEO-6M keeps whatever
+    # rate it was configured for). Raise `baud` with it; see gps.py.
+    update_rate_ms: int = 200
 
 
 @dataclass
@@ -315,7 +439,25 @@ class VisionConfig:
     # model input height, on the edge_impulse backend). Calibrate it, don't
     # guess: park at the distance you want, run tools/detector_selftest.py, and
     # read off the printed size.
+    #
+    # This is the fallback standoff, in box-height units. A routine state that
+    # names `stop_within_m` overrides it for as long as that state is current,
+    # converting metres through the calibration below.
     standoff_size: float = 0.45
+    # Bounding box -> metres, as ONE measured pair: "at range_at_m, the box
+    # measured range_size". See control/rangefinder.py for why one pair is the
+    # whole model (the frame height and the focal length cancel).
+    #
+    # *** THESE TWO ARE A PLACEHOLDER, NOT A MEASUREMENT. *** They say the
+    # shipped standoff_size of 0.45 sits at 1 m, which is self-consistent but
+    # invented — it has no idea how tall your target actually is, and the real
+    # object height is the term folded into the constant. One tape measure and
+    # one run of tools/detector_selftest.py replaces them, and until that happens
+    # every distance the dashboard shows is a guess with two significant figures
+    # of false confidence. Set range_at_m to 0 to disable metre estimates
+    # entirely and keep everything in box-height units.
+    range_at_m: float = 1.0
+    range_size: float = 0.45
     search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
 
 
@@ -389,6 +531,7 @@ class MechanismConfig:
     name "shooter" is reserved by layout validation to avoid two things
     answering to it.
     """
+
     name: str = ""
     label: str = ""  # what the dashboard calls it; "" => derived from `name`
     kind: str = "power"  # power | pulse
@@ -419,6 +562,7 @@ class RoutineConfig:
     The documents themselves live in routines.json, not here — this is only the
     handful of knobs that decide what a routine is ALLOWED to do.
     """
+
     # A state that never transitions is a robot that never stops. Any state
     # without its own timeout inherits this one.
     state_timeout_default: float = 60.0
@@ -428,23 +572,6 @@ class RoutineConfig:
     # accepted inside a state that delegates to shooter_align, and is dropped on
     # every state exit, mode exit and e-stop.
     allow_arm: bool = False
-
-
-@dataclass
-class PIDConfig:
-    """Gains for one PID loop (robot/control/pid.py).
-
-    Split out of the controllers so the loops are tunable from the base station
-    instead of being edit-and-redeploy constants. The defaults below ARE the
-    values the controllers used to hardcode, so behaviour is unchanged until
-    someone turns a knob.
-    """
-
-    kp: float = 0.0
-    ki: float = 0.0
-    kd: float = 0.0
-    out_limit: float = 1.0  # clamp on the loop's output
-    i_limit: float = 1.0  # clamp on the accumulated integral (anti-windup)
 
 
 @dataclass
@@ -487,10 +614,12 @@ class NavConfig:
     )
     # Gains used instead whenever the heading is the GPS track angle rather than
     # an IMU attitude (heading_source="gps", or "auto" with the IMU absent or
-    # still calibrating). Deliberately slower: this loop closes around a ~1 Hz
-    # course over ground, so it gets about half the authority, heavier damping,
-    # and no integral at all (a course has no steady-state bias worth trimming,
-    # and integrating a once-a-second error only winds up).
+    # still calibrating). Deliberately slower: this loop closes around a 5 Hz
+    # course over ground against a 50 Hz control loop, so it gets about half the
+    # authority, heavier damping, and no integral at all (a course has no
+    # steady-state bias worth trimming, and integrating a stale error only winds
+    # up). Sized when the fix rate was 1 Hz and not re-tuned since — conservative
+    # rather than wrong, but there is authority here to reclaim on hardware.
     gps_heading_pid: PIDConfig = field(
         default_factory=lambda: PIDConfig(
             kp=0.008, ki=0.0, kd=0.006, out_limit=0.4, i_limit=50.0

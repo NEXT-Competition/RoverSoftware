@@ -32,6 +32,21 @@ from robot.tuning import Param, coerce
 # every consumer to special-case.
 UNBOUND = -1
 
+# How many gamepad buttons may be bound to a routine.
+#
+# Every other action here is a fixed field because the vocabulary is fixed —
+# there is exactly one E-STOP. Routines are the opposite: they are written by
+# the operator, named by the operator, and there is no list of them in this
+# process at all. So the mapping carries a small number of *slots*, each a
+# (button, routine id) pair, rather than a field per routine it cannot know.
+#
+# Four because that is what is left on a DualShock once drive, E-STOP and the
+# mode buttons have taken theirs, and because a flat whitelist of settings
+# paths (PARAMS, below) has to enumerate them — an unbounded map would need
+# new machinery in the store, the wire format and the form for a case nobody
+# has: a pad has more routines bound to it than it has spare buttons.
+ROUTINE_SLOTS = 4
+
 DEFAULT_PATH = "~/.config/roversoftware/basestation.json"
 
 
@@ -73,6 +88,35 @@ class ControllerMapping:
     btn_arm_shooter: int = UNBOUND
     btn_fire: int = UNBOUND
 
+    # --- routines on buttons (both halves must be set to do anything) ---
+    # `btn_routine_N` is the button; `routine_N` is the id of the routine it
+    # runs, which is a document on the ROBOT and so is stored as free text — a
+    # base station cannot validate an id belonging to a rover that may not be
+    # connected, and refusing an unknown one would break the binding every time
+    # a rover was off. An id that no longer exists is the robot's to reject.
+    btn_routine_1: int = UNBOUND
+    routine_1: str = ""
+    btn_routine_2: int = UNBOUND
+    routine_2: str = ""
+    btn_routine_3: int = UNBOUND
+    routine_3: str = ""
+    btn_routine_4: int = UNBOUND
+    routine_4: str = ""
+
+    def routine_slots(self) -> Tuple[Tuple[int, str], ...]:
+        """(button index, routine id) for every slot, filled or not.
+
+        Ids are trimmed here so that one rule — what counts as "no routine" —
+        lives in one place; a cleared text field arrives as whitespace. The
+        fields are reached by name, so the pair is typed back down explicitly
+        rather than leaking `Any` into everything that reads `actions()`.
+        """
+        return tuple(
+            (int(getattr(self, f"btn_routine_{n}")),
+             str(getattr(self, f"routine_{n}") or "").strip())
+            for n in range(1, ROUTINE_SLOTS + 1)
+        )
+
     def actions(self):
         """(button index, action name) for every bound button.
 
@@ -88,6 +132,11 @@ class ControllerMapping:
             (self.btn_waypoint, "mode:waypoint"),
             (self.btn_arm_shooter, "arm_shooter"),
             (self.btn_fire, "fire"),
+            # A half-filled slot — a button with no routine, or a routine with
+            # no button — is dropped rather than bound to something arbitrary.
+            # Pressing it does nothing, which is what the settings page says it
+            # will do.
+            *((idx, f"routine:{rid}") for idx, rid in self.routine_slots() if rid),
         )
         return tuple((idx, name) for idx, name in pairs if idx is not None and idx >= 0)
 
@@ -133,6 +182,12 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.btn_waypoint", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_arm_shooter", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_fire", "int", lo=UNBOUND, hi=31),
+    # One (button, routine id) pair per slot. Generated rather than typed out
+    # so ROUTINE_SLOTS is the only place the count lives.
+    *(p for n in range(1, ROUTINE_SLOTS + 1) for p in (
+        Param(f"controller.btn_routine_{n}", "int", lo=UNBOUND, hi=31),
+        Param(f"controller.routine_{n}", "text"),
+    )),
 )
 
 BY_PATH: Dict[str, Param] = {p.path: p for p in PARAMS}

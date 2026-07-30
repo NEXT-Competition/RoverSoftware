@@ -33,12 +33,56 @@ python tools/xbee_monitor.py --port /dev/serial0 --baud 9600
 Run the monitor on the robot to confirm the base station's commands arrive; run
 it (or the base station) on the other end to confirm your sends are received.
 
+## Wheel encoders (optional)
+
+A throttle is a wish, not a speed. Two motors handed the same pulse turn at
+different rates, so the rover curves while the dashboard insists it is going
+straight. An encoder measures what the wheel actually did, and the robot can
+then hold the two sides together.
+
+**The pins are Pi GPIO, not HAT channels.** `channel` above is a Fusion HAT PWM
+output; `encoder_a`/`encoder_b` are BCM numbers on the Pi's own header. Confusing
+the two produces an encoder that counts nothing, and it is the first mistake
+everybody makes here. Wire A and B to two free GPIOs, ground to ground, and the
+encoder's supply to whatever it wants (many are 3.3 V; a 5 V encoder needs a
+level shifter, because a Pi GPIO is not 5 V tolerant).
+
+Install the GPIO library your Pi needs — neither is a hard dependency, and
+without one the encoders stay inert and nothing else changes:
+
+```bash
+# Pi 4 and older
+pip install pigpio && sudo systemctl enable --now pigpiod
+# Pi 5
+pip install lgpio
+```
+
+Then, **wheels off the ground and the drivetrain unpowered**:
+
+```bash
+# 4. prove the wiring, and MEASURE counts-per-rev
+python tools/encoder_monitor.py --pins 17,27
+#    turn the wheel forward by hand: the count must go UP. If it goes down,
+#    that is the "Count inverted" toggle, not a wiring fault.
+#    Then zero it, turn the wheel exactly one full turn, and read the count —
+#    that number is Counts per rev on the actuator's card.
+```
+
+Enter the pins and that number in **Settings → Hardware → the motor → Encoder**,
+save, and restart the robot (pins are claimed at start-up, like PWM channels).
+The driving view then shows a `wheels` row. Set **Settings → Robot → Wheel speed
+matching → Mode** to `match` and drive a straight line: the gap should collapse
+toward zero. `match` needs no calibration at all and only acts while you are
+driving straight; `velocity` also works in turns but first wants **Max wheel
+RPM**, which you get by driving flat out and reading that same row.
+
 ## The tools
 
 | Tool | What it is for |
 |---|---|
 | `servo_sweep.py` | Raw servo sweep — the Fusion HAT hello-world |
 | `esc_calibrate.py` | Interactive single-channel ESC bring-up |
+| `encoder_monitor.py` | Encoder bring-up, and the counts-per-rev measurement |
 | `xbee_monitor.py` | Watch and inject XBee frames to prove the link |
 | `gps_monitor.py` | GPS bring-up: fix quality, track angle |
 | `imu_monitor.py` | BNO085 heading and calibration status |

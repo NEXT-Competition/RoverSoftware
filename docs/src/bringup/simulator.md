@@ -21,6 +21,14 @@ Routines edits with the *real* validators and run the *real* engine, which is
 the point: a settings page you can only test on a rover is a settings page that
 ships broken.
 
+The fake rovers also have a real defect: each one's right side is 6% weaker than
+its left, and the reported wheel speed lags the true one exactly as an encoder's
+does. So a simulated rover told to drive straight visibly curves on the map, and
+switching **Settings → Robot → Wheel speed matching → Mode** to `match`
+straightens it while you watch — the closed loop, the shipped gains and the
+tuning graph, all before anyone wires an encoder. See
+[Tune it in the field](tuning.md#making-both-tracks-turn-together).
+
 > **It never invents robots**
 >
 > Running with neither `--port` nor `--sim` exits with a hint rather than

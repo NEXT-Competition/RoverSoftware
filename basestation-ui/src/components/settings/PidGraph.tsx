@@ -123,9 +123,19 @@ function extent(
 }
 
 /** Two decimals below ten, one above — enough to see a gain move without the
- *  legend changing width as the value crosses a power of ten. */
+ *  legend changing width as the value crosses a power of ten — and significant
+ *  figures rather than decimals once a gain is too small for either. */
 function format(value: number): string {
-  return Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2);
+  const abs = Math.abs(value);
+  if (abs >= 10) return value.toFixed(1);
+  if (abs >= 0.01 || abs === 0) return value.toFixed(2);
+  // Below a hundredth, two decimals is not a rounded number — it is "0.00" for
+  // every value, which is the one thing a readout beside a curve must not be.
+  // Loops whose error is in real units have gains this small BY CONSTRUCTION:
+  // the heading loops see degrees and the wheel-speed loop sees RPM, so their
+  // useful gains live two or three decimals down. Show enough digits to be a
+  // digit, and drop the zeros that padding adds.
+  return value.toPrecision(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 /** An axis label with enough precision to be a DIFFERENT number from its

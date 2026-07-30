@@ -46,6 +46,27 @@ export interface MechStatus {
   cool?: number;
 }
 
+/** Measured wheel speed, and what the speed-matching loop did about it
+ *  (robot/drive/drivetrain.py::status + robot/control/rpm_trim.py::status).
+ *
+ *  Absent on a build with no encoders wired, which is the default. `rpm` is
+ *  keyed by ACTUATOR name — the operator's own names, and the resolution you
+ *  need to find the one wheel dragging on a six-wheel build.
+ *
+ *  Note what this is next to: `Robot.left`/`right` are what the robot was TOLD,
+ *  and these are what the wheels did. The gap between them is the entire reason
+ *  encoders exist. */
+export interface EncoderStatus {
+  rpm: Record<string, number>; // actuator -> signed RPM, + is forward
+  mode: "off" | "match" | "velocity" | (string & {});
+  tl?: number; // correction applied to the left side, throttle units
+  tr?: number; // ...and the right. Both absent unless the loop is engaged.
+  /** "left" | "right" once a wheel has been commanded without turning: the
+   *  encoder is unplugged or the wheel is stalled. Latched on the robot until
+   *  the drivetrain stops, and the loop is open until then. */
+  fault?: string;
+}
+
 /** One step of a PID loop (robot/control/pid.py::trace).
  *
  *  Short keys because this rides every telemetry frame on a 57600-baud radio.
@@ -103,6 +124,7 @@ export interface Robot {
   shooter?: ShooterStatus | null; // absent unless shooter_align is active
   mech?: Record<string, MechStatus> | null; // absent unless the layout has any
   routine?: RoutineStatus | null; // absent unless `routine` is active
+  enc?: EncoderStatus | null; // absent unless the build has wheel encoders
   /** Live closed-loop traces, keyed by the loop's own tuning path
    *  ("align.pid", "nav.heading_pid"). Absent unless the robot has
    *  `nav.pid_trace` switched on AND is in a mode that runs a loop. */
@@ -164,6 +186,19 @@ export interface ActuatorSpec {
   deadband?: number;
   max_forward?: number;
   max_reverse?: number;
+  /** Quadrature encoder wiring, if this actuator has one. BCM GPIO pin numbers
+   *  on the Pi header — a different bus from `channel`, which is a Fusion HAT
+   *  PWM output. -1 (or absent) on either means no encoder, and the robot
+   *  refuses a layout that sets only one of the two. */
+  encoder_a?: number;
+  encoder_b?: number;
+  /** Counts per revolution OF THE WHEEL, as an X4 decoder counts them. Measure
+   *  it with tools/encoder_monitor.py rather than deriving it from the disc's
+   *  spec — the gear ratio is frequently not the printed one. */
+  encoder_cpr?: number;
+  /** Flip the counting direction so forward throttle reads as positive RPM.
+   *  Independent of `inverted`: that mirrors the motor, this mirrors the sensor. */
+  encoder_invert?: boolean;
 }
 
 export type DriveKind = "tank" | "servo_steer" | "single" | "none";
@@ -235,8 +270,20 @@ export interface RoutineStateSpec {
    *  this state is current — the answer to "align to WHAT". The robot borrows
    *  the detector's target for the state and puts the operator's own back when
    *  it is left (robot/control/routine_controller.py), so an empty value means
-   *  "whatever is already selected" rather than "anything". */
-  drive?: { mode: string; throttle?: number; steer?: number; target?: string };
+   *  "whatever is already selected" rather than "anything".
+   *
+   *  `stop_within_m` is the answer to "how CLOSE" — metres, borrowed and handed
+   *  back the same way. The robot estimates the distance from the bounding box
+   *  height (robot/control/rangefinder.py), so it is only as good as that
+   *  calibration; an uncalibrated build ignores it and stops at its own
+   *  standoff. Omitted means "leave the controller's standoff alone". */
+  drive?: {
+    mode: string;
+    throttle?: number;
+    steer?: number;
+    target?: string;
+    stop_within_m?: number;
+  };
   timeout?: number; // omitted = inherit routines.state_timeout_default
   terminal?: boolean;
   on_enter?: ActionSpec[];

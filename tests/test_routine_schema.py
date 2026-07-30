@@ -6,6 +6,8 @@ that doesn't exist, must not be able to run forever unattended, and must not be
 able to arm the launcher anywhere the firing policy isn't being enforced.
 """
 
+import pytest
+
 from robot.config import RoutineConfig
 from robot.routine import schema
 
@@ -176,6 +178,62 @@ def test_an_absurdly_long_target_is_rejected():
     result = parse(routine([
         {"id": "aim", "drive": {"mode": "object_align", "target": "b" * 200},
          "transitions": [{"when": "aligned", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert not result.ok
+
+
+# --- how near an aligning state gets -----------------------------------------
+
+def test_an_aligning_state_may_say_how_close_to_get():
+    """The other half of "align to WHAT": how NEAR. Without it a state stops at
+    whatever standoff Settings was last left on, so the same routine closes to a
+    different distance between runs nobody edited."""
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket",
+                                "stop_within_m": 1.5},
+         "transitions": [{"when": "arrived", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    assert result.routines["r1"].states["aim"].drive_stop_within_m == 1.5
+
+
+def test_no_stop_distance_means_the_controllers_own():
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "object_align"},
+         "transitions": [{"when": "arrived", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    assert result.routines["r1"].states["aim"].drive_stop_within_m == 0.0
+
+
+def test_a_stop_distance_on_a_mode_that_cannot_approach_is_rejected():
+    """Waypoint navigation drives to a coordinate, not to something it can see.
+    A distance there would sit on the editor's screen unread."""
+    result = parse(routine([
+        {"id": "a", "drive": {"mode": "waypoint", "stop_within_m": 1.5},
+         "transitions": [{"when": "route_done", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert not result.ok
+    assert "stop_within_m" in " ".join(result.errors)
+
+
+@pytest.mark.parametrize("metres", [0.01, 0.0, -2.0, 500.0])
+def test_an_out_of_range_stop_distance_is_refused_not_clamped(metres):
+    """Clamping would leave the document saying one thing and the robot doing
+    another — and it is usually a slipped decimal point, which is worth being
+    told about rather than half-honoured."""
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "object_align", "stop_within_m": metres},
+         "transitions": [{"when": "arrived", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert not result.ok
+
+
+def test_a_non_numeric_stop_distance_is_refused():
+    """It crosses a radio as JSON somebody's editor produced."""
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "object_align", "stop_within_m": "near"},
+         "transitions": [{"when": "arrived", "to": "done"}]},
         {"id": "done", "terminal": True}]))
     assert not result.ok
 

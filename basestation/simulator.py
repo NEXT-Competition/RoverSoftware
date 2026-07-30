@@ -28,6 +28,7 @@ from robot import layout, tuning
 from robot.comms.doc_transfer import Reassembler, split
 from robot.config import PIDConfig, RobotConfig
 from robot.control.pid import PID
+from robot.control.rpm_trim import RpmTrim
 from robot.control.waypoint import bearing_deg, haversine_m
 from robot.routine import schema as routine_schema
 from robot.routine import store as routine_store
@@ -41,6 +42,29 @@ SIM_CONTROLLERS = ("teleop", "object_align", "shooter_align", "waypoint", "routi
 V_MAX = 3.0          # m/s at full throttle
 YAW_MAX = 60.0       # deg/s at full turn-in-place
 M_PER_DEG_LAT = 111_320.0
+
+# --- fake wheel encoders ------------------------------------------------------
+# The simulated rover has the defect encoders exist to fix: its two sides do not
+# turn at the same speed for the same throttle. That is not decoration. It means
+# the fake rover drives a visible arc on the map when you tell it to go straight,
+# switching drive.trim.mode to "match" straightens it while you watch, and the
+# tuning graph draws a real loop closing around a real mismatch — so the whole
+# feature can be tried, and got wrong, before anybody wires an encoder.
+#
+# Wheel RPM at full throttle. Deliberately NOT read from drive.trim.max_rpm: if
+# the simulated hardware simply agreed with whatever you typed, `velocity` mode
+# would work perfectly at every setting and the one calibration it actually
+# depends on would be untestable.
+SIM_MAX_RPM = 200.0
+# How mismatched the two sides are, as a multiplier on the right side. 6% is a
+# bad-but-believable pair of ESCs: enough to curve away over ten metres, small
+# enough that it looks like drift rather than a fault.
+SIM_RIGHT_GAIN = 0.94
+# First-order lag from commanded throttle to actual wheel speed, seconds. Real
+# mass and real gearboxes do not respond instantly, and without this the plant
+# would be a pure gain — which any set of gains stabilizes, making the tuning
+# page a lie.
+SIM_SPINUP_S = 0.15
 
 
 def _clamp(v, lo=-1.0, hi=1.0):
@@ -94,6 +118,18 @@ class _SimRobot:
         # (nav.heading_pid) and never the GPS-course one.
         self.heading_pid = PID(**vars(self.cfg.nav.heading_pid))
         self._bearing: Optional[float] = None
+        # The wheel-speed loop, the real one, closing around fake encoders. The
+        # measured speeds lag the commanded throttles and the right side is
+        # weaker (see SIM_RIGHT_GAIN), so this has an actual mismatch to correct.
+        self.trim = RpmTrim(self.cfg.drive.trim)
+        # True wheel speed, and the speed the fake encoder REPORTS. Two values,
+        # not one, because the gap between them is dead time — and dead time is
+        # what decides whether a set of gains is stable. A simulator whose
+        # sensor was instantaneous would bless gains that make a real rover hunt.
+        self.wheel_rpm: Dict[str, float] = {"left": 0.0, "right": 0.0}
+        self.meas_rpm: Dict[str, float] = {"left": 0.0, "right": 0.0}
+        self._meas_at = 0.0
+        self._trimmed: Tuple[float, float] = (0.0, 0.0)
         # Which fake network this fake Pi has joined. None = not on WiFi, which
         # is the state the Network page exists to get a rover out of.
         self.wifi_ssid: Optional[str] = None
@@ -260,10 +296,53 @@ class _SimRobot:
         else:
             self.left = self.right = 0.0
 
+    def _spin_wheels(self, dt: float) -> Tuple[float, float]:
+        """Turn commanded throttles into wheel speeds, and close the trim loop.
+
+        Ordered exactly as the rover does it (robot/drive/drivetrain.py): the
+        loop reads the speeds the LAST tick produced and adjusts this tick's
+        throttles, which is the one-sample delay a real control loop has and the
+        reason a too-hot gain oscillates here as well.
+        """
+        # A layout replaces cfg.drive wholesale, taking its TrimConfig with it.
+        # Rebuild rather than hold a config the operator can no longer edit.
+        if self.trim.cfg is not self.cfg.drive.trim:
+            self.trim = RpmTrim(self.cfg.drive.trim)
+        left, right = self.trim.apply(
+            self.left, self.right,
+            self.meas_rpm["left"], self.meas_rpm["right"], dt)
+        self._trimmed = (left, right)
+
+        # The plant: throttle -> wheel speed, with one side weaker and both
+        # lagging. Speeds are what actually moves the rover below, so a trim
+        # that equalizes them is a trim you can see equalize on the map.
+        alpha = 1.0 if SIM_SPINUP_S <= 0 else min(1.0, dt / SIM_SPINUP_S)
+        for side, cmd, gain in (("left", left, 1.0),
+                                ("right", right, SIM_RIGHT_GAIN)):
+            target = _clamp(cmd) * gain * SIM_MAX_RPM
+            self.wheel_rpm[side] += alpha * (target - self.wheel_rpm[side])
+
+        # The sensor, with the same two lags the real one has: a measurement
+        # window it only publishes on, and a smoothing constant on top. Both are
+        # read live off the config, so raising them in the settings page makes
+        # the simulated loop sluggish exactly as it would on the rover.
+        self._meas_at += dt
+        window = max(self.cfg.drive.trim.rpm_window, dt)
+        if self._meas_at >= window:
+            tau = self.cfg.drive.trim.rpm_tau
+            beta = 1.0 if tau <= 0 else self._meas_at / (tau + self._meas_at)
+            for side in self.meas_rpm:
+                self.meas_rpm[side] += beta * (
+                    self.wheel_rpm[side] - self.meas_rpm[side])
+            self._meas_at = 0.0
+        return (self.wheel_rpm["left"] / SIM_MAX_RPM,
+                self.wheel_rpm["right"] / SIM_MAX_RPM)
+
     def step(self, dt: float) -> None:
         if self.estop:
             self.left = self.right = 0.0
             self.mech_power = {k: 0.0 for k in self.mech_power}
+            self.trim.reset()
             if self.engine is not None:
                 self.engine.stop("e-stopped")
                 self.engine = None
@@ -272,8 +351,12 @@ class _SimRobot:
         elif self.mode == "routine":
             self._run_routine(dt)
 
-        v = (self.left + self.right) / 2.0 * V_MAX
-        turn = (self.left - self.right) / 2.0  # +ve => clockwise (heading increases)
+        # Motion comes from the WHEELS, not the command — that gap is the entire
+        # subject of the encoder feature, and a simulator that skipped it could
+        # not demonstrate the thing it exists to demonstrate.
+        speed_left, speed_right = self._spin_wheels(dt)
+        v = (speed_left + speed_right) / 2.0 * V_MAX
+        turn = (speed_left - speed_right) / 2.0  # +ve => clockwise (heading increases)
         self.heading = (self.heading + turn * YAW_MAX * dt) % 360.0
 
         north = v * math.cos(math.radians(self.heading)) * dt
@@ -290,6 +373,13 @@ class _SimRobot:
             "lat": round(self.lat, 7), "lon": round(self.lon, 7),
             "heading": round(self.heading, 1),
         }
+        # Fake encoders, in the rover's own shape (robot/drive/drivetrain.py).
+        # Always present, because the simulated build always has them — that is
+        # what makes the RPM readout and the fault banner something you can look
+        # at before owning the hardware.
+        t["enc"] = {"rpm": {"left": round(self.meas_rpm["left"], 1),
+                            "right": round(self.meas_rpm["right"], 1)},
+                    **self.trim.status()}
         if self.cfg.mechanisms:
             t["mech"] = {name: {"kind": mech.kind, "values": {
                 "*": round(self.mech_power.get(name, 0.0), 3)}}
@@ -300,9 +390,19 @@ class _SimRobot:
         # The heading loop, on the same switch and in the same shape the rover
         # uses (robot/robot.py::_telemetry) — keyed by the loop's tuning path,
         # and only while a loop is actually steering.
-        if self.cfg.nav.pid_trace and self._bearing is not None:
-            t["pid"] = {"nav.heading_pid": self.heading_pid.trace(
-                setpoint=self._bearing, measured=self.heading)}
+        if self.cfg.nav.pid_trace:
+            traces = {}
+            if self._bearing is not None:
+                traces["nav.heading_pid"] = self.heading_pid.trace(
+                    setpoint=self._bearing, measured=self.heading)
+            # The wheel-speed loop, on the same switch and under the same key
+            # the rover publishes it as, so the graph on the settings page is
+            # fed identically with and without hardware.
+            trim_trace = self.trim.trace()
+            if trim_trace is not None:
+                traces["drive.trim.pid"] = trim_trace
+            if traces:
+                t["pid"] = traces
         return t
 
 

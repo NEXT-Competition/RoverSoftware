@@ -27,9 +27,11 @@ autonomy would need the controllers themselves to plan arcs, which they don't.
 from __future__ import annotations
 
 import time
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from ..config import DriveConfig
+from ..control.rpm_trim import RpmTrim
+from ..sensors.encoder import Encoder, build_encoder, close_backend
 from .motor import ESCMotor
 
 
@@ -87,9 +89,73 @@ class Drivetrain:
         self.motors: Dict[str, ESCMotor] = {
             name: ESCMotor(actuator) for name, actuator in config.actuators.items()
         }
+        # One quadrature encoder per actuator that declares a pair of pins;
+        # nothing at all on a build that doesn't, which is every build that
+        # existed before sensors/encoder.py did. Constructed here (not started —
+        # `arm` does that) so the object exists before the GPIO is claimed, the
+        # same order the camera and its consumers use.
+        self.encoders: Dict[str, Encoder] = {}
+        for name, actuator in config.actuators.items():
+            enc = build_encoder(actuator, window=config.trim.rpm_window,
+                                tau=config.trim.rpm_tau)
+            if enc is not None:
+                self.encoders[name] = enc
 
     def _named(self, names: Iterable[str]) -> List[ESCMotor]:
         return [self.motors[n] for n in names if n in self.motors]
+
+    def recalibrate(self) -> None:
+        """Copy live-tunable encoder settings onto the objects that cached them.
+
+        The counts-per-rev of a wheel is exactly the kind of number you get right
+        by parking the rover, turning the wheel and typing what you counted — a
+        round trip that a service restart per attempt means nobody completes. So
+        it is `live=True` in tuning.py, and this is what makes that true.
+        Called from Robot._push_live_config; never from the control loop.
+        """
+        for name, enc in self.encoders.items():
+            actuator = self.cfg.actuators.get(name)
+            if actuator is not None:
+                enc.counts_per_rev = float(actuator.encoder_cpr)
+                enc.invert = bool(actuator.encoder_invert)
+            enc.window = self.cfg.trim.rpm_window
+            enc.tau = self.cfg.trim.rpm_tau
+
+    def sample_encoders(self, now: Optional[float] = None) -> None:
+        """Advance every encoder's speed estimate. Called once per drive tick."""
+        for enc in self.encoders.values():
+            enc.sample(now)
+
+    def side_rpm(self, names: Iterable[str]) -> Optional[float]:
+        """Mean measured RPM across one side's encoders, or None if it has none.
+
+        A mean rather than the first, because a six-wheel side has three motors
+        and the useful number is how fast the TRACK is going. None propagates
+        the "no measurement" case all the way to RpmTrim, which is what makes it
+        fail open instead of chasing a zero.
+        """
+        values = [self.encoders[n].rpm() for n in names if n in self.encoders]
+        values = [v for v in values if v is not None]
+        return sum(values) / len(values) if values else None
+
+    def encoder_telemetry(self) -> Optional[dict]:
+        """Per-actuator RPM for a telemetry frame, or None when there are none."""
+        out = {}
+        for name, enc in self.encoders.items():
+            value = enc.telemetry()
+            if value is not None:
+                out[name] = value
+        return out or None
+
+    def status(self) -> Optional[dict]:
+        """Wheel speed, keyed by actuator, or None on a build with no encoders.
+
+        Per actuator rather than per side, because that is the resolution you
+        need to find the one wheel that is dragging on a six-wheel build — and
+        because the names are the operator's own.
+        """
+        rpm = self.encoder_telemetry()
+        return None if rpm is None else {"rpm": rpm}
 
     def arm(self) -> None:
         """Hold every ESC at neutral long enough for it to arm.
@@ -101,6 +167,12 @@ class Drivetrain:
         """
         for motor in self.motors.values():
             motor.stop()
+        # Claim the encoder pins while the ESCs are holding neutral: nothing is
+        # turning, so the first speed sample is taken against a known standstill
+        # rather than mid-motion. A backend that isn't there logs once and the
+        # encoder stays inert (sensors/encoder.py) — never a reason not to arm.
+        for enc in self.encoders.values():
+            enc.start()
         needs_arming = any(a.kind == "esc" for a in self.cfg.actuators.values())
         if needs_arming and self.cfg.arm_seconds > 0:
             time.sleep(self.cfg.arm_seconds)
@@ -111,6 +183,18 @@ class Drivetrain:
     def stop(self) -> None:
         for motor in self.motors.values():
             motor.stop()
+
+    def shutdown(self) -> None:
+        """Release the GPIO the encoders claimed. Motors are stopped by `stop`.
+
+        Separate from `stop` because stop() runs on every e-stop and mode
+        change, and handing the pins back each time would mean re-claiming them
+        (and losing the count) the moment the rover moved again.
+        """
+        for enc in self.encoders.values():
+            enc.stop()
+        if self.encoders:
+            close_backend()
 
 
 class TankDrivetrain(Drivetrain):
@@ -124,6 +208,12 @@ class TankDrivetrain(Drivetrain):
     def __init__(self, config: DriveConfig):
         super().__init__(config)
         self._limiter = _SlewLimiter(config.slew_rate, 2)
+        # Closed-loop wheel speed. Built whatever the mode, because the mode is
+        # live-tunable from the dashboard and an operator switching it on should
+        # not have to restart the rover to get an object that already exists.
+        # Inert until both sides report a speed — see control/rpm_trim.py.
+        self.trim = RpmTrim(config.trim)
+        self._trim_at: float | None = None
 
     # `Robot` and the tests reach for .left/.right to inspect what the servos
     # were actually told. Properties rather than attributes so they follow the
@@ -140,13 +230,43 @@ class TankDrivetrain(Drivetrain):
         """Command normalized track speeds in [-1, 1]."""
         self._limiter.rate = self.cfg.slew_rate  # live-tunable
         left, right = self._limiter.apply((_clamp(left), _clamp(right)))
+        # AFTER the slew limiter, on purpose. The limiter shapes the operator's
+        # intent; the trim corrects what the hardware then actually did with it,
+        # and rate-limiting a correction would just add lag to the loop.
+        left, right = self._apply_trim(left, right)
         for motor in self._named(self.cfg.roles.left):
             motor.set_throttle(left)
         for motor in self._named(self.cfg.roles.right):
             motor.set_throttle(right)
 
+    def _apply_trim(self, left: float, right: float) -> tuple:
+        """Close the speed loop around the two sides, if there is one to close.
+
+        Timed off its own clock rather than the control loop's `dt`: `drive` is
+        also called from the tools and the tests, which have no loop, and a PID
+        stepped with somebody else's idea of elapsed time is a PID that behaves
+        differently in every caller.
+        """
+        now = time.monotonic()
+        dt = 0.0 if self._trim_at is None else now - self._trim_at
+        self._trim_at = now
+        self.sample_encoders(now)
+        return self.trim.apply(left, right,
+                               self.side_rpm(self.cfg.roles.left),
+                               self.side_rpm(self.cfg.roles.right),
+                               dt, now)
+
+    def status(self) -> Optional[dict]:
+        """Measured wheel speed and what the trim did with it, for telemetry."""
+        base = super().status()
+        return None if base is None else {**base, **self.trim.status()}
+
     def stop(self) -> None:
         self._limiter.reset()
+        # Release the loop with the drivetrain. This is also the only thing that
+        # clears a latched stall fault, which is deliberate — see RpmTrim.reset.
+        self.trim.reset()
+        self._trim_at = None
         super().stop()
 
 
@@ -166,6 +286,12 @@ class SteeredDrivetrain(Drivetrain):
         self._warned_no_steer = False
 
     def drive(self, left: float, right: float) -> None:
+        # Measured, not corrected. The speed loop is a tank idea — matching two
+        # tracks to each other is what keeps a skid-steer straight — and a
+        # steered chassis holds its line with the linkage instead. The encoders
+        # still report, because a wheel-speed readout is worth having on any
+        # build.
+        self.sample_encoders()
         left, right = _clamp(left), _clamp(right)
         throttle = (left + right) / 2.0
         steer = (left - right) / 2.0
@@ -204,6 +330,7 @@ class SingleDrivetrain(Drivetrain):
         self._warned = False
 
     def drive(self, left: float, right: float) -> None:
+        self.sample_encoders()  # measured, not corrected — see SteeredDrivetrain
         throttle = (_clamp(left) + _clamp(right)) / 2.0
         if abs(left - right) > 0.05 and not self._warned:
             self._warned = True

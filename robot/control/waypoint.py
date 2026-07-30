@@ -25,21 +25,22 @@ rest, so the rover can point itself at the next waypoint before moving:
 --- Heading: GPS-only, and why the loop has to slow down ---
 Without an absolute heading the only answer to "which way am I facing" is the GPS
 track angle, and it is a much worse sensor for a feedback loop: it refreshes at
-the fix rate (1 Hz by default, against a 50 Hz control loop), it is a course over
+the fix rate (5 Hz by default, against a 50 Hz control loop), it is a course over
 ground rather than an attitude, and it does not exist at all below the GPS's
 min-move speed. Three things change when `absolute_heading_provider()` says the
 heading came from the GPS:
 
   * a SEPARATE, slower PID (`gps_heading_pid`) drives the steering — gains that
-    are right for a fresh 50 Hz attitude are wild oscillation on a 1 Hz course.
+    are right for a fresh 50 Hz attitude are wild oscillation on a course that
+    arrives a tenth as often.
   * NO pivot in place. A pivot freezes the track angle (the antenna isn't going
     anywhere), so the loop would spin blind against an error that never moves.
     Large errors become an arcing turn at `acquire_speed` instead, which keeps
     the course alive while it turns.
   * with no gyro to supply a measured derivative, the PID steps once per FRESH
     heading sample (with the real elapsed dt) and the output is held in between,
-    instead of integrating the same stale error fifty times a second and turning
-    the finite-difference derivative into a once-a-second spike.
+    instead of integrating the same stale error ten times over and turning the
+    finite-difference derivative into a periodic spike.
 
 Fallback for when heading is unknown (no IMU calibration AND no GPS track angle
 yet): drive STRAIGHT forward to build up a course over ground, rather than
@@ -126,9 +127,12 @@ class WaypointController(Controller):
             kp=0.02, ki=0.002, kd=0.008, out_limit=0.6, i_limit=50.0
         )
         # The GPS-course loop: roughly half the authority and heavier damping,
-        # because it is closing around a 1 Hz sensor. No integral at all — a
-        # course over ground has no steady-state bias to trim out, and
-        # integrating an error that only refreshes once a second just winds up.
+        # because it is closing around a sensor an order of magnitude slower than
+        # the control loop. No integral at all — a course over ground has no
+        # steady-state bias to trim out, and integrating an error that refreshes
+        # a tenth as often as it is read just winds up. These numbers were sized
+        # for a 1 Hz fix and are conservative at the current 5 Hz; re-tune on
+        # hardware rather than trusting them.
         self.gps_heading_pid = gps_heading_pid or PID(
             kp=0.008, ki=0.0, kd=0.006, out_limit=0.4, i_limit=50.0
         )
@@ -266,8 +270,8 @@ class WaypointController(Controller):
         d(error)/dt = -yaw_rate, so pass -rate.
 
         With no gyro the loop can only ever be as fresh as the heading itself.
-        Running a 50 Hz loop on a 1 Hz GPS course would integrate the same stale
-        error fifty times and make the finite-difference derivative alternate
+        Running a 50 Hz loop on a 5 Hz GPS course would integrate the same stale
+        error ten times and make the finite-difference derivative alternate
         between exactly zero and a one-tick spike, so instead the PID steps once
         per fresh sample — with the true elapsed time — and the output is held
         flat in between. An IMU heading changes every tick, so this degrades

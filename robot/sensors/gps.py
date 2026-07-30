@@ -7,7 +7,7 @@ fast — instead of us hand-parsing NMEA. We read on a background thread and cac
 the latest valid fix, so the control loop can poll `pose()` without ever blocking
 on the serial port.
 
-    gps = GPS("/dev/ttyAMA0", 9600)
+    gps = GPS("/dev/ttyAMA0", 57600, update_rate_ms=200)
     gps.start()
     ...
     fix = gps.pose()          # -> (lat, lon, heading_deg) or None
@@ -39,6 +39,28 @@ fallback covers the standstill case.
 We ask the module for GGA + RMC + VTG: GGA carries fix quality, satellite count
 and HDOP (what you actually want when a fix looks wrong in the field), RMC and
 VTG carry the track angle and ground speed.
+
+--- Fix rate, and why it drags the baud up with it ---
+Three things have to agree before a faster fix rate is actually faster, and
+getting any one of them wrong looks identical from the outside — "no fix":
+
+  * the receiver has to SOLVE that fast. The MTK3339 in the Ultimate GPS tops out
+    at 5 Hz (`PMTK300`, the fix-control interval). Ask `PMTK220` for 10 Hz output
+    on one and it will talk ten times a second about five positions.
+  * the receiver has to TALK that fast, which is `PMTK220` — the knob
+    `update_rate_ms` turns. Both are sent, because setting only the output rate
+    means repeated fixes and setting only the fix rate means solving positions
+    nobody ever hears.
+  * the SERIAL LINK has to carry it. GGA+RMC+VTG is ~190 bytes per fix, so 5 Hz
+    is ~9500 bps of payload before framing — more than a 9600-baud line can hold.
+    Past that the sentences truncate, every checksum fails, and the rover reports
+    no fix while the antenna sits under an open sky. `_check_link_budget` does
+    this arithmetic at start-up so it's a log line instead of a field mystery.
+
+Which is why the default is 57600 baud, and why `start()` sends `PMTK251` to move
+the module there. That command does NOT persist across a power cycle unless the
+breakout's CR1220 backup battery is fitted, so it is re-sent on every start from
+9600 — the one baud a cold-booted module is guaranteed to be listening at.
 
 Graceful degradation: if pyserial/adafruit_gps aren't installed, or the device
 can't be opened, `start()` logs why and the reader stays inert — `pose()` returns
@@ -72,10 +94,30 @@ _KNOTS_TO_MPS = 0.514444
 # PMTK_314_SET_NMEA_OUTPUT. Field order is GLL,RMC,VTG,GGA,GSA,GSV,... so this is
 # "RMC + VTG + GGA, nothing else": position and fix quality (GGA) plus the track
 # angle and ground speed (RMC/VTG), and none of the GSV satellite-detail spam
-# that would eat the 9600-baud link. See the PMTK command reference:
+# that would eat the serial link's whole budget. See the PMTK command reference:
 # https://cdn-shop.adafruit.com/datasheets/PMTK_A11.pdf
 _PMTK_OUTPUT_GGA_RMC_VTG = b"PMTK314,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
-_PMTK_UPDATE_RATE = b"PMTK220,%d"  # milliseconds between fixes
+_PMTK_UPDATE_RATE = b"PMTK220,%d"  # ms between NMEA outputs
+_PMTK_FIX_RATE = b"PMTK300,%d,0,0,0,0"  # ms between position SOLUTIONS
+_PMTK_SET_BAUD = b"PMTK251,%d"  # module UART baud
+
+# The baud an MTK3339 talks after a power cycle, and therefore the only one worth
+# shouting the PMTK251 baud change at.
+_MODULE_DEFAULT_BAUD = 9600
+# Let the module finish acking PMTK251 and switch its UART before we reopen.
+_BAUD_SWITCH_SETTLE = 0.25
+
+# The MTK3339's position engine solves at most five times a second. This is a
+# warning threshold rather than a clamp because the same driver reads a PA1616D
+# (MT3333), which does manage a genuine 10 Hz.
+_MIN_FIX_INTERVAL_MS = 200
+
+# Link budget for the warning above: GGA+RMC+VTG is ~190 bytes a fix including
+# CRLF, 8N1 framing spends 10 bits a byte, and planning a UART above ~80%
+# occupancy is how sentences end up truncated.
+_BYTES_PER_FIX = 190
+_BITS_PER_BYTE = 10
+_LINK_OCCUPANCY = 0.8
 
 # Serial read timeout. adafruit_gps only calls readline() once a sentence-worth
 # of bytes is buffered, so this is just a backstop against a truncated line
@@ -95,10 +137,10 @@ class GPS:
     def __init__(
         self,
         port: str,
-        baud: int = 9600,
+        baud: int = 57600,
         fix_timeout: float = 5.0,
         min_move_mps: float = 0.5,
-        update_rate_ms: int = 1000,
+        update_rate_ms: int = 200,
     ):
         self.port = port
         self.baud = baud
@@ -134,6 +176,8 @@ class GPS:
                   "(waypoint mode will hold position). Install: "
                   "pip install pyserial adafruit-circuitpython-gps")
             return
+        if self.baud != _MODULE_DEFAULT_BAUD:
+            self._raise_module_baud()
         try:
             self._serial = serial.Serial(self.port, self.baud, timeout=_SERIAL_TIMEOUT)
         except Exception as e:
@@ -149,17 +193,58 @@ class GPS:
         print(f"[GPS] reading NMEA on {self.port} @ {self.baud} baud "
               f"({self.update_rate_ms} ms fixes, track angle from RMC/VTG)")
 
+    def _raise_module_baud(self) -> None:
+        """Move the module's UART to `self.baud` before we open the port there.
+
+        Sent at 9600 because that is where a cold-booted MTK3339 is listening —
+        PMTK251 does not survive a power cycle without the CR1220 backup battery,
+        so this runs on every start rather than once at bring-up. If the module
+        happens to already be at the faster rate (battery fitted, or a warm
+        restart of the service) the command lands as line noise and is dropped on
+        its checksum, which is the right outcome: either way the next thing we do
+        is open at `self.baud` and start parsing.
+        """
+        try:
+            with serial.Serial(self.port, _MODULE_DEFAULT_BAUD,
+                               timeout=_SERIAL_TIMEOUT) as boot:
+                boot.write(_nmea_sentence(_PMTK_SET_BAUD % int(self.baud)))
+                boot.flush()
+                time.sleep(_BAUD_SWITCH_SETTLE)
+        except Exception as e:
+            # Not fatal on its own: a module already running at self.baud reads
+            # fine without this. Say which failure you're looking at, though,
+            # because the symptom (garbage, then "no fix") is the same one a
+            # wrong-baud module gives.
+            print(f"[GPS] could not send PMTK251 baud change on {self.port}: {e} "
+                  f"— continuing at {self.baud}, which only works if the module "
+                  f"is already there")
+
+    def _check_link_budget(self) -> None:
+        """Warn when the requested rate outruns the receiver or the serial line.
+
+        Both failures present as "no fix" — a repeated position looks like a
+        rover that isn't moving, and a truncated sentence fails its checksum and
+        never becomes a position at all — so neither is something to discover in
+        a field with a laptop on your knees.
+        """
+        if self.update_rate_ms < _MIN_FIX_INTERVAL_MS:
+            print(f"[GPS] warning: {self.update_rate_ms} ms is faster than an "
+                  f"MTK3339 solves ({_MIN_FIX_INTERVAL_MS} ms, 5 Hz) — the extra "
+                  f"sentences will repeat positions. A PA1616D does true 10 Hz.")
+        needed = _required_baud(self.update_rate_ms)
+        if self.baud < needed:
+            print(f"[GPS] warning: GGA+RMC+VTG every {self.update_rate_ms} ms needs "
+                  f"~{needed} baud and the port is at {self.baud} — sentences will "
+                  f"truncate, checksums will fail, and it will read as 'no fix'")
+
     def _configure(self) -> None:
         """Ask for GGA+RMC+VTG at `update_rate_ms`. Harmless on a non-MTK module."""
-        # A faster rate needs a wider pipe: GGA+RMC+VTG is ~150-200 bytes per fix
-        # and 9600 baud carries under 1 KB/s. Past ~5 Hz the sentences arrive
-        # truncated and every checksum fails, which looks like "no fix" rather
-        # than like a baud problem — so say it out loud instead.
-        if self.update_rate_ms < 200 and self.baud <= 9600:
-            print(f"[GPS] warning: {self.update_rate_ms} ms fixes will not fit in "
-                  f"{self.baud} baud — raise the module baud (PMTK251) or the rate")
+        self._check_link_budget()
         try:
             self._gps.send_command(_PMTK_OUTPUT_GGA_RMC_VTG)
+            # Solve rate first, then talk rate. PMTK220 alone would emit the same
+            # fix several times; PMTK300 alone would solve positions nobody hears.
+            self._gps.send_command(_PMTK_FIX_RATE % int(self.update_rate_ms))
             self._gps.send_command(_PMTK_UPDATE_RATE % int(self.update_rate_ms))
         except Exception as e:  # a write failure shouldn't stop us from reading
             print(f"[GPS] could not send PMTK setup commands: {e}")
@@ -304,6 +389,25 @@ class GPS:
                 self._serial.close()
             except Exception:
                 pass
+
+
+def _nmea_sentence(body: bytes) -> bytes:
+    """Wrap a PMTK body in its NMEA frame: `$BODY*CS\\r\\n`.
+
+    `adafruit_gps.send_command` does this once there's a GPS object to call it
+    on, but the baud handshake happens before there is one — it runs on a
+    throwaway 9600-baud port, so it has to build the sentence itself.
+    """
+    checksum = 0
+    for byte in body:
+        checksum ^= byte
+    return b"$" + body + b"*%02X\r\n" % checksum
+
+
+def _required_baud(update_rate_ms: int) -> int:
+    """Baud needed to carry GGA+RMC+VTG at this fix interval, with headroom."""
+    fixes_per_s = 1000.0 / max(1, int(update_rate_ms))
+    return int(_BYTES_PER_FIX * _BITS_PER_BYTE * fixes_per_s / _LINK_OCCUPANCY)
 
 
 def _speed_mps(g) -> float:

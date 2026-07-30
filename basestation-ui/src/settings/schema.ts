@@ -81,19 +81,29 @@ function t(path: string, label: string, extra: Partial<Field> = {}): Field {
  * `gainStep` exists because the loops disagree on units: object align sees a
  * normalized [-1, 1] error, the heading loops see DEGREES, so their useful
  * gains are two orders of magnitude smaller and a 0.01 step can't even reach
- * them.
+ * them, and the wheel-speed loop sees RPM. `gainMax` follows for the same
+ * reason: it must match the cap Python enforces, or the slider offers a value
+ * that comes straight back clamped.
+ *
+ * `dHelp` overrides the derivative note, which is not the same sentence for
+ * every loop — the heading and alignment loops are handed a measured rate, and
+ * the wheel-speed loop differences its own error.
  */
-function pid(prefix: string, iLimitMax = 5, gainStep = 0.01): Field[] {
+function pid(
+  prefix: string,
+  iLimitMax = 5,
+  gainStep = 0.01,
+  gainMax = 5,
+  dHelp = "Derivative: damping. Fed from the IMU yaw-rate, not a noisy difference.",
+): Field[] {
   return [
-    f(`${prefix}.kp`, "Kp", 0, 5, gainStep, {
+    f(`${prefix}.kp`, "Kp", 0, gainMax, gainStep, {
       help: "Proportional: how hard it corrects for the error it sees right now.",
     }),
-    f(`${prefix}.ki`, "Ki", 0, 5, gainStep / 2, {
+    f(`${prefix}.ki`, "Ki", 0, gainMax, gainStep / 2, {
       help: "Integral: removes steady-state bias, but winds up if you overdo it.",
     }),
-    f(`${prefix}.kd`, "Kd", 0, 5, gainStep / 2, {
-      help: "Derivative: damping. Fed from the IMU yaw-rate, not a noisy difference.",
-    }),
+    f(`${prefix}.kd`, "Kd", 0, gainMax, gainStep / 2, { help: dHelp }),
     f(`${prefix}.out_limit`, "Output limit", 0, 1, 0.01, {
       help: "Clamp on the steering output this loop may command.",
     }),
@@ -139,8 +149,39 @@ function motorGroup(p: string, title: string): Group {
         live: false,
         help: "Fusion HAT channel. Unique across the robot — the layout refuses two actuators on one.",
       }),
+      ...encoderFields(p),
     ],
   };
+}
+
+/** One actuator's quadrature encoder, at any dotted prefix.
+ *
+ * The pins are a different bus from the PWM channel above and the labels say
+ * so: mixing up "GPIO 17" and "channel 17" is the first mistake anyone makes
+ * here, and it presents as an encoder that counts nothing. */
+function encoderFields(p: string): Field[] {
+  return [
+    i(`${p}.encoder_a`, "Encoder A pin", -1, 27, {
+      live: false,
+      help: "BCM GPIO on the Pi header — NOT the Fusion HAT channel above. -1 for no encoder.",
+    }),
+    i(`${p}.encoder_b`, "Encoder B pin", -1, 27, {
+      live: false,
+      help: "The second quadrature channel. Set both pins or neither; the robot refuses a layout with only one.",
+    }),
+    f(`${p}.encoder_cpr`, "Counts per rev", 0, 100000, 1, {
+      help:
+        "Counts seen per revolution of the WHEEL, gearbox included. Measure it, " +
+        "don't derive it: tools/encoder_monitor.py, zero, turn the wheel one " +
+        "full turn, read the number.",
+    }),
+    b(`${p}.encoder_invert`, "Encoder inverted", {
+      help:
+        "Flip so forward throttle reads as a positive RPM. Separate from " +
+        "Inverted above — that mirrors the motor, this mirrors the sensor, and " +
+        "a mirrored track motor usually needs both.",
+    }),
+  ];
 }
 
 // --- robot config (mirrors robot/tuning.py) --------------------------------
@@ -197,6 +238,71 @@ export const ROBOT_GROUPS: Group[] = [
         live: false,
         help: "Hold neutral this long at boot so the ESCs arm.",
       }),
+    ],
+  },
+  {
+    title: "Wheel speed matching",
+    blurb:
+      "A throttle is a wish, not a speed. Two motors given the same pulse turn " +
+      "at different rates — different ESCs, different gearboxes, weight off " +
+      "centre, one track on grass — so the rover curves while every number here " +
+      "says it is going straight. With encoders wired (the pins are on each " +
+      "motor below), this is the loop that closes that gap. It is off until you " +
+      "turn it on, and it needs no restart either way.",
+    fields: [
+      e("drive.trim.mode", "Mode", ["off", "match", "velocity"], {
+        help:
+          "off = measure only, RPM still shows in telemetry. match = hold the " +
+          "two sides to each other; needs no calibration and only acts while " +
+          "you are driving straight. velocity = hold each side to throttle × " +
+          "max RPM; works in turns too, but is only as good as that number.",
+      }),
+      f("drive.trim.max_rpm", "Max wheel RPM", 1, 20000, 1, {
+        unit: "rpm",
+        help:
+          "velocity mode only. MEASURE IT: drive flat out on the surface it " +
+          "will run on and read the RPM above. Too high and every setpoint is " +
+          "unreachable; too low and it throttles back against a wall that isn't there.",
+      }),
+      f("drive.trim.straight_tolerance", "Straight tolerance", 0, 1, 0.01, {
+        help:
+          "match mode only. Above this much difference between the two " +
+          "commanded sides you are asking for a turn, so the loop stops " +
+          "correcting and holds its integral rather than fighting the steering.",
+      }),
+      f("drive.trim.min_throttle", "Engage above", 0, 1, 0.01, {
+        help:
+          "Below this commanded throttle nothing is trimmed and the integrators " +
+          "are released. A stopped robot has no speed to match.",
+      }),
+      f("drive.trim.stall_seconds", "Stall timeout", 0, 10, 0.1, {
+        unit: "s",
+        help:
+          "Fail-safe. Commanded this long with the encoder still reading a " +
+          "standstill means an unplugged encoder or a stalled wheel, so the loop " +
+          "opens and stays open until the drivetrain stops. 0 disables the check — " +
+          "bench only, since a speed loop chasing a dead sensor goes to full throttle.",
+      }),
+      f("drive.trim.rpm_window", "Measurement window", 0.01, 1, 0.01, {
+        unit: "s",
+        help:
+          "Speed is counts over an interval, so a longer one is finer resolution " +
+          "and more lag. Raise it for a coarse encoder disc that reads as noise.",
+      }),
+      f("drive.trim.rpm_tau", "Extra smoothing", 0, 1, 0.01, {
+        unit: "s",
+        help:
+          "Low-pass on top of the window. Keep it small: filtering inside a " +
+          "control loop is dead time, which is what makes a loop oscillate. 0 = none.",
+      }),
+      // Small on purpose — the error is in RPM, not in throttle units, exactly
+      // as the heading loops work in degrees. Same reason their steps are tiny:
+      // kp = 0.002 answers 100 rpm of mismatch with 0.2 of throttle. The output
+      // limit is the whole authority this loop has over the drivetrain, and it
+      // should stay modest — a trim is a correction, not a second throttle.
+      ...pid("drive.trim.pid", 2000, 0.0005, 1,
+        "Derivative: damping. Differenced from the RPM error, so a noisy " +
+          "encoder makes this term loud — leave it at 0 unless the loop hunts."),
     ],
   },
   motorGroup("drive.left", "Left motor"),
@@ -266,7 +372,14 @@ export const ROBOT_GROUPS: Group[] = [
         help: "Inference costs a core; cap it.",
       }),
       f("vision.standoff_size", "Standoff size", 0.05, 1, 0.01, {
-        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry.",
+        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry. A routine state that names a stop distance overrides this while it runs.",
+      }),
+      f("vision.range_at_m", "Range: measured at", 0, 50, 0.1, {
+        unit: "m",
+        help: "Distance calibration, part one. Park the rover a tape-measured distance from the target and put that distance here. 0 disables distance estimates — routines that name a stop distance then fall back to Standoff size.",
+      }),
+      f("vision.range_size", "Range: box size there", 0, 1, 0.01, {
+        help: "Part two: the box height telemetry showed at that distance. These two numbers are the whole range model (distance × size is constant), so both are guesses until you measure them — the shipped pair is a placeholder that assumes 0.45 at 1 m.",
       }),
       f("vision.hfov_deg", "Horizontal FOV", 10, 180, 1, {
         unit: "°",
@@ -500,6 +613,26 @@ export const BUTTON_FIELDS: { path: string; label: string; help?: string }[] = [
   { path: "controller.btn_fire", label: "Fire" },
 ];
 
+/** How many buttons may be bound to a routine. Mirrors
+ *  basestation/settings.py::ROUTINE_SLOTS, which is the authority. */
+export const ROUTINE_SLOTS = 4;
+
+/** The (button, routine id) pairs, one per slot.
+ *
+ * Every binding above is a fixed field with a label written here, because the
+ * action it fires is part of the build. Routines are not: the operator writes
+ * them, names them, and keeps them on the ROBOT. So a slot has no label of its
+ * own — it is named by whichever routine gets picked into it — and the id is
+ * carried as text rather than an enum, because the list of valid ids belongs
+ * to a rover that may not be connected while somebody is editing bindings.
+ */
+export const ROUTINE_BIND_SLOTS = Array.from({ length: ROUTINE_SLOTS }, (_, n) => ({
+  slot: n + 1,
+  button: `controller.btn_routine_${n + 1}`,
+  routine: `controller.routine_${n + 1}`,
+  label: `Routine slot ${n + 1}`,
+}));
+
 export const FEEL_FIELDS: Field[] = [
   f("controller.deadzone", "Dead zone", 0, 0.5, 0.005, {
     help: "Stick and trigger movement smaller than this reads as zero.",
@@ -527,6 +660,10 @@ const ALL_FIELDS: Field[] = [
   ...BUTTON_FIELDS.map((btn) =>
     i(btn.path, btn.label, UNBOUND, 31, { help: btn.help })
   ),
+  ...ROUTINE_BIND_SLOTS.flatMap((s) => [
+    i(s.button, s.label, UNBOUND, 31),
+    t(s.routine, `${s.label} — routine id`),
+  ]),
 ];
 
 export const FIELD_BY_PATH: Record<string, Field> = Object.fromEntries(
