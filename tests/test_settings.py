@@ -10,6 +10,8 @@ import pytest
 
 from basestation.controller_input import Trigger
 from basestation.settings import (
+    BY_PATH,
+    ROUTINE_SLOTS,
     UNBOUND,
     ControllerMapping,
     SettingsStore,
@@ -130,6 +132,64 @@ def test_two_actions_may_share_a_button():
     """Odd, but not something to refuse — a small pad may have to double up."""
     mapping = ControllerMapping(btn_estop=1, btn_clear=1)
     assert len(mapping.actions()) == 4
+
+
+# --- routines on buttons ----------------------------------------------------
+
+def test_a_bound_routine_slot_names_the_routine_it_runs():
+    mapping = ControllerMapping(btn_routine_1=7, routine_1="collect")
+    assert (7, "routine:collect") in mapping.actions()
+
+
+def test_half_a_routine_binding_binds_nothing():
+    """A button with no routine, or a routine with no button, does nothing.
+
+    Half-filled is the state the settings page is in for as long as it takes to
+    fill the other half, and either guess — running an arbitrary routine, or
+    putting a routine on an arbitrary button — moves a machine nobody aimed.
+    """
+    bare = ControllerMapping().actions()
+    assert ControllerMapping(btn_routine_1=7).actions() == bare
+    assert ControllerMapping(routine_1="collect").actions() == bare
+
+
+def test_a_blank_routine_id_does_not_bind():
+    """Whitespace is what a cleared text field can leave behind."""
+    assert ControllerMapping(btn_routine_2=3, routine_2="   ").actions() == \
+        ControllerMapping().actions()
+
+
+def test_a_routine_id_is_trimmed_before_it_travels():
+    mapping = ControllerMapping(btn_routine_2=3, routine_2="  spin  ")
+    assert (3, "routine:spin") in mapping.actions()
+
+
+def test_every_slot_is_bindable_and_settable():
+    """Both halves of every slot must be in the whitelist. One missing is a row
+    the settings page renders, accepts an edit into, and silently never saves."""
+    for n in range(1, ROUTINE_SLOTS + 1):
+        assert f"controller.btn_routine_{n}" in BY_PATH
+        assert f"controller.routine_{n}" in BY_PATH
+
+
+def test_a_routine_binding_survives_being_saved_and_reloaded(tmp_path):
+    """It is a base-station setting like any other, and an operator who binds a
+    routine in the field expects it there after the service restarts."""
+    path = str(tmp_path / "basestation.json")
+    first = SettingsStore(path=path)
+    first.apply({"controller.btn_routine_1": 9, "controller.routine_1": "collect"})
+    reloaded = SettingsStore(path=path)
+    assert (9, "routine:collect") in reloaded.mapping().actions()
+
+
+def test_all_four_slots_can_be_bound_at_once():
+    mapping = ControllerMapping(
+        btn_routine_1=4, routine_1="a", btn_routine_2=5, routine_2="b",
+        btn_routine_3=6, routine_3="c", btn_routine_4=7, routine_4="d")
+    bound = [(idx, name) for idx, name in mapping.actions()
+             if name.startswith("routine:")]
+    assert bound == [(4, "routine:a"), (5, "routine:b"),
+                     (6, "routine:c"), (7, "routine:d")]
 
 
 # --- trigger rest, per mapping ---------------------------------------------

@@ -305,6 +305,24 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # A bindable button reaches the same pass-through the on-screen
             # controls use; the robot still owns every firing rule.
             dispatch(rid, {"type": name})
+        elif name.startswith("routine:"):
+            # The same two messages the driving view's routine buttons send
+            # (state/routines.ts::startRoutine), in the same order: choose,
+            # then switch. Selecting first is what makes a rover that is not
+            # yet in routine mode start the RIGHT one — the mode change is what
+            # actually starts it, off whatever is selected by then.
+            #
+            # A rover already running a routine gets only the select, since the
+            # mode change is a no-op there; RoutineController treats that as a
+            # switch and restarts, which is what pressing a second routine's
+            # button should do.
+            #
+            # The id is not checked here. The base station does not know which
+            # routines a rover carries — it may not even be connected — and a
+            # binding that stopped working because a rover was off would be
+            # worse than one the robot rejects out loud.
+            dispatch(rid, {"type": "select_routine", "id": name[len("routine:"):]})
+            dispatch(rid, {"type": "mode", "mode": "routine"})
 
     if controller is not None:
         controller.on_drive = on_drive
