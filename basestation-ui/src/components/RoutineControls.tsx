@@ -83,13 +83,18 @@ export function RoutineControls() {
         </div>
       )}
 
+      {/* One button, two truthful names. `stopRoutine` halts the machine AND
+          puts the rover back in teleop, so it is still the control you want
+          once a routine has finished — but calling it "Stop" then would be
+          offering to stop something that already stopped, and the operator
+          would be left wondering what is still running. */}
       {running && (
         <button
           type="button"
           class="btn ghost danger routine-stop"
           onClick={() => rid && stopRoutine(rid)}
         >
-          Stop routine
+          {running.done ? "Back to teleop" : "Stop routine"}
         </button>
       )}
 

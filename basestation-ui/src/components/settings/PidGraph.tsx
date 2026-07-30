@@ -122,11 +122,10 @@ function extent(
   ];
 }
 
+/** Two decimals below ten, one above — enough to see a gain move without the
+ *  legend changing width as the value crosses a power of ten. */
 function format(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 100) return value.toFixed(1);
-  if (abs >= 10) return value.toFixed(1);
-  return value.toFixed(2);
+  return Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2);
 }
 
 /** An axis label with enough precision to be a DIFFERENT number from its
@@ -184,6 +183,10 @@ function Plot(
       role="img"
       aria-label={`${series.map((s) => s.label).join(", ")} over the last ${n} samples, in ${unit}`}
       onPointerMove={(e) => {
+        // A single sample has no span to interpolate across; dividing by n-1
+        // there yields NaN, which silently reads as "no cursor" rather than as
+        // the first sample the pointer is actually over.
+        if (n <= 1) return onCursor(n - 1);
         const box = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
         const at = ((e.clientX - box.left) / box.width) * W;
         const index = Math.round(((at - PAD_L) / (W - PAD_L - PAD_R)) * (n - 1));
