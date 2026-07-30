@@ -29,6 +29,37 @@ const TABS = [
   { key: "base", label: "Base station" },
 ] as const;
 
+/**
+ * What actually happens when you change something, per tab.
+ *
+ * This used to be one sentence printed under all six — "Changes apply
+ * immediately and are saved" — which is true of the three that commit per
+ * field and false of the three that do not. Hardware and Routines edit a whole
+ * document locally and send it on Save, so telling an operator their unsaved
+ * routine was already stored is the one sentence here that can cost a match.
+ * Network sends a request over the radio that can fail, and deliberately saves
+ * nothing; it explains itself on the page and gets no footnote at all.
+ */
+function Footnote({ active }: { active: string }) {
+  if (active === "network") return null;
+  if (active === "hardware" || active === "routines") {
+    return (
+      <p class="hint pad footnote">
+        Edits here stay on this base station until you press{" "}
+        <strong>Save to robot</strong> — the rover keeps running what it already
+        has until then. Discard throws the draft away.
+      </p>
+    );
+  }
+  return (
+    <p class="hint pad footnote">
+      Changes apply immediately and are saved — on the robot for robot settings,
+      on this base station for the rest. Fields badged “restart” are stored but
+      only take effect when the service is restarted.
+    </p>
+  );
+}
+
 export function SettingsPage() {
   const active = tab.value;
   return (
@@ -68,12 +99,7 @@ export function SettingsPage() {
           {active === "network" && <NetworkPage />}
           {active === "controller" && <ControllerSettings />}
           {active === "base" && <BaseSettings />}
-          <p class="hint pad footnote">
-            Changes apply immediately and are saved — on the robot for robot
-            settings, on this base station for the rest. Fields badged
-            “restart” are stored but only take effect when the service is
-            restarted.
-          </p>
+          <Footnote active={active} />
         </div>
       </div>
     </div>

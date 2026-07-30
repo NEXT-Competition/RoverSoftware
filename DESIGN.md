@@ -27,6 +27,7 @@ colors:
   danger: "#ff4256"
   on-danger: "#1a0206"
   on-ok: "#04211c"
+  cap: "#cdd7e4"
   map-label-bg: "rgba(6, 10, 11, 0.72)"
   map-label-ink: "#f2f7f7"
 typography:
@@ -237,6 +238,13 @@ fourth slot means re-validating, not picking a fourth nice colour. Everything a
 chart can say structurally it says structurally: a reference line is dashed and
 muted, a total is ink, and a difference between two lines is the shaded gap
 between them — hue is spent only on identity that has nowhere else to live.
+
+### The cap
+`{colors.cap}` is the moulded knob on a toggle — the one part of a switch that
+is an object rather than a surface, lit from above like the drive nub and the
+place pin. It is a token rather than a literal because the two renditions want
+opposite things from it: on the graphite well it has to be the light thing, and
+its daylight twin is a white cap that reads by its shadow instead.
 
 ### Ink on fills
 `{colors.on-accent}`, `{colors.on-danger}` and `{colors.on-ok}` exist because the
