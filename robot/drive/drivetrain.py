@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Iterable, List
 
-from ..config import DriveConfig
+from ..config import DriveConfig, MotorConfig
 from .motor import ESCMotor
 
 
@@ -84,9 +84,15 @@ class Drivetrain:
         # One ESCMotor per declared actuator, built once. `kind` decides how it
         # is armed, not how it is driven — the throttle-to-angle mapping is the
         # same for an ESC and a positional servo (see drive/motor.py).
-        self.motors: Dict[str, ESCMotor] = {
+        motors: Dict[str, ESCMotor] = {
             name: ESCMotor(actuator) for name, actuator in config.actuators.items()
         }
+        for name in dict.fromkeys(config.roles.left + config.roles.right + config.roles.throttle):
+            if name not in motors:
+                motors[name] = ESCMotor(
+                    MotorConfig(channel=len(motors), name=name, label=name)
+                )
+        self.motors: Dict[str, ESCMotor] = motors
 
     def _named(self, names: Iterable[str]) -> List[ESCMotor]:
         return [self.motors[n] for n in names if n in self.motors]
