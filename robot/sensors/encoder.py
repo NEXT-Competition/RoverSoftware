@@ -8,9 +8,10 @@ the other is on dirt. The rover drives a gentle arc while every number in the
 system says it is going straight.
 
 An encoder closes that gap by measuring the thing nobody else can see. Two
-channels a quarter-cycle apart (hence "quadrature") on plain Pi GPIO pins: count
-the edges and you have position, differentiate it and you have speed, and the
-phase relationship between the channels says which way the shaft is turning.
+channels a quarter-cycle apart (hence "quadrature") on a pair of the Fusion
+HAT's digital pins: count the edges and you have position, differentiate it and
+you have speed, and the phase relationship between the channels says which way
+the shaft is turning.
 
     enc = Encoder(pin_a=17, pin_b=27, counts_per_rev=1200, name="left")
     enc.start()
@@ -26,18 +27,38 @@ speed loop in control/rpm_trim.py can hold the two tracks together, which is a
 job where a *relative* measurement over a fraction of a second is exactly right
 and the accumulated drift never matters.
 
---- GPIO backends ---
-Two, tried in order, because the right answer changed with the Pi 5:
+--- which GPIO library, and why ---
+`fusion_hat.pin.Pin` — the same library that drives the motors, already on every
+robot, no extra package and no daemon.
 
-    pigpio  the classic. Needs the `pigpiod` daemon running (`sudo systemctl
-            enable --now pigpiod`), does its edge timestamping in the daemon, and
-            does NOT support the Pi 5 at all.
-    lgpio   the Bookworm/Pi-5 replacement. No daemon; talks to /dev/gpiochipN.
+The pins are the HAT's DIGITAL pins, which are Pi GPIO lines broken out on the
+HAT header and numbered as BCM, so the number silkscreened on the board is the
+number that goes in `encoder_a`. They are not the HAT's PWM channels, which is
+what a MotorConfig's `channel` means — different bus, different numbering, and
+an encoder pointed at one counts nothing at all.
 
-Both are optional imports. With neither installed — a dev laptop — every encoder
-is inert: `ok()` is False, `rpm()` returns None, and control/rpm_trim.py sees
-that and leaves the throttles exactly as it found them. Nothing here can stop a
-robot from driving.
+We use `Pin` for what it is good at (BCM mode, direction, pull-up, cleanup) and
+go around it for two things a wheel encoder cannot live with:
+
+    debounce   `Pin.irq()` and the `when_activated` properties hard-code a
+               bouncetime — 20 ms by default. RPi.GPIO's bouncetime *discards*
+               every edge inside the window, and a wheel encoder emits hundreds
+               of edges a second, so it would throw away nearly all of them. Our
+               callbacks are registered with no debounce at all; a quadrature
+               decoder rejects noise by the shape of the transition instead.
+    decoding   fusion_hat ships a `Rotary_Encoder` module, but it watches only
+               channel A and reads B when the handler runs (an "X1" decoder).
+               That is the scheme in every tutorial and it counts backwards at
+               speed, because B has already moved on by then. See `_on_edge`.
+
+The import is optional. Without it — a dev laptop, or a robot where
+`just bootstrap` has not run — every encoder is inert: `ok()` is False, `rpm()`
+returns None, and control/rpm_trim.py sees that and leaves the throttles exactly
+as it found them. Nothing here can stop a robot from driving. This is the same
+fallback the motor layer takes in drive/motor.py, for the same reason.
+
+On a Pi 5, `fusion_hat` needs `rpi.lgpio` rather than `RPi.GPIO`; that is a
+detail of installing the HAT library, and nothing here changes with the board.
 
 --- counts_per_rev, and why you should measure it rather than compute it ---
 This decodes all four edges of each quadrature cycle (an "X4" decoder), so one
@@ -58,15 +79,14 @@ import threading
 import time
 from typing import Optional
 
-try:  # pragma: no cover - Pi-only, and only on Pi 4 and older
-    import pigpio
+try:  # pragma: no cover - Pi-only; the HAT library isn't installable elsewhere
+    # The module, not the class: we want `pin.GPIO` too, and taking it from here
+    # guarantees it is the very object fusion_hat itself is driving (on a Pi 5
+    # that is the rpi.lgpio shim, not RPi.GPIO) rather than a second import that
+    # might resolve differently.
+    from fusion_hat import pin as fusion_pin
 except Exception:
-    pigpio = None
-
-try:  # pragma: no cover - Pi-only; the Pi 5 / Bookworm path
-    import lgpio
-except Exception:
-    lgpio = None
+    fusion_pin = None
 
 
 # Quadrature state transitions, indexed by (previous << 2) | current, where a
@@ -102,11 +122,15 @@ _SECONDS_PER_MINUTE = 60.0
 
 
 class _Backend:
-    """Whichever GPIO library we found, behind three methods.
+    """The GPIO library, behind three methods.
 
-    One instance for the whole robot, shared by every encoder: pigpio holds a
-    socket to its daemon and lgpio holds a chip handle, and opening one per
-    encoder would be two of each on a stock build for no reason.
+    One instance for the whole robot, shared by every encoder, because pin setup
+    is global state — RPi.GPIO has one mode (BCM vs BOARD) and one warning
+    setting for the process, and each `Pin` we open has to be closed again.
+
+    A seam rather than an inheritance hierarchy: there is one real implementation
+    below, and the tests substitute a fake one so the decoder can be exercised
+    with hand-written edge sequences on a machine that has no GPIO at all.
     """
 
     name = "none"
@@ -121,91 +145,52 @@ class _Backend:
         pass
 
 
-class _PigpioBackend(_Backend):
-    name = "pigpio"
+class _FusionHatBackend(_Backend):
+    """Fusion HAT digital pins, via `fusion_hat.pin`."""
+
+    name = "fusion_hat"
 
     def __init__(self):
-        self._pi = pigpio.pi()
-        if not self._pi.connected:
-            # pigpio's own failure mode is to print a wall of text about the
-            # daemon and hand back a disconnected object, so say the useful
-            # sentence ourselves.
-            raise RuntimeError(
-                "pigpio daemon is not running — sudo systemctl enable --now pigpiod")
-        self._callbacks = []
+        if fusion_pin is None:  # pragma: no cover - guarded by backend()
+            raise RuntimeError("fusion_hat is not installed")
+        # The GPIO module fusion_hat is bound to. Held directly because the edge
+        # callback below reads two pins per edge at up to a few hundred edges a
+        # second, and `Pin.value()` is four Python frames and an enum comparison
+        # deep before it reaches the same `GPIO.input`.
+        self._gpio = fusion_pin.GPIO
+        self._pins = {}
 
     def claim(self, pin: int, on_edge) -> bool:
-        self._pi.set_mode(pin, pigpio.INPUT)
-        # Pull-ups, because an open-collector encoder output floats otherwise and
-        # a floating input counts electrical noise as motion.
-        self._pi.set_pull_up_down(pin, pigpio.PUD_UP)
-        self._callbacks.append(
-            self._pi.callback(pin, pigpio.EITHER_EDGE, lambda *_: on_edge()))
+        # Pin's constructor sets BCM numbering and, because we pass an explicit
+        # mode, runs GPIO.setup with the pull we ask for. Pull-ups because an
+        # open-collector encoder output floats otherwise, and a floating input
+        # counts electrical noise as motion.
+        self._pins[pin] = fusion_pin.Pin(
+            pin, mode=fusion_pin.Pin.IN, pull=fusion_pin.Pin.PULL_UP)
+        # Deliberately NOT Pin.irq() / when_activated: both pass a bouncetime,
+        # which tells RPi.GPIO to drop every edge within 20 ms of the last one.
+        # A wheel encoder's entire output is edges closer together than that.
+        self._gpio.add_event_detect(pin, self._gpio.BOTH,
+                                    callback=lambda *_: on_edge())
         return True
 
     def read(self, pin: int) -> int:
-        return int(self._pi.read(pin))
+        return int(self._gpio.input(pin))
 
     def close(self) -> None:
-        for cb in self._callbacks:
+        # Teardown runs on the way out of a robot that may already be unhappy,
+        # so each step is independent: a pin we cannot hand back is not worth
+        # taking the rest of the shutdown down with it.
+        for pin, handle in self._pins.items():
             try:
-                cb.cancel()
+                self._gpio.remove_event_detect(pin)
             except Exception:
                 pass
-        self._callbacks.clear()
-        try:
-            self._pi.stop()
-        except Exception:
-            pass
-
-
-class _LgpioBackend(_Backend):
-    name = "lgpio"
-
-    def __init__(self):
-        # gpiochip4 is the Pi 5's header bank; 0 is everything older. Try the
-        # newer one first and fall back, rather than sniffing the model.
-        self._handle = None
-        for chip in (4, 0):
             try:
-                self._handle = lgpio.gpiochip_open(chip)
-                break
-            except Exception:
-                continue
-        if self._handle is None:
-            raise RuntimeError("could not open a GPIO chip (/dev/gpiochip4 or 0)")
-        self._claimed = []
-        self._notifiers = []
-
-    def claim(self, pin: int, on_edge) -> bool:
-        lgpio.gpio_claim_alert(self._handle, pin, lgpio.BOTH_EDGES,
-                               lFlags=lgpio.SET_BIAS_PULL_UP)
-        self._claimed.append(pin)
-        cb = lgpio.callback(self._handle, pin, lgpio.BOTH_EDGES,
-                            lambda *_: on_edge())
-        self._notifiers.append(cb)
-        return True
-
-    def read(self, pin: int) -> int:
-        return int(lgpio.gpio_read(self._handle, pin))
-
-    def close(self) -> None:
-        for cb in self._notifiers:
-            try:
-                cb.cancel()
+                handle.close()   # GPIO.cleanup for this pin only
             except Exception:
                 pass
-        self._notifiers.clear()
-        for pin in self._claimed:
-            try:
-                lgpio.gpio_free(self._handle, pin)
-            except Exception:
-                pass
-        self._claimed.clear()
-        try:
-            lgpio.gpiochip_close(self._handle)
-        except Exception:
-            pass
+        self._pins.clear()
 
 
 _backend: Optional[_Backend] = None
@@ -216,34 +201,25 @@ _backend_lock = threading.Lock()
 def backend() -> Optional[_Backend]:
     """The shared GPIO backend, opened on first use. None if there isn't one.
 
-    Never raises: no GPIO library, no daemon, or no permission on /dev/gpiochip
-    all end the same way — encoders stay inert and the robot drives open-loop,
-    which is exactly how it drove before any of this existed.
+    Never raises: no HAT library, or no permission on the GPIO character device,
+    end the same way — encoders stay inert and the robot drives open-loop, which
+    is exactly how it drove before any of this existed. Tried once; a second
+    failure is not worth a second wall of text in the journal.
     """
     global _backend, _backend_error
     with _backend_lock:
         if _backend is not None or _backend_error:
             return _backend
-        attempts = []
-        if pigpio is not None:
-            attempts.append(_PigpioBackend)
-        if lgpio is not None:
-            attempts.append(_LgpioBackend)
-        if not attempts:
-            _backend_error = ("neither pigpio nor lgpio is installed — "
-                              "pip install pigpio (Pi 4 and older) or lgpio (Pi 5)")
-            print(f"[Encoder] {_backend_error}; wheel speed is not measured")
-            return None
-        errors = []
-        for cls in attempts:
+        if fusion_pin is None:
+            _backend_error = ("fusion_hat is not installed — `just bootstrap` "
+                              "installs it (the motors are mocked too)")
+        else:
             try:
-                _backend = cls()
+                _backend = _FusionHatBackend()
                 return _backend
             except Exception as e:
-                errors.append(f"{cls.name}: {e}")
-        _backend_error = "; ".join(errors)
-        print(f"[Encoder] no usable GPIO backend ({_backend_error}); "
-              "wheel speed is not measured")
+                _backend_error = str(e)
+        print(f"[Encoder] {_backend_error}; wheel speed is not measured")
         return None
 
 
@@ -303,9 +279,16 @@ class Encoder:
         if b is None:
             return False
         try:
-            self._state = (b.read(self.pin_a) << 1) | b.read(self.pin_b)
+            # Claim BEFORE reading. RPi.GPIO refuses input() on a channel it has
+            # not been told the direction of, so a read here would not return a
+            # stale level — it would raise, and every encoder would arrive at
+            # the "could not claim" branch below on hardware that is wired
+            # perfectly. Seeding the decoder's state second costs at most one
+            # count, if an edge lands in the gap on a wheel that is stationary
+            # anyway; getting the order wrong costs the whole feature.
             b.claim(self.pin_a, self._on_edge)
             b.claim(self.pin_b, self._on_edge)
+            self._state = (b.read(self.pin_a) << 1) | b.read(self.pin_b)
         except Exception as e:
             print(f"[Encoder] {self.name}: could not claim GPIO "
                   f"{self.pin_a}/{self.pin_b}: {e}")

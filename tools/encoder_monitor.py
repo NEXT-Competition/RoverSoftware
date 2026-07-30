@@ -23,8 +23,8 @@ any layout has been saved — and it does NOT touch the motors, so it is safe to
 run with the drivetrain powered down and the wheels turned by hand. Which is how
 you should do it: a wheel spun by a motor is harder to stop at exactly one turn.
 
-Off-hardware (no pigpio, no lgpio, no pigpiod running) it says which one is
-missing and exits, so this is safe to run on a laptop.
+Off-hardware (no `fusion_hat`) it says so and exits, so this is safe to run on a
+laptop.
 """
 
 import argparse
@@ -68,10 +68,10 @@ def main():
     args = p.parse_args()
 
     if backend() is None:
-        # backend() has already printed which libraries it looked for.
-        print("\nOn a Pi 4 or older:  pip install pigpio && "
-              "sudo systemctl enable --now pigpiod")
-        print("On a Pi 5:           pip install lgpio")
+        # backend() has already printed what it could not open.
+        print("\nThe encoder pins are read through the Fusion HAT library, the "
+              "same one that drives the motors:")
+        print("    just bootstrap        (or SunFounder's install.sh)")
         return 1
 
     a, b = args.pins

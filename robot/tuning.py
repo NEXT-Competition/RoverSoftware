@@ -118,13 +118,14 @@ def _actuator_params(prefix: str, group: str = "", label: str = "") -> Tuple[Par
         _f(f"{prefix}.max_reverse", 0, 1, **meta("reverse cap", step=0.01)),
         _i(f"{prefix}.channel", 0, 15, live=False, **meta("PWM channel")),
         # --- quadrature encoder (sensors/encoder.py) ---
-        # Pins are BCM GPIO numbers on the Pi header, NOT Fusion HAT channels,
-        # and -1 means "no encoder". live=False for the same reason `channel`
-        # is: the pins are claimed once, by a constructor, at arm time.
+        # Pins are the Fusion HAT's DIGITAL pins, numbered as BCM GPIO — NOT
+        # its PWM channels, which is what `channel` above means. -1 is "no
+        # encoder". live=False for the same reason `channel` is: the pins are
+        # claimed once, by a constructor, at arm time.
         _i(f"{prefix}.encoder_a", -1, 27, live=False,
-           **meta("encoder A pin", help="BCM GPIO; -1 = no encoder")),
+           **meta("encoder A pin", help="HAT digital pin (BCM); -1 = none")),
         _i(f"{prefix}.encoder_b", -1, 27, live=False,
-           **meta("encoder B pin", help="BCM GPIO; -1 = no encoder")),
+           **meta("encoder B pin", help="HAT digital pin (BCM); -1 = none")),
         # Counts per WHEEL revolution as an X4 decoder counts them. Live,
         # because it is a calibration you get right by turning the wheel and
         # reading a number, and a restart per attempt means nobody does it.

@@ -163,7 +163,7 @@ function encoderFields(p: string): Field[] {
   return [
     i(`${p}.encoder_a`, "Encoder A pin", -1, 27, {
       live: false,
-      help: "BCM GPIO on the Pi header — NOT the Fusion HAT channel above. -1 for no encoder.",
+      help: "A Fusion HAT DIGITAL pin, numbered as BCM GPIO — NOT the PWM channel above. -1 for no encoder.",
     }),
     i(`${p}.encoder_b`, "Encoder B pin", -1, 27, {
       live: false,

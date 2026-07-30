@@ -139,7 +139,7 @@ export function ActuatorCard(
               invalid={pins.has(pinA) || halfWired}
               hint={pins.has(pinA)
                 ? "Another actuator already reads this pin — both would count the same edges."
-                : "BCM GPIO on the Pi header, not the Fusion HAT channel above."}
+                : "A Fusion HAT DIGITAL pin (numbered as BCM GPIO), not the PWM channel above."}
             />
             <NumberField
               label="B pin"
