@@ -181,17 +181,23 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="3--drive-a-rover"><a class="header" href="#3--drive-a-rover">3 · Drive a rover</a></h1>
-<p><em>A gamepad or the touch joystick — both through the same sender.</em></p>
+<p><em>A gamepad on the base station, or the touch joystick in the browser.</em></p>
 <ol>
 <li>Tap a rover in the fleet list. Everything that follows applies to it.</li>
 <li>Make sure it is in <strong>Teleop</strong>. The mode grid is under <em>Control</em> in the rail.</li>
 <li>Drive it: hold the on-screen pad, or use a gamepad — <kbd>R2</kbd> forward,
 <kbd>L2</kbd> reverse, right stick to steer.</li>
 </ol>
-<p>Both paths hand a throttle and steer already in <code>-1 … +1</code> to one sender, which
-only transmits on a meaningful change and never faster than the bridge's
-<code>drive_hz</code>. That single budget is why a physical pad and a tablet joystick feel
-identical and why two operators cannot flood the radio between them.</p>
+<p><strong>Plug the gamepad into the base station, not into the tablet.</strong> It is read
+there by the bridge process itself and its commands go straight out over the
+radio. A pad connected to whatever machine is showing the dashboard does
+nothing: the browser has no part in the physical-controller path, so a laggy
+socket, a reconnect or a backgrounded tab cannot come between a trigger pull and
+a rover moving.</p>
+<p>Both inputs produce a throttle and steer in <code>-1 … +1</code> and both are rate-limited
+to the bridge's <code>drive_hz</code>, which is one shared airtime budget. That is why a
+physical pad and a tablet joystick feel identical, and why two operators cannot
+flood the radio between them.</p>
 <blockquote>
 <p><strong>Failsafe</strong></p>
 <p>Teleop stops the robot if drive commands stop arriving (<code>command_timeout</code>).

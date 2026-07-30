@@ -513,17 +513,23 @@ that boots outdoors and the laptop indoors never fight.</p>
 <p>Same identity, same geometry, same grammar — only the light changes, and the
 accent darkens so the contrast ratio against its own ink holds.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="3--drive-a-rover"><a class="header" href="#3--drive-a-rover">3 · Drive a rover</a></h1>
-<p><em>A gamepad or the touch joystick — both through the same sender.</em></p>
+<p><em>A gamepad on the base station, or the touch joystick in the browser.</em></p>
 <ol>
 <li>Tap a rover in the fleet list. Everything that follows applies to it.</li>
 <li>Make sure it is in <strong>Teleop</strong>. The mode grid is under <em>Control</em> in the rail.</li>
 <li>Drive it: hold the on-screen pad, or use a gamepad — <kbd>R2</kbd> forward,
 <kbd>L2</kbd> reverse, right stick to steer.</li>
 </ol>
-<p>Both paths hand a throttle and steer already in <code>-1 … +1</code> to one sender, which
-only transmits on a meaningful change and never faster than the bridge's
-<code>drive_hz</code>. That single budget is why a physical pad and a tablet joystick feel
-identical and why two operators cannot flood the radio between them.</p>
+<p><strong>Plug the gamepad into the base station, not into the tablet.</strong> It is read
+there by the bridge process itself and its commands go straight out over the
+radio. A pad connected to whatever machine is showing the dashboard does
+nothing: the browser has no part in the physical-controller path, so a laggy
+socket, a reconnect or a backgrounded tab cannot come between a trigger pull and
+a rover moving.</p>
+<p>Both inputs produce a throttle and steer in <code>-1 … +1</code> and both are rate-limited
+to the bridge's <code>drive_hz</code>, which is one shared airtime budget. That is why a
+physical pad and a tablet joystick feel identical, and why two operators cannot
+flood the radio between them.</p>
 <blockquote>
 <p><strong>Failsafe</strong></p>
 <p>Teleop stops the robot if drive commands stop arriving (<code>command_timeout</code>).
@@ -2288,6 +2294,16 @@ it works on a Mac or a display-less Pi. Emits <code>(throttle, steer)</code> at 
 (throttle = R2 minus L2, steer = right stick X) and fires edge-triggered actions
 (e-stop / clear / mode / arm / fire). Hot-plugging reconnects automatically. The
 app binds these to the <strong>currently selected</strong> robot.</p>
+<p>This is the <em>only</em> physical-controller path. The dashboard once polled the
+browser Gamepad API and forwarded <code>drive</code> frames over <code>/ws</code> as a second reader;
+that was removed. A controller is a real-time control surface, and routing one
+through a browser, the Deno front door and a WebSocket put three things that can
+stall or reconnect between a trigger pull and the radio — while giving two
+independent readers authority over the same robot whenever both saw the pad. The
+browser now sends <code>drive</code> only for its own on-screen joystick, whose input has
+nowhere else to come from. The mapping is untouched by this: it lives in
+<code>SettingsStore</code> and is still edited from <em>Settings → Controller</em>, which reads the
+pad through <code>state()</code> below.</p>
 <p>Axis and button indices come from the <code>ControllerMapping</code> above, not from
 constants: they describe a <em>driver</em>, not a controller — the same pad enumerates
 differently across macOS, Linux, USB and Bluetooth — so re-binding is a tap in

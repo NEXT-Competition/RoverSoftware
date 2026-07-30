@@ -1100,6 +1100,16 @@ it works on a Mac or a display-less Pi. Emits <code>(throttle, steer)</code> at 
 (throttle = R2 minus L2, steer = right stick X) and fires edge-triggered actions
 (e-stop / clear / mode / arm / fire). Hot-plugging reconnects automatically. The
 app binds these to the <strong>currently selected</strong> robot.</p>
+<p>This is the <em>only</em> physical-controller path. The dashboard once polled the
+browser Gamepad API and forwarded <code>drive</code> frames over <code>/ws</code> as a second reader;
+that was removed. A controller is a real-time control surface, and routing one
+through a browser, the Deno front door and a WebSocket put three things that can
+stall or reconnect between a trigger pull and the radio — while giving two
+independent readers authority over the same robot whenever both saw the pad. The
+browser now sends <code>drive</code> only for its own on-screen joystick, whose input has
+nowhere else to come from. The mapping is untouched by this: it lives in
+<code>SettingsStore</code> and is still edited from <em>Settings → Controller</em>, which reads the
+pad through <code>state()</code> below.</p>
 <p>Axis and button indices come from the <code>ControllerMapping</code> above, not from
 constants: they describe a <em>driver</em>, not a controller — the same pad enumerates
 differently across macOS, Linux, USB and Bluetooth — so re-binding is a tap in
