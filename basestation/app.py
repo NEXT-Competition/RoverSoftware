@@ -250,11 +250,40 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     DRIVE_KEEPALIVE = 0.25  # seconds; must stay below the robot's command_timeout
     _drive = {"throttle": None, "steer": None, "t": -1.0}
 
+    # ---- who owns the drive channel ----
+    # Two inputs can command drive: the pad below, and {"action":"drive"} from a
+    # browser. Nothing arbitrated between them, so they interleaved frame for
+    # frame on the radio — a held trigger and an idle touch joystick arrived as
+    # alternating throttle 1.0 / 0.0 and the rover stuttered instead of driving.
+    #
+    # The pad wins while it is being used. It is a real control surface in
+    # somebody's hands, whereas a browser is often a tablet lying on a bench, and
+    # of the two the pad is the one whose operator is watching the rover. The
+    # claim lapses GAMEPAD_HOLD seconds after the pad last asked for movement, so
+    # letting go of the stick hands the channel straight back to the touch
+    # joystick. It is scoped to the robot the pad is actually driving.
+    #
+    # Deliberately narrow: `drive` only. E-STOP, mode changes, jogs and every
+    # other action still come through from any client at any moment — a spoken
+    # "stop" is an `estop`, not a drive frame (see command/fastpath.py), and
+    # must never wait on who is holding the stick.
+    GAMEPAD_HOLD = 1.0  # seconds
+    _pad_claim: dict = {"rid": None, "t": -1.0}
+
+    def _pad_owns_drive(rid) -> bool:
+        return (rid is not None and rid == _pad_claim["rid"]
+                and (time.monotonic() - _pad_claim["t"]) < GAMEPAD_HOLD)
+
     def on_drive(throttle: float, steer: float) -> None:
         rid = fleet.selected
         if not rid:
             return
         now = time.monotonic()
+        # Claim on what the operator is asking for, not on what we transmit: the
+        # rate limit below drops most frames, and a claim renewed only by those
+        # would lapse between them and let the browser back in mid-corner.
+        if throttle or steer:
+            _pad_claim.update(rid=rid, t=now)
         dt = now - _drive["t"]
         min_interval = 1.0 / max(settings.base.drive_hz, 1.0)
         changed = (_drive["throttle"] is None
@@ -319,9 +348,13 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         elif action == "route":
             dispatch(rid, {"type": "route", "waypoints": data.get("waypoints", [])})
         elif action == "drive":
-            dispatch(rid, {"type": "drive",
-                           "throttle": float(data.get("throttle", 0)),
-                           "steer": float(data.get("steer", 0))})
+            # Dropped, not queued, while the base-station pad has this robot:
+            # a stale drive frame is worth nothing a moment later, and the whole
+            # point is to keep it off the wire. See GAMEPAD_HOLD above.
+            if not _pad_owns_drive(rid):
+                dispatch(rid, {"type": "drive",
+                               "throttle": float(data.get("throttle", 0)),
+                               "steer": float(data.get("steer", 0))})
         elif action in ("arm_shooter", "disarm_shooter", "fire"):
             # Pass-through: the robot owns every firing rule (arm latch, dwell,
             # cooldown, magazine). Duplicating any of that here would give two
@@ -730,4 +763,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # way in: everything it can do, it does by calling handle_action above.
     app.state.commands = executor
     app.state.stt = stt
+    # The one entry point itself, for the same reason — an embedder driving the
+    # bridge without a browser, and tests that need to interleave a browser
+    # action with a gamepad frame without standing up a WebSocket.
+    app.state.handle_action = handle_action
     return app

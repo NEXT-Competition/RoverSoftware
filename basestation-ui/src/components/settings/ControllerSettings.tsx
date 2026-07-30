@@ -13,7 +13,6 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { conn, gamepad, settingsResult } from "../../net/ws.ts";
-import { browserGamepad } from "../../net/gamepad.ts";
 import {
   AXIS_FIELDS,
   BUTTON_FIELDS,
@@ -73,7 +72,6 @@ function SignedBar({ value }: { value: number }) {
 export function ControllerSettings() {
   const pad = gamepad.value;
   const connState = conn.value;
-  const local = browserGamepad.value;
   const result = settingsResult.value;
   const rejected = result?.rejected ?? {};
   // Which binding is waiting for a press, and the axis baseline to compare a
@@ -153,11 +151,10 @@ export function ControllerSettings() {
         </div>
       </div>
       <p class="hint pad">
-        Bindings apply to the base station's gamepad and, where the two agree,
-        to a pad the browser exposes. Triggers are the exception: the browser
-        reports them as buttons rather than axes, so the trigger axis fields
-        below are server-side only.
-        {local.connected && ` This browser also sees “${local.name}”.`}
+        These bindings are the mapping the base station itself drives with: it
+        reads the pad plugged into it and sends straight out over the radio. A
+        controller connected to this tablet does nothing — plug it into the base
+        station instead.
       </p>
 
       {!pad?.connected

@@ -1,9 +1,12 @@
-// Client-side drive throttling.
+// Client-side drive throttling for the on-screen joystick — the only drive
+// input the browser still sends. A physical controller never reaches this
+// sender: it is read on the base station and goes straight to the radio (see
+// net/input.ts).
 //
 // IMPORTANT: the Python bridge does NOT rate-limit browser {action:"drive"}
-// frames — its throttling in app.py::on_drive only guards the server-side
-// pygame gamepad. So an un-capped on-screen joystick would flood the XBee and
-// latency would grow without bound. We apply the same policy here:
+// frames — its throttling in app.py::on_drive guards the pygame gamepad only.
+// So an un-capped on-screen joystick would flood the XBee and latency would
+// grow without bound. We apply the same policy here:
 //
 //   DRIVE_EPS          0.01   send only on a meaningful change...
 //   drive rate         server ...at most this often, plus...
@@ -13,14 +16,14 @@
 //
 // The rate is NOT hardcoded: it comes from the bridge's --drive-hz via the
 // fleet snapshot (ws.ts::driveHz). Radio airtime is one shared budget across
-// the touch joystick, the server gamepad and telemetry, so the server owns the
-// number. A local copy is how a lowered --drive-hz silently failed to reach the
-// touch UI and left the link oversubscribed.
+// the touch joystick, the base station's gamepad and telemetry, so the server
+// owns the number. A local copy is how a lowered --drive-hz silently failed to
+// reach the touch UI and left the link oversubscribed.
 //
-// Deadzone (0.08) and the signed throttle / steer convention mirror the server
-// gamepad reader (basestation/controller_input.py:29-42,133-136) so touch and
-// physical gamepad feel identical. Both hand this sender a throttle already in
-// -1..1 — the touch pad from its Y offset, the gamepad from R2 minus L2.
+// Deadzone (0.08) and the signed throttle / steer convention mirror the gamepad
+// reader (basestation/controller_input.py) so touch and a physical pad feel
+// identical, even though they now reach the radio by different routes. The touch
+// pad hands this sender a throttle already in -1..1, from its Y offset.
 
 import { driveHz, selected, send } from "./ws.ts";
 
@@ -79,10 +82,9 @@ export function makeDriveSender() {
     /**
      * Feed the current stick vector, already conditioned by its source.
      *
-     * Only clamped here, NOT deadzoned: each input applies its own dead zone
-     * (the touch pad uses `deadzone()` below, a gamepad uses the operator's
-     * saved mapping), and a second one at this layer would quietly swallow
-     * small commands from a pad running reduced throttle authority.
+     * Only clamped here, NOT deadzoned: the touch pad applies its own dead zone
+     * via `deadzone()` above, and a second one at this layer would quietly
+     * swallow small commands from an input running reduced authority.
      */
     update(throttle: number, steer: number): void {
       push(clamp1(throttle), clamp1(steer), false);
