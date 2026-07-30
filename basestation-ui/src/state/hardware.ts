@@ -234,7 +234,7 @@ export const encoderPinConflicts = computed<Set<number>>(() => {
   return clashes;
 });
 
-/** BCM pins an encoder may be offered, in the order they are handed out.
+/** HAT digital pins (BCM numbers) an encoder may be offered, in order.
  *
  * Not every GPIO: 0 and 1 are the HAT ID EEPROM, 2 and 3 are the I²C bus the
  * Fusion HAT and the IMU sit on, and 14/15 are the UART the GPS uses. Offering

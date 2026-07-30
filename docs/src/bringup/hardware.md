@@ -112,9 +112,9 @@ turn the wheel exactly one full turn by hand, and read the count.
 **Inverted** above: that one mirrors the motor, this one mirrors the sensor, and
 a mirrored track motor usually needs both.
 
-The pins need `pigpio` (Pi 4 and older, plus `pigpiod`) or `lgpio` (Pi 5) on the
-robot. With neither installed the encoders stay inert and nothing else changes —
-see [Wiring and calibration](../reference/wiring.md).
+The pins are read through `fusion_hat`, the same library that drives the motors,
+so there is nothing extra to install: if the motors move, the encoders can be
+read — see [Wiring and calibration](../reference/wiring.md).
 
 ## 3 · Group the rest into mechanisms
 

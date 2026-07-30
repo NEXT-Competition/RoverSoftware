@@ -124,7 +124,7 @@ robot/                        # runs on the rover Pi (also imported by the base 
     xbee_link.py              threaded transparent-mode XBee serial reader
     doc_transfer.py           split/reassemble a whole document across frames
   sensors/
-    encoder.py                quadrature wheel encoders → signed RPM (pigpio / lgpio)
+    encoder.py                quadrature wheel encoders → signed RPM (Fusion HAT pins)
     gps.py                    Adafruit GPS reader → (lat, lon, track angle)
     bno085.py                 BNO085 IMU → absolute heading + yaw rate
     pose.py                   GPS position + IMU-or-track-angle heading → pose()
@@ -419,10 +419,13 @@ A quadrature encoder on two Pi GPIO pins measures what the wheels actually did.
 `Encoder` decodes all four edges of each cycle (X4) through a transition table,
 counting only moves it can attribute a direction to — a diagonal jump means two
 edges arrived unseen, and inventing a direction for it would bias the rate. Speed
-is counts over a `rpm_window`, optionally smoothed by `rpm_tau`. Both GPIO
-libraries are optional: pigpio (Pi 4 and older, needs `pigpiod`) then lgpio (Pi
-5); with neither, every encoder is inert, `rpm()` returns `None`, and the
-drivetrain runs open-loop exactly as it always did.
+is counts over a `rpm_window`, optionally smoothed by `rpm_tau`. The pins are
+the Fusion HAT's digital pins, read through the same `fusion_hat` library that
+drives the motors — no second GPIO package and no daemon. `Pin` does the setup;
+edge callbacks are registered *without* the bouncetime `Pin.irq()` would impose,
+because a 20 ms debounce discards nearly every edge a wheel encoder produces.
+The import is optional, and without it every encoder is inert, `rpm()` returns
+`None`, and the drivetrain runs open-loop exactly as it always did.
 
 `RpmTrim` closes the loop, in the tank drivetrain only, **after** the slew
 limiter — the limiter shapes the operator's intent, the trim corrects what the
@@ -1495,7 +1498,7 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_SHOOTER_FIRE_S` / `RS_SHOOTER_RETRACT_S` | `0.35` / `0.35` | Hold at the fire angle, then settle before re-arming. |
 | `RS_SHOOTER_DWELL` / `RS_SHOOTER_COOLDOWN` | `0.5` / `2.0` | Hold the aim this long before firing; min seconds between shots. |
 | `RS_SHOOTER_REQUIRE_ARM` / `RS_SHOOTER_REQUIRE_ARRIVED` / `RS_SHOOTER_MAX_SHOTS` | `1` / `1` / `0` | Firing gates; magazine size (0 = unlimited). |
-| `RS_ENCODER_LEFT` / `RS_ENCODER_RIGHT` | *(blank)* | Quadrature encoder pins as `"A,B"` **BCM GPIO** — the Pi header, not Fusion HAT channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Needs `pigpio` (Pi ≤4, plus `pigpiod`) or `lgpio` (Pi 5). |
+| `RS_ENCODER_LEFT` / `RS_ENCODER_RIGHT` | *(blank)* | Quadrature encoder pins as `"A,B"` — the Fusion HAT's **digital** pins, numbered as BCM GPIO, not its PWM channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Read through `fusion_hat`, so no extra package. |
 | `RS_ENCODER_CPR` | `0` | Counts per revolution **of the wheel**, gearbox included. Measure it with `tools/encoder_monitor.py` — turn the wheel one full turn and read the count. |
 | `RS_ENCODER_LEFT_INVERT` / `RS_ENCODER_RIGHT_INVERT` | `0` / `0` | Flip so forward reads as a positive RPM. Separate from the motor's own `inverted`: that mirrors the motor, this mirrors the sensor. |
 | `RS_TRIM_MODE` / `RS_TRIM_MAX_RPM` | `off` / `200` | Closed-loop wheel speed: `off` \| `match` (hold the two sides to each other; no calibration) \| `velocity` (hold each to `throttle × max_rpm`; measure that number). See [§4.4](#44-drive-layer). |

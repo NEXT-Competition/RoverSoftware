@@ -40,22 +40,21 @@ different rates, so the rover curves while the dashboard insists it is going
 straight. An encoder measures what the wheel actually did, and the robot can
 then hold the two sides together.
 
-**The pins are Pi GPIO, not HAT channels.** `channel` above is a Fusion HAT PWM
-output; `encoder_a`/`encoder_b` are BCM numbers on the Pi's own header. Confusing
-the two produces an encoder that counts nothing, and it is the first mistake
-everybody makes here. Wire A and B to two free GPIOs, ground to ground, and the
-encoder's supply to whatever it wants (many are 3.3 V; a 5 V encoder needs a
-level shifter, because a Pi GPIO is not 5 V tolerant).
+**The digital pins, not the PWM channels.** The Fusion HAT has both, and they
+are different buses. `channel` above is a PWM output — where an ESC or a servo
+goes. `encoder_a`/`encoder_b` are the HAT's **digital** pins, which are Pi GPIO
+lines broken out on the HAT header and numbered as BCM, so the number silkscreened
+on the board is the number to enter. Confusing the two produces an encoder that
+counts nothing, and it is the first mistake everybody makes here.
 
-Install the GPIO library your Pi needs — neither is a hard dependency, and
-without one the encoders stay inert and nothing else changes:
+Wire A and B to two free digital pins, ground to ground, and the encoder's supply
+to whatever it wants (many are 3.3 V; a 5 V encoder needs a level shifter,
+because a Pi GPIO is not 5 V tolerant). Internal pull-ups are enabled for you, so
+an open-collector encoder needs no resistors of its own.
 
-```bash
-# Pi 4 and older
-pip install pigpio && sudo systemctl enable --now pigpiod
-# Pi 5
-pip install lgpio
-```
+There is nothing to install: the pins are read through the same `fusion_hat`
+library that already drives the motors — no second GPIO package, no daemon. If
+the motors move, the encoders can be read.
 
 Then, **wheels off the ground and the drivetrain unpowered**:
 
