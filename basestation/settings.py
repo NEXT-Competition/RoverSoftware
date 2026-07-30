@@ -47,6 +47,18 @@ UNBOUND = -1
 # has: a pad has more routines bound to it than it has spare buttons.
 ROUTINE_SLOTS = 4
 
+# How many gamepad buttons may be bound to a mechanism preset.
+#
+# Slots for the same reason routines get them: a preset is a named state in a
+# ROVER's layout ("intake -> in"), written by whoever built the machine, and
+# this process holds no list of them. Each slot is a (button, mechanism, preset)
+# triple, because naming the preset alone would be ambiguous — two mechanisms
+# may both call a state "out".
+#
+# Four, and four rather than more, because presets come in pairs: an intake in
+# and out, an arm up and down, is already the whole of a spare pad.
+MECH_SLOTS = 4
+
 DEFAULT_PATH = "~/.config/roversoftware/basestation.json"
 
 
@@ -117,6 +129,39 @@ class ControllerMapping:
             for n in range(1, ROUTINE_SLOTS + 1)
         )
 
+    # --- mechanism presets on buttons (all three parts must be set) ---
+    # `btn_mech_N` is the button; `mech_N` names a mechanism in the ROVER's
+    # layout and `preset_N` one of that mechanism's named states. Both names are
+    # free text for the same reason a routine id is: the base station has no
+    # copy of a rover's layout to check them against, the rover may be switched
+    # off while somebody edits bindings, and a preset that no longer exists is
+    # the robot's to refuse out loud.
+    btn_mech_1: int = UNBOUND
+    mech_1: str = ""
+    preset_1: str = ""
+    btn_mech_2: int = UNBOUND
+    mech_2: str = ""
+    preset_2: str = ""
+    btn_mech_3: int = UNBOUND
+    mech_3: str = ""
+    preset_3: str = ""
+    btn_mech_4: int = UNBOUND
+    mech_4: str = ""
+    preset_4: str = ""
+
+    def mech_slots(self) -> Tuple[Tuple[int, str, str], ...]:
+        """(button index, mechanism, preset) for every slot, filled or not.
+
+        Trimmed here, like `routine_slots`, so that what counts as "not set"
+        is decided once rather than by each reader.
+        """
+        return tuple(
+            (int(getattr(self, f"btn_mech_{n}")),
+             str(getattr(self, f"mech_{n}") or "").strip(),
+             str(getattr(self, f"preset_{n}") or "").strip())
+            for n in range(1, MECH_SLOTS + 1)
+        )
+
     def actions(self):
         """(button index, action name) for every bound button.
 
@@ -137,6 +182,10 @@ class ControllerMapping:
             # Pressing it does nothing, which is what the settings page says it
             # will do.
             *((idx, f"routine:{rid}") for idx, rid in self.routine_slots() if rid),
+            # Both names travel, because "out" alone does not say what moves.
+            # A slot missing either one is dropped, as above.
+            *((idx, f"mech_preset:{mech}:{preset}")
+              for idx, mech, preset in self.mech_slots() if mech and preset),
         )
         return tuple((idx, name) for idx, name in pairs if idx is not None and idx >= 0)
 
@@ -187,6 +236,13 @@ PARAMS: Tuple[Param, ...] = (
     *(p for n in range(1, ROUTINE_SLOTS + 1) for p in (
         Param(f"controller.btn_routine_{n}", "int", lo=UNBOUND, hi=31),
         Param(f"controller.routine_{n}", "text"),
+    )),
+    # One (button, mechanism, preset) triple per slot, generated for the same
+    # reason: MECH_SLOTS is the only place the count lives.
+    *(p for n in range(1, MECH_SLOTS + 1) for p in (
+        Param(f"controller.btn_mech_{n}", "int", lo=UNBOUND, hi=31),
+        Param(f"controller.mech_{n}", "text"),
+        Param(f"controller.preset_{n}", "text"),
     )),
 )
 

@@ -338,8 +338,11 @@ def main():
           f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} "
           f"heading={cfg.heading_source} vision={vision} "
           f"fpv={fpv} shooter={shooter} encoders={encoders} bulk={bulk}")
-    Robot(cfg).run()
+    # The exit status is the whole mechanism behind "restart from the base
+    # station": run() returns robot.EXIT_RESTART when it was asked to come back,
+    # and systemd's Restart= policy is what actually starts the new process.
+    return Robot(cfg).run()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

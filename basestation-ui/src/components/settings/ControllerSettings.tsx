@@ -17,16 +17,18 @@ import {
   AXIS_FIELDS,
   BUTTON_FIELDS,
   FEEL_FIELDS,
+  MECH_BIND_SLOTS,
   ROUTINE_BIND_SLOTS,
   UNBOUND,
 } from "../../settings/schema.ts";
 import {
   commit,
-  configTarget,
   fieldValue,
+  targetRobot,
   watchGamepad,
 } from "../../state/settings.ts";
 import { requestRoutines, routinesOn } from "../../state/routines.ts";
+import { mechanismsOn, requestLayout } from "../../state/hardware.ts";
 import { useRadioFetch } from "../../state/fetch.ts";
 import { SettingField } from "./Field.tsx";
 
@@ -101,13 +103,44 @@ export function ControllerSettings() {
   // rather than the editor's draft, for the same reason the driving view's
   // buttons are (RoutineControls.tsx): a binding must name something the rover
   // is actually carrying, not something half-written on another tab.
-  const rid = configTarget.value;
+  // `targetRobot`, not the raw `configTarget`: that one is null until somebody
+  // touches a robot picker on another tab, so both lists below opened empty
+  // ("no rover selected") on a base station where a rover was plainly selected.
+  // It is also the honest source — a binding fires at whichever rover is
+  // selected when the button is pressed (app.py::on_action reads fleet.selected).
+  const rid = targetRobot.value;
   const routinesFetch = useRadioFetch(
     rid && `${rid}:routines`,
     !!(rid && robotDocuments.value[rid]?.routines_rev),
     () => rid && requestRoutines(rid),
   );
   const routines = routinesOn(rid);
+
+  // The mechanism presets a slot can be pointed at, off the rover's SAVED
+  // layout for the same reason. Flattened to (mechanism, preset) pairs because
+  // that is what a binding is: "out" alone does not say what moves.
+  const layoutFetch = useRadioFetch(
+    rid && `${rid}:layout`,
+    !!(rid && robotDocuments.value[rid]?.layout_rev),
+    () => rid && requestLayout(rid),
+  );
+  // A mechanism switched off in the Hardware tab is still listed, and still
+  // bindable — an operator may be about to turn it on — but it is SAID, because
+  // the robot never builds a disabled mechanism (Robot.__init__) and refuses
+  // every preset for it on a console nobody driving can see. An unexplained
+  // dead button is the worst version of this feature.
+  const presets = mechanismsOn(rid).flatMap((mech) =>
+    Object.keys(mech.presets ?? {}).map((preset) => ({
+      mech: mech.name,
+      label: mech.label || mech.name,
+      preset,
+      off: mech.enabled === false,
+    }))
+  );
+  const disabled = presets.filter((p) => p.off).map((p) => p.mech);
+  const boundToDisabled = MECH_BIND_SLOTS.some((slot) =>
+    num(slot.button, UNBOUND) >= 0 && disabled.includes(text(slot.mech))
+  );
 
   // Subscribe to raw frames only while this tab is on screen. Re-sent when the
   // socket comes back, since a subscription is per-connection and a reconnect
@@ -175,6 +208,13 @@ export function ControllerSettings() {
     const idx = num(slot.button, UNBOUND);
     const id = text(slot.routine);
     if (idx >= 0 && id) boundButtons.set(idx, `Routine: ${id}`);
+  }
+  // Same rule for a mechanism slot: nothing is bound until all three parts are.
+  for (const slot of MECH_BIND_SLOTS) {
+    const idx = num(slot.button, UNBOUND);
+    const mech = text(slot.mech);
+    const preset = text(slot.preset);
+    if (idx >= 0 && mech && preset) boundButtons.set(idx, `${mech} → ${preset}`);
   }
 
   return (
@@ -374,6 +414,120 @@ export function ControllerSettings() {
           )}
           {rid && routines.length === 0 && routinesFetch.stalled && (
             <button type="button" class="btn ghost small" onClick={routinesFetch.retry}>
+              Ask again
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section class="group open">
+        <div class="group-head static">
+          <span class="group-title">Mechanisms</span>
+        </div>
+        <div class="group-body">
+          <p class="group-blurb">
+            Put a mechanism preset on a button — the same named states the
+            routine editor uses, run with a thumb while you drive. A preset
+            latches: “in” keeps running until you press an “off” preset, switch
+            modes or hit E‑STOP, so most mechanisms want two buttons. Give the
+            mechanism an auto‑stop in the Hardware tab if it should also give up
+            on its own. Presses are ignored while a routine is running — it owns
+            the mechanisms until you switch back to teleop.
+          </p>
+
+          {MECH_BIND_SLOTS.map((slot) => {
+            const idx = num(slot.button, UNBOUND);
+            const mech = text(slot.mech);
+            const preset = text(slot.preset);
+            const bound = mech && preset;
+            // Both names travel in one option, since picking a preset without
+            // its mechanism is not a choice anyone can make.
+            const value = bound ? `${mech}:${preset}` : "";
+            const missing = !!bound &&
+              !presets.some((p) => p.mech === mech && p.preset === preset);
+            const waiting = listening === slot.button;
+            return (
+              <div class={`bind-row${waiting ? " listening" : ""}`} key={slot.button}>
+                <select
+                  class="field-select bind-mech"
+                  value={value}
+                  onChange={(e) => {
+                    const [m, p] = (e.target as HTMLSelectElement).value.split(":");
+                    commit(slot.mech, m ?? "");
+                    commit(slot.preset, p ?? "");
+                  }}
+                >
+                  <option value="">— no preset —</option>
+                  {presets.map((p) => (
+                    <option key={`${p.mech}:${p.preset}`} value={`${p.mech}:${p.preset}`}>
+                      {p.label} → {p.preset}
+                      {p.off ? " (switched off in Hardware)" : ""}
+                    </option>
+                  ))}
+                  {/* A binding made against another rover, or one whose preset
+                      was renamed, shows what it has instead of reading as
+                      "none" — the robot is the one that refuses it. */}
+                  {missing && (
+                    <option value={value}>
+                      {mech} → {preset} (not on this rover)
+                    </option>
+                  )}
+                </select>
+                <span class="bind-value">
+                  {waiting
+                    ? "press a button…"
+                    : idx < 0
+                    ? "unbound"
+                    : !bound
+                    ? `button ${idx} — pick a preset`
+                    : `button ${idx}`}
+                </span>
+                <button
+                  type="button"
+                  class={`btn small${waiting ? " active" : ""}`}
+                  disabled={!pad?.connected && !waiting}
+                  onClick={() => listen(slot.button)}
+                >
+                  {waiting ? "Cancel" : "Bind"}
+                </button>
+                <button
+                  type="button"
+                  class="btn ghost small"
+                  disabled={idx < 0 && !bound}
+                  onClick={() => {
+                    commit(slot.button, UNBOUND);
+                    commit(slot.mech, "");
+                    commit(slot.preset, "");
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            );
+          })}
+
+          {boundToDisabled && (
+            <p class="banner warn">
+              A bound mechanism is switched off in the Hardware tab. A rover
+              does not build a disabled mechanism at start-up, so it refuses
+              every preset for it and the button does nothing. Tick Enabled,
+              save, and restart the robot — actuators are built at start-up.
+            </p>
+          )}
+
+          {presets.length === 0 && (
+            <p class="hint">
+              {!rid
+                ? "No rover selected, so there are no presets to choose from. The bindings themselves belong to this base station and are kept either way."
+                : layoutFetch.pending
+                ? `Asking ${rid} for its layout…`
+                : layoutFetch.stalled
+                ? `No answer from ${rid} — its layout never arrived.`
+                : `${rid} has no mechanism presets yet. Add one in the Hardware tab and it appears here.`}
+            </p>
+          )}
+          {rid && presets.length === 0 && layoutFetch.stalled && (
+            <button type="button" class="btn ghost small" onClick={layoutFetch.retry}>
               Ask again
             </button>
           )}

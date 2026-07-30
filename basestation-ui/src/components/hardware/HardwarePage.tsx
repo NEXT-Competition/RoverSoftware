@@ -6,9 +6,12 @@
 //
 // A saved layout does NOT take effect until the robot restarts, and the page
 // says so. Actuators are owned by constructors: rebuilding them mid-loop with
-// the drivetrain armed is how an ESC ends up holding an undefined pulse.
+// the drivetrain armed is how an ESC ends up holding an undefined pulse. The
+// restart itself is a button here rather than an ssh session, because the
+// moment you need one is the moment the rover is least reachable — it is on a
+// field, on blocks, or in somebody's arms.
 
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { robotDocuments, robots, selectedRobot } from "../../net/ws.ts";
 import {
   addDriveActuator,
@@ -22,6 +25,7 @@ import {
   layoutResult,
   refreshLayout,
   removeDriveActuator,
+  restartRobot,
   saveLayout,
   setDriveField,
   setDriveKind,
@@ -182,6 +186,13 @@ export function HardwarePage() {
     refreshLayout,
   );
 
+  // A restart takes a rover off the air for several seconds and re-arms its
+  // ESCs, so it asks twice. Held in this component rather than in the store
+  // because an armed button is a state of somebody's finger, not of the fleet:
+  // it must not survive switching rovers, and the rover it is armed for is
+  // recorded so it cannot be aimed at one and fired at another.
+  const [armed, setArmed] = useState<string | null>(null);
+
   // Drop the draft once the robot has accepted it, so the form starts showing
   // the robot's own copy again — including anything it clamped on the way in.
   useEffect(() => {
@@ -219,6 +230,20 @@ export function HardwarePage() {
           </button>
           <button
             type="button"
+            class={`btn small${armed === rid ? " danger" : " ghost"}`}
+            onClick={() => {
+              if (armed === rid) {
+                restartRobot(rid);
+                setArmed(null);
+              } else {
+                setArmed(rid);
+              }
+            }}
+          >
+            {armed === rid ? "Restart — sure?" : "Restart robot"}
+          </button>
+          <button
+            type="button"
             class="btn small primary"
             disabled={!layoutDirty.value || clashes.size > 0}
             onClick={saveLayout}
@@ -246,7 +271,9 @@ export function HardwarePage() {
         <p class="banner warn">
           Saved. It takes effect when the robot's service restarts — actuators
           are built at start-up, and rebuilding them mid-drive would leave an
-          ESC at an undefined pulse.
+          ESC at an undefined pulse. <strong>Restart robot</strong>{" "}
+          above does it from here: the rover parks its motors, drops off the
+          fleet for a few seconds and comes back running this layout.
         </p>
       )}
       {result?.warnings?.length ? (

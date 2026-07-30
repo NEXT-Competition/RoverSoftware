@@ -2807,9 +2807,11 @@ input[type="checkbox"]:disabled {
   min-width: 110px;
   text-align: right;
 }
-/* A routine slot has no label of its own — it is named by whatever is picked
-   into it — so the picker takes the place the other rows give their label. */
-.bind-routine {
+/* A routine or mechanism slot has no label of its own — it is named by whatever
+   is picked into it — so the picker takes the place the other rows give their
+   label. */
+.bind-routine,
+.bind-mech {
   flex: 1;
   min-width: 0;
 }

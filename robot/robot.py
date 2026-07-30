@@ -54,6 +54,18 @@ OUTBOX_MAX = 256
 # command_timeout: lose the link mid-jog and the motor stops on its own.
 JOG_TIMEOUT_S = 0.4
 
+# Exit status for "restart me", asked for over the radio and answered by
+# stopping cleanly and letting the supervisor start a fresh process.
+#
+# NON-ZERO on purpose. The shipped unit says `Restart=on-failure`
+# (packaging/systemd/roversoftware-robot.service), which would NOT restart a
+# process that exited 0 — and the rovers in the field are running whatever unit
+# was installed with their .deb, while `just sync` pushes only Python. A restart
+# that depended on a new unit file would leave a rover dark until somebody
+# walked out to it with a laptop. A distinctive code rather than 1 so the reason
+# is legible in `systemctl status`, which reports it verbatim.
+EXIT_RESTART = 42
+
 
 def _pid(cfg: PIDConfig) -> PID:
     return PID(kp=cfg.kp, ki=cfg.ki, kd=cfg.kd,
@@ -333,6 +345,9 @@ class Robot:
         # Bench-jog failsafe; see _jog.
         self._jog_mech = ""
         self._jog_until = 0.0
+        # Set by a restart asked for over the radio; read by run() on the way
+        # out to decide what to tell the supervisor. See _request_restart.
+        self._restarting = False
 
     def _all_mechanisms(self) -> Dict[str, Mechanism]:
         """Layout mechanisms plus the built-in launcher, keyed by name."""
@@ -391,6 +406,15 @@ class Robot:
                 self._wifi_command(msg)
             elif mtype == "jog":
                 self._jog(msg)
+            # Applying a preset reaches past the active controller for the same
+            # reason `jog` does: it is the operator asking a mechanism for a
+            # named state, not an instruction to whatever is currently driving.
+            elif mtype == "mech_preset":
+                self._mech_preset(msg)
+            # Restarting is the one command that ends this loop, so it is
+            # handled here rather than by any controller.
+            elif mtype == "restart":
+                self._request_restart()
             # Which routine is chosen reaches past the active controller, for
             # the same reason config does: picking what to run next is not
             # something the thing currently driving should get a vote on.
@@ -805,6 +829,92 @@ class Robot:
         self._jog_until = time.monotonic() + JOG_TIMEOUT_S if power else 0.0
         self._jog_mech = name if power else ""
 
+    def _mech_preset(self, msg: dict) -> None:
+        """Put one mechanism into a named preset, from a bound gamepad button.
+
+        A preset is a whole-mechanism state the layout already carries and the
+        routine editor already offers ("intake -> in"); this is the same thing
+        reached with a thumb while somebody is driving, so the rules are the
+        mechanism's own rather than a second set invented here:
+
+          - Refused while the e-stop is latched. Nothing may start a motor
+            through the one button that exists to stop them.
+          - Refused in `routine` mode, where a routine is writing mechanisms —
+            possibly every tick — and a press would either be undone 20 ms later
+            or fight a state machine for an actuator. Switching to teleop is how
+            an operator takes a rover back, and that already stops the routine.
+          - Allowed in every other mode. Object-align and waypoint drive the
+            DRIVETRAIN; an operator lining up on a bucket still owns the intake.
+
+        Deliberately latching, with no expiry of its own. There is no release
+        edge to send — `ControllerReader` fires on press — and a preset is a
+        state, not a nudge, so "on" stays on until an "off" preset, a mode
+        change or the e-stop. A build that wants a mechanism to give up on its
+        own says so in the layout (`auto_stop_seconds`), which is one rule for
+        every caller instead of a timeout only button presses get.
+        """
+        name = str(msg.get("mech", ""))
+        preset = str(msg.get("preset", ""))
+
+        if self.manager.estop:
+            print("[Robot] preset refused: e-stop is latched")
+            return
+        if self.manager.mode == "routine":
+            print(f"[Robot] preset refused: a routine is running and owns the "
+                  f"mechanisms (switch to teleop to take {name!r} back)")
+            return
+
+        mech = self._registry.get(name)
+        if mech is None:
+            print(f"[Robot] preset refused: no mechanism named {name!r}")
+            return
+        apply_preset = getattr(mech, "apply_preset", None)
+        if apply_preset is None:
+            print(f"[Robot] preset refused: {name!r} is not a powered mechanism")
+            return
+        if not apply_preset(preset):
+            # Out loud, because this is where a binding typed against one rover
+            # and used on another lands, and the base station cannot catch it:
+            # it does not know what any rover carries.
+            print(f"[Robot] preset refused: {name!r} has no preset {preset!r}")
+            return
+        # A jog pending on this same mechanism would stop it mid-preset when its
+        # 0.4 s failsafe expired — the bench control and the button are two ways
+        # of moving one motor, and the last one asked wins.
+        if self._jog_mech == name:
+            self._jog_mech = ""
+        print(f"[Robot] {name} -> {preset}")
+
+    def _request_restart(self) -> None:
+        """Come back on a fresh process, asked for from the base station.
+
+        A layout only takes effect at start-up — actuators are built in the
+        constructor — so every hardware change used to end in an ssh session
+        with a rover that was, by then, usually somewhere inconvenient. This is
+        that ssh session, over the radio.
+
+        It ends the control loop rather than calling `systemctl` itself. The
+        loop's `finally` already parks the motors, the mechanisms and the
+        servos, which is the part that matters on a machine with wheels; a
+        `systemctl restart` issued from inside the unit would race that cleanup
+        against its own SIGTERM. Coming back is the supervisor's job, and
+        `run()` reports EXIT_RESTART so it does it.
+
+        REFUSED when nothing is supervising us, because then nothing would
+        bring the rover back and "restart" would mean "switch off until someone
+        walks over with a laptop". `INVOCATION_ID` is set by systemd for every
+        unit it starts and by nothing else, which makes it the honest test for
+        "will I be restarted?" — better than checking for a systemctl binary
+        that exists on a Pi whether or not this process is a service.
+        """
+        if not os.environ.get("INVOCATION_ID"):
+            print("[Robot] restart refused: not running under systemd, so "
+                  "nothing would start me again (try `just restart`)")
+            return
+        print("[Robot] restart requested; stopping cleanly")
+        self._restarting = True
+        self._running = False
+
     def _expire_jog(self) -> None:
         if not self._jog_mech:
             return
@@ -1004,7 +1114,13 @@ class Robot:
             self.fpv.start()
         self._running = True
 
-    def run(self) -> None:
+    def run(self) -> int:
+        """Drive until told to stop. Returns the process's exit status.
+
+        Zero for a signal or a plain stop; EXIT_RESTART when the base station
+        asked to be restarted, which is what makes the supervisor start a fresh
+        process instead of leaving the rover switched off.
+        """
         self.start()
         signal.signal(signal.SIGINT, self._on_signal)
         signal.signal(signal.SIGTERM, self._on_signal)
@@ -1057,6 +1173,9 @@ class Robot:
                     time.sleep(sleep_for)
         finally:
             self.shutdown()
+        # After shutdown, never instead of it: the motors coming to rest is not
+        # something an exit status gets to skip.
+        return EXIT_RESTART if self._restarting else 0
 
     def _on_signal(self, *_):
         self._running = False

@@ -608,6 +608,10 @@ export type Action =
   // Bench-test one mechanism. Refused by the robot unless it is in teleop with
   // no e-stop latched, and it expires on its own after 0.4 s.
   | { action: "jog"; robot_id: string; mech: string; actuator?: string; power: number }
+  // Restart the robot's service, so a saved layout takes effect without an ssh
+  // session. The robot stops cleanly — motors parked first — and its supervisor
+  // starts a fresh process; it refuses if nothing is supervising it.
+  | { action: "restart_robot"; robot_id: string }
   // Base-station settings + gamepad mapping. Local; no radio involved.
   | { action: "set_settings"; settings: Record<string, SettingValue> }
   // Named field positions. Local like set_settings — no radio, no robot: a

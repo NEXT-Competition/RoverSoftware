@@ -151,9 +151,13 @@ back naming the state or field that was wrong.
 > **A saved layout takes effect on the next start**
 >
 > Actuators are built by constructors; rebuilding them mid-loop with the
-> drivetrain armed is how an ESC ends up holding an undefined pulse. Run
-> `just restart`, `sudo systemctl restart roversoftware-robot`, or power-cycle
-> the rover.
+> drivetrain armed is how an ESC ends up holding an undefined pulse. Press
+> **Restart robot** at the top of this tab — it asks twice, then the rover
+> parks its motors, drops off the fleet for a few seconds and comes back
+> running the new layout. `just restart`, `sudo systemctl restart
+> roversoftware-robot` and a power cycle all still work, and are what you need
+> if the rover was started by hand rather than as a service: it refuses to stop
+> when nothing would start it again.
 
 Before you trust any of it, calibrate the ESCs —
 [Wiring and calibration](../reference/wiring.md) is the wheels-off-the-ground

@@ -323,6 +323,18 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # worse than one the robot rejects out loud.
             dispatch(rid, {"type": "select_routine", "id": name[len("routine:"):]})
             dispatch(rid, {"type": "mode", "mode": "routine"})
+        elif name.startswith("mech_preset:"):
+            # `mech_preset:<mechanism>:<preset>`. Both names are layout names,
+            # which validation constrains to [a-z][a-z0-9_]* (robot/layout.py),
+            # so the colon cannot appear inside either half.
+            #
+            # Neither name is checked here, for the reason the routine id above
+            # is not: a rover's layout lives on the rover. An unknown mechanism
+            # or preset is refused by the robot, out loud, which is where a
+            # binding made against one rover and used on another belongs.
+            mech, _, preset = name[len("mech_preset:"):].partition(":")
+            if mech and preset:
+                dispatch(rid, {"type": "mech_preset", "mech": mech, "preset": preset})
 
     if controller is not None:
         controller.on_drive = on_drive
@@ -414,6 +426,14 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # and the base station is the one that can be disconnected.
             dispatch(rid, {k: v for k, v in data.items() if k != "action"}
                      | {"type": action})
+        elif action == "restart_robot":
+            # Over the radio, not the WiFi bulk path every other piece of
+            # configuration takes: a rover worth restarting is often a rover
+            # whose WiFi is part of what is wrong with it, and this frame is
+            # twenty bytes. The robot decides whether it can honour it — it
+            # refuses when nothing is supervising it, since that would mean
+            # switching a rover off rather than restarting it.
+            dispatch(rid, {"type": "restart"})
         elif action == "jog":
             dispatch(rid, {"type": "jog", "mech": data.get("mech"),
                            "actuator": data.get("actuator"),

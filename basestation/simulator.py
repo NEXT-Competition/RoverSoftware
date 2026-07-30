@@ -109,6 +109,9 @@ class _SimRobot:
         self.layout_rev = 0
         self.routines_rev = 0
         self.jogging: Dict[str, float] = {}
+        # Wall-clock until which this rover is "rebooting" and says nothing.
+        # See SimulatedFleet._loop and the `restart` branch of send().
+        self.rebooting_until = 0.0
         self.routines: Dict[str, object] = {}
         self.engine = None
         self.mech_power: Dict[str, float] = {}
@@ -438,6 +441,12 @@ class SimulatedFleet:
             last = now
             with self._lock:
                 for r in self.robots.values():
+                    # A rebooting rover is silent, which is the whole of what an
+                    # operator sees when they press Restart: the card goes stale,
+                    # then comes back. Stepping it too would have it drive on
+                    # while it is supposedly down.
+                    if r.rebooting_until > now:
+                        continue
                     r.step(dt)
                     self.on_message(r.telemetry())
             time.sleep(period)
@@ -608,6 +617,39 @@ class SimulatedFleet:
             name = str(msg.get("mech", ""))
             if name in r.cfg.mechanisms:
                 r.mech_power[name] = _clamp(float(msg.get("power", 0)))
+            return
+        if t == "restart":
+            # What the rover does: park everything, go quiet, come back on a
+            # fresh process a few seconds later. RestartSec in the shipped unit
+            # is 3 s; the extra second is the boot the rover also has to do.
+            #
+            # The mode goes back to the configured start mode and the routine is
+            # dropped, because a new process has neither — an operator who
+            # restarts mid-routine and finds it still running would have learnt
+            # something untrue here.
+            r.left = r.right = 0.0
+            r.mech_power = {k: 0.0 for k in r.mech_power}
+            r.engine = None
+            r.estop = False
+            r.mode = r.cfg.start_mode
+            r.rebooting_until = time.monotonic() + 4.0
+            return
+        if t == "mech_preset":
+            # Same gates the rover applies (Robot._mech_preset), so a bound
+            # button behaves the same way with and without hardware: refused
+            # under an e-stop, refused while a routine owns the mechanisms.
+            if r.estop or r.mode == "routine":
+                return
+            name = str(msg.get("mech", ""))
+            mech = r.cfg.mechanisms.get(name)
+            if mech is None:
+                return
+            values = mech.presets.get(str(msg.get("preset", "")))
+            if values is None:
+                return
+            # One number per mechanism here, as _SimMech does: nothing moves, so
+            # the biggest actuator's value is what the fleet card has to show.
+            r.mech_power[name] = max(values.values(), key=abs) if values else 0.0
             return
         if t == "drive":
             if "left" in msg and "right" in msg:

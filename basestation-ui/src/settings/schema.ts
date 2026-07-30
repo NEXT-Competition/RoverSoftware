@@ -633,6 +633,25 @@ export const ROUTINE_BIND_SLOTS = Array.from({ length: ROUTINE_SLOTS }, (_, n) =
   label: `Routine slot ${n + 1}`,
 }));
 
+/** How many buttons may be bound to a mechanism preset. Mirrors
+ *  basestation/settings.py::MECH_SLOTS, which is the authority. */
+export const MECH_SLOTS = 4;
+
+/** The (button, mechanism, preset) triples, one per slot.
+ *
+ * Slots for the same reason routines get them — a preset is a named state in a
+ * ROVER's layout, and this process has no list of them. Both names are carried,
+ * because "out" alone does not say what moves: two mechanisms may each have a
+ * state by that name.
+ */
+export const MECH_BIND_SLOTS = Array.from({ length: MECH_SLOTS }, (_, n) => ({
+  slot: n + 1,
+  button: `controller.btn_mech_${n + 1}`,
+  mech: `controller.mech_${n + 1}`,
+  preset: `controller.preset_${n + 1}`,
+  label: `Mechanism slot ${n + 1}`,
+}));
+
 export const FEEL_FIELDS: Field[] = [
   f("controller.deadzone", "Dead zone", 0, 0.5, 0.005, {
     help: "Stick and trigger movement smaller than this reads as zero.",
@@ -663,6 +682,11 @@ const ALL_FIELDS: Field[] = [
   ...ROUTINE_BIND_SLOTS.flatMap((s) => [
     i(s.button, s.label, UNBOUND, 31),
     t(s.routine, `${s.label} — routine id`),
+  ]),
+  ...MECH_BIND_SLOTS.flatMap((s) => [
+    i(s.button, s.label, UNBOUND, 31),
+    t(s.mech, `${s.label} — mechanism`),
+    t(s.preset, `${s.label} — preset`),
   ]),
 ];
 

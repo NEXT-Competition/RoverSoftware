@@ -68,7 +68,30 @@ export function discardLayout(): void {
 
 export function refreshLayout(): void {
   const rid = targetRobot.value;
-  if (rid) send({ action: "get_layout", robot_id: rid });
+  if (rid) requestLayout(rid);
+}
+
+/** Ask one named robot for its layout.
+ *
+ * Separate from `refreshLayout` for the same reason `requestRoutines` is
+ * separate from `refreshRoutines`: the editor wants the rover being edited,
+ * while a page binding a gamepad wants whichever one it is aimed at, and those
+ * are allowed to differ (state/settings.ts::configTarget).
+ */
+export function requestLayout(robotId: string): void {
+  send({ action: "get_layout", robot_id: robotId });
+}
+
+/** The mechanisms a robot is carrying, as its saved layout declares them.
+ *
+ * Read off the document the ROBOT answered with rather than through `layout`
+ * above, which prefers the local draft: a binding must name a mechanism and a
+ * preset the rover actually has, not one half-typed in the Hardware tab and
+ * never saved. The built-in launcher is deliberately absent — it is a pulse
+ * mechanism with no presets to bind. */
+export function mechanismsOn(robotId: string | null): MechanismSpec[] {
+  if (!robotId) return [];
+  return robotDocuments.value[robotId]?.layout?.mechanisms ?? [];
 }
 
 export function saveLayout(): void {
@@ -84,6 +107,18 @@ export function saveLayout(): void {
 /** Called when a save comes back clean, from the Hardware tab's effect. */
 export function layoutAccepted(): void {
   discardLayout();
+}
+
+/** Restart the robot's service, so a saved layout takes effect.
+ *
+ * The other half of "actuators are built at start-up": until now every hardware
+ * change ended in an ssh session with a rover that was, by then, usually
+ * somewhere inconvenient. The robot refuses this if nothing is supervising it —
+ * it will not switch itself off — so the honest report of what happened is the
+ * rover dropping off the fleet list for a few seconds and coming back.
+ */
+export function restartRobot(robotId: string): void {
+  send({ action: "restart_robot", robot_id: robotId });
 }
 
 // --- drivetrain --------------------------------------------------------------

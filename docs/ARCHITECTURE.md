@@ -1177,6 +1177,75 @@ that before it has more routines than that.
 > which is no better when the burst is a motor. This fixed the on-screen and
 > voice paths too — the pad was just the first thing to make it obvious.
 
+**Mechanism presets on buttons.** The same slot shape, for the same reason, one
+layer along: a preset is a named whole-mechanism state (`intake -> in`) declared
+in a *rover's layout*, and this process holds no copy of any layout. So
+`MECH_SLOTS` (4) slots each carry a `(btn_mech_N, mech_N, preset_N)` **triple**
+— both names, because "out" alone does not say what moves when two mechanisms
+each have a state by that name — and a filled slot emits
+`mech_preset:<mech>:<preset>`. Layout validation constrains both names to
+`[a-z][a-z0-9_]*`, so the colon cannot appear inside either half of the action
+name. Until now the only things that could ask for a preset were a routine and
+the Hardware tab's jog controls, neither of which is a thumb while somebody is
+driving.
+
+`Robot._mech_preset` handles the frame beside `_jog` and past the active
+controller, for the reason config is handled there: this is the operator asking
+a mechanism for a state, not an instruction to whatever is currently driving. It
+is refused while the e-stop is latched — nothing may start a motor through the
+one button that exists to stop them — and refused in `routine` mode, where a
+routine is writing mechanisms, possibly every tick, so honouring a press would
+either be undone 20 ms later or fight a state machine for an actuator (switching
+to teleop is how an operator takes a rover back, and that already ends the
+routine). Every other mode is allowed: object-align and waypoint drive the
+*drivetrain*, and an operator lining up on a bucket still owns the intake.
+
+The binding **latches**, deliberately and with no expiry of its own.
+`ControllerReader` fires on the press edge, so there is no release to send, and
+a preset is a state rather than a nudge — which is why an intake wants two
+buttons, `in` and `out`. A build that wants a mechanism to give up on its own
+says so once in its layout (`auto_stop_seconds`), which every caller then gets,
+rather than a timeout that only button presses have. A preset does clear a
+pending `jog` on the same mechanism, or that jog's 0.4 s failsafe would stop a
+motor a button had just deliberately started.
+
+> **Two actions on one button.** `_edge` *records* a press as it tests it, so
+> asking it twice about the same button within a tick answers False the second
+> time. The reader used to call it once per `(index, action)` pair, which meant
+> a button carrying two actions ran only whichever `actions()` listed first —
+> and `actions()` order is an implementation detail of a dataclass, not a
+> promise. Nobody noticed while every binding had its own button; the first
+> mechanism preset bound onto the cross that already clears the e-stop cleared
+> the e-stop and never touched the intake, with the settings page showing the
+> button as bound to the preset. `_fire_actions` now samples every edge first
+> and then dispatches, so sharing a button does what the mapping says it does.
+
+**Restarting a rover from the base station.** A layout takes effect at start-up
+and nowhere else, so every hardware change used to end in an ssh session with a
+rover that was, by then, on a field or on blocks. `{"type": "restart"}` closes
+that loop: `Robot._request_restart` sets a flag and drops out of the control
+loop, whose `finally` already parks the motors, the mechanisms and the servos.
+
+It does **not** shell out to `systemctl`. A restart issued from inside the unit
+races its own SIGTERM against that cleanup, and the part that matters on a
+machine with wheels is that the machine is safe before the process ends. Coming
+back is the supervisor's job: `run()` returns `EXIT_RESTART` and `run_robot.py`
+exits with it. That status is non-zero **on purpose** — the shipped unit says
+`Restart=on-failure`, which would leave a process that exited 0 dead, and the
+rovers in the field are running whatever unit came with their `.deb` while
+`just sync` pushes only Python. A restart that needed a new unit file would be
+a restart that switched a rover off.
+
+The refusal is the other half. `INVOCATION_ID` is set by systemd for every unit
+it starts and by nothing else, so a robot started by hand on a bench knows that
+nothing would start it again and says so instead of going dark. The base station
+cannot know that in advance — which is also why the frame goes out over the
+*radio* rather than the WiFi bulk path the rest of configuration takes: a rover
+worth restarting is often one whose WiFi is part of what is wrong with it. The
+simulator models the whole thing (park, four seconds of silence, back in the
+start mode with no routine running), so the button is learnable without
+hardware.
+
 Analog triggers arm before they steer: SDL scales a trigger to -1 released /
 +1 pulled, but some drivers report a flat `0.0` for a trigger untouched since
 the joystick opened — which rescales to *half throttle*. `Trigger` therefore

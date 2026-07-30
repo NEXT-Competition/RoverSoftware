@@ -44,3 +44,11 @@ replaces editing constants and restarting a service.
 Beyond driving, the mapped pad can e-stop, clear, switch mode, and arm or fire
 the launcher. All of it is remappable on the same page, and all of it goes
 through the same whitelist a spoken order does.
+
+Two things you write yourself go on buttons too, in slots further down that
+page: a **routine**, and a **mechanism preset** — the named states from
+[Hardware](hardware.md), so `intake → in` is a thumb rather than a trip to
+another tab. A preset latches until something else changes it, so a mechanism
+you drive both ways wants two buttons (`in` and `out`); give it an auto-stop in
+Hardware if it should also give up on its own. Presses are ignored while a
+routine is running, which owns the mechanisms until you switch back to teleop.

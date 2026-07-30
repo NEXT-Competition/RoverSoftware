@@ -22,6 +22,8 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 {"type": "routine_cmd", "cmd": "start", "to": "rover1"}              // start | stop | restart
 {"type": "routine_event", "name": "go", "to": "rover1"}              // advance a "when I press" transition
 {"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}      // bench test, teleop only
+{"type": "mech_preset", "mech": "intake", "preset": "in", "to": "rover1"}  // a named state, from a bound button
+{"type": "restart", "to": "rover1"}                                  // stop cleanly; systemd starts a fresh process
 
 // WiFi: the one config path that must work with NO WiFi, so it may ride the radio
 {"type": "get_wifi", "to": "rover1"}                                 // what network am I on

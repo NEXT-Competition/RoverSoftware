@@ -298,3 +298,78 @@ def test_mechanism_state_reaches_telemetry(rover):
     rover.mechanisms["intake"].apply_preset("in")
     telemetry = rover._telemetry(DriveCommand.stopped())
     assert telemetry["mech"]["intake"]["values"]["roller"] == 1.0
+
+
+# --- presets asked for from the base station --------------------------------
+#
+# A bound gamepad button sends {"type": "mech_preset"} (basestation/app.py::
+# on_action). The rules are the mechanism's own, and the ones worth pinning down
+# are the refusals: this is a new way to start a motor with a thumb, so it must
+# not become a way around the e-stop, and it must not silently fight a routine.
+
+def preset(rover, mech="intake", name="in"):
+    rover._inbox.put({"type": "mech_preset", "mech": mech, "preset": name})
+    rover._drain_inbox()
+
+
+def test_a_preset_message_drives_the_mechanism(rover):
+    preset(rover)
+    assert rover.mechanisms["intake"].motors["roller"].throttle == 1.0
+    assert rover.mechanisms["intake"].motors["belt"].throttle == 0.8
+
+
+def test_a_second_preset_replaces_the_first(rover):
+    """What makes two buttons enough for an intake: there is no release edge to
+    send, so "out" is how "in" ends."""
+    preset(rover, name="in")
+    preset(rover, name="out")
+    assert rover.mechanisms["intake"].motors["roller"].throttle == -1.0
+
+
+def test_a_preset_is_refused_while_the_estop_is_latched(rover):
+    """The one button that exists to stop motors is not something another
+    button may talk over."""
+    rover._inbox.put({"type": "estop"})
+    rover._drain_inbox()
+    rover._apply_estop()
+    preset(rover)
+    assert rover.mechanisms["intake"].motors["roller"].throttle == 0.0
+
+
+def test_a_preset_is_refused_while_a_routine_is_running(rover):
+    """A routine writes mechanisms, possibly every tick, so honouring the press
+    would either be undone 20 ms later or fight a state machine for an actuator.
+    Switching to teleop is how an operator takes the rover back."""
+    rover.manager.set_mode("routine")
+    preset(rover)
+    assert rover.mechanisms["intake"].motors["roller"].throttle == 0.0
+
+
+def test_a_preset_works_in_the_assisted_driving_modes(rover):
+    """Object-align drives the DRIVETRAIN. An operator lining up on a bucket
+    still owns the intake, and a button that died in one mode would read as
+    broken hardware."""
+    rover.manager.set_mode("object_align")
+    preset(rover)
+    assert rover.mechanisms["intake"].motors["roller"].throttle == 1.0
+
+
+def test_an_unknown_mechanism_or_preset_changes_nothing(rover):
+    """Where a binding made against another rover lands: the base station holds
+    no copy of a layout, so this is the only place the mistake can be caught."""
+    preset(rover, mech="ghost")
+    preset(rover, name="sideways")
+    assert rover.mechanisms["intake"].motors["roller"].throttle == 0.0
+
+
+def test_a_preset_outlives_a_jog_on_the_same_mechanism(rover):
+    """The bench control and the button are two ways of moving one motor, and
+    the last one asked wins. Without this the jog's 0.4 s failsafe would stop a
+    mechanism a button had just deliberately started."""
+    rover._inbox.put({"type": "jog", "mech": "intake", "actuator": "roller",
+                      "power": 0.2})
+    rover._drain_inbox()
+    preset(rover)
+    rover._jog_until = 0.0  # the failsafe's deadline, long past
+    rover._expire_jog()
+    assert rover.mechanisms["intake"].motors["roller"].throttle == 1.0

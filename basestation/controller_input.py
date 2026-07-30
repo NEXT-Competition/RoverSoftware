@@ -169,6 +169,26 @@ class ControllerReader:
         self._prev[idx] = cur
         return bool(cur and not was)
 
+    def _fire_actions(self, m: ControllerMapping) -> None:
+        """Run every action whose button was just pressed.
+
+        Edges are sampled ONCE per button, before anything is dispatched, and
+        that is the whole point of this being a method. `_edge` *records* the
+        press as it tests it, so asking it twice about one button within a tick
+        answers False the second time — which meant a button carrying two
+        actions only ever ran whichever `actions()` listed first, and the other
+        binding was silently dead. Sharing a button is legal and is exactly what
+        an operator does by accident when they bind a mechanism preset onto the
+        cross that already clears the e-stop; nothing on the settings page could
+        have told them the second one would never fire.
+        """
+        pressed = {idx for idx in {i for i, _ in m.actions()} if self._edge(idx)}
+        if not self.on_action:
+            return
+        for idx, name in m.actions():
+            if idx in pressed:
+                self.on_action(name)
+
     def _axis(self, idx: int, naxes: int) -> float:
         return self._js.get_axis(idx) if (0 <= idx < naxes) else 0.0
 
@@ -205,9 +225,7 @@ class ControllerReader:
                     steer = -steer
                 if self.on_drive:
                     self.on_drive(_clamp1(throttle), _clamp1(steer))
-                for idx, name in m.actions():
-                    if self._edge(idx) and self.on_action:
-                        self.on_action(name)
+                self._fire_actions(m)
             except Exception as e:
                 print(f"[controller] error: {e}")
                 self._js = None

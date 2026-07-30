@@ -207,6 +207,93 @@ def test_jog_is_refused_outside_teleop(sim):
     assert sim.robots["rover1"].mech_power.get("intake", 0.0) == 0.0
 
 
+# --- presets from a bound button ---------------------------------------------
+#
+# Same gates as the rover applies (Robot._mech_preset), so somebody binding a
+# button against the simulator learns the real behaviour rather than a friendlier
+# one that only exists here.
+
+def test_a_preset_moves_a_mechanism(sim):
+    put(sim, LAYOUT, "put_layout")
+    sim.send({"type": "mech_preset", "mech": "intake", "preset": "in",
+              "to": "rover1"})
+    assert sim.robots["rover1"].mech_power["intake"] == pytest.approx(1.0)
+
+
+def test_a_preset_is_refused_while_e_stopped(sim):
+    put(sim, LAYOUT, "put_layout")
+    sim.send({"type": "estop", "to": "rover1"})
+    sim.send({"type": "mech_preset", "mech": "intake", "preset": "in",
+              "to": "rover1"})
+    assert sim.robots["rover1"].mech_power.get("intake", 0.0) == 0.0
+
+
+def test_a_preset_is_refused_while_a_routine_is_running(sim):
+    put(sim, LAYOUT, "put_layout")
+    put(sim, ROUTINE, "put_routines")
+    sim.send({"type": "mode", "mode": "routine", "to": "rover1"})
+    sim.robots["rover1"].mech_power["intake"] = 0.0  # whatever the routine set
+    sim.send({"type": "mech_preset", "mech": "intake", "preset": "in",
+              "to": "rover1"})
+    assert sim.robots["rover1"].mech_power["intake"] == 0.0
+
+
+def test_a_preset_still_works_outside_teleop(sim):
+    """Unlike a jog, which is a bench operation. Waypoint drives the DRIVETRAIN;
+    an operator watching a rover navigate still owns the intake."""
+    put(sim, LAYOUT, "put_layout")
+    sim.send({"type": "mode", "mode": "waypoint", "to": "rover1"})
+    sim.send({"type": "mech_preset", "mech": "intake", "preset": "in",
+              "to": "rover1"})
+    assert sim.robots["rover1"].mech_power["intake"] == pytest.approx(1.0)
+
+
+def test_an_unknown_preset_moves_nothing(sim):
+    put(sim, LAYOUT, "put_layout")
+    sim.send({"type": "mech_preset", "mech": "intake", "preset": "sideways",
+              "to": "rover1"})
+    sim.send({"type": "mech_preset", "mech": "ghost", "preset": "in",
+              "to": "rover1"})
+    assert sim.robots["rover1"].mech_power.get("intake", 0.0) == 0.0
+
+
+# --- restart -----------------------------------------------------------------
+
+def test_a_restart_parks_everything_and_goes_quiet(sim):
+    """What an operator sees is a card that goes stale and comes back; what
+    matters underneath is that nothing is left running while it is down."""
+    put(sim, LAYOUT, "put_layout")
+    robot = sim.robots["rover1"]
+    sim.send({"type": "mech_preset", "mech": "intake", "preset": "in",
+              "to": "rover1"})
+    robot.set_arcade(0.5, 0.0)
+    sim.send({"type": "restart", "to": "rover1"})
+    assert robot.mech_power["intake"] == 0.0
+    assert (robot.left, robot.right) == (0.0, 0.0)
+    assert robot.rebooting_until > 0
+
+
+def test_a_restart_drops_a_running_routine(sim):
+    """A fresh process has no routine. A simulator that kept one would teach an
+    operator something untrue about what the button does."""
+    put(sim, LAYOUT, "put_layout")
+    put(sim, ROUTINE, "put_routines")
+    sim.send({"type": "mode", "mode": "routine", "to": "rover1"})
+    sim.robots["rover1"].step(0.02)
+    sim.send({"type": "restart", "to": "rover1"})
+    assert sim.robots["rover1"].engine is None
+    assert sim.robots["rover1"].mode == sim.robots["rover1"].cfg.start_mode
+
+
+def test_a_restart_clears_a_latched_estop(sim):
+    """Not a policy choice — an e-stop latch lives in a process that just
+    ended. Worth a test because it is the one part of a restart that makes a
+    rover MORE ready to move than it was."""
+    sim.send({"type": "estop", "to": "rover1"})
+    sim.send({"type": "restart", "to": "rover1"})
+    assert sim.robots["rover1"].estop is False
+
+
 # --- the fleet cache ---------------------------------------------------------
 
 def test_the_fleet_reassembles_what_the_simulator_sends(sim):
