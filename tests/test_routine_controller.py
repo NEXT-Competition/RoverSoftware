@@ -743,3 +743,73 @@ def test_routines_survive_a_restart(rover, tmp_path):
     assert (tmp_path / "routines.json").exists()
     reborn = Robot(rover.cfg)
     assert "demo" in reborn.manager.controllers["routine"].routines
+
+
+# --- choosing a routine reaches past whatever is driving ---------------------
+#
+# `select_routine` used to be delivered like a drive command: ControlManager
+# hands anything it doesn't own to the ACTIVE controller, which in teleop is
+# TeleopController, which drops what it doesn't recognise. So the pair of
+# messages the UI sends to run a routine — select, then switch mode — lost the
+# select, and the mode switch started whichever routine had been selected
+# before. Pressing "collect" and watching "return home" drive off is the bug.
+#
+# Routing it in Robot._drain_inbox is the same treatment config and jog already
+# get, and for the same reason: it reaches past whoever is driving.
+
+TWO = {"version": 1, "routines": [
+    {"id": "alpha", "start": "a", "states": [
+        {"id": "a", "drive": {"mode": "manual", "throttle": 0.25}}]},
+    {"id": "beta", "start": "b", "states": [
+        {"id": "b", "drive": {"mode": "manual", "throttle": 0.75}}]},
+]}
+
+
+def test_choosing_from_another_mode_runs_the_one_that_was_chosen(rover):
+    put(rover, TWO)
+    deliver(rover, {"type": "mode", "mode": "teleop"})
+    # Exactly what state/routines.ts::startRoutine sends, in that order.
+    deliver(rover, {"type": "select_routine", "id": "beta"})
+    deliver(rover, {"type": "mode", "mode": "routine"})
+    running = rover.manager.controllers["routine"].engine
+    assert running is not None and running.routine.id == "beta"
+
+
+def test_choosing_a_routine_does_not_start_it(rover):
+    """Choosing must not drive. Entering routine mode is what starts it, which
+    is what keeps a mis-tap on the settings page from moving the machine."""
+    put(rover, TWO)
+    deliver(rover, {"type": "mode", "mode": "teleop"})
+    deliver(rover, {"type": "select_routine", "id": "beta"})
+    rc = rover.manager.controllers["routine"]
+    assert rc.selected == "beta"
+    assert rc.engine is None
+    assert rover.manager.mode == "teleop"
+
+
+def test_a_second_choice_while_running_switches_routine(rover):
+    """A rover already in routine mode gets only the select — the mode message
+    is a no-op there — so the select alone has to restart it."""
+    put(rover, TWO)
+    deliver(rover, {"type": "mode", "mode": "routine"})
+    deliver(rover, {"type": "select_routine", "id": "beta"})
+    deliver(rover, {"type": "mode", "mode": "routine"})
+    running = rover.manager.controllers["routine"].engine
+    assert running is not None and running.routine.id == "beta"
+
+
+def test_stopping_works_from_any_mode(rover):
+    put(rover, TWO)
+    deliver(rover, {"type": "mode", "mode": "routine"})
+    deliver(rover, {"type": "mode", "mode": "teleop"})
+    deliver(rover, {"type": "routine_cmd", "cmd": "stop"})
+    assert rover.manager.controllers["routine"].engine is None
+
+
+def test_an_unknown_routine_id_is_refused_not_substituted(rover):
+    """A binding can outlive the routine it names. Refusing leaves the old
+    selection alone; the alternative is running something nobody asked for."""
+    put(rover, TWO)
+    deliver(rover, {"type": "select_routine", "id": "alpha"})
+    deliver(rover, {"type": "select_routine", "id": "deleted"})
+    assert rover.manager.controllers["routine"].selected == "alpha"

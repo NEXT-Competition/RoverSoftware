@@ -2623,6 +2623,12 @@ kbd {
   min-width: 110px;
   text-align: right;
 }
+/* A routine slot has no label of its own — it is named by whatever is picked
+   into it — so the picker takes the place the other rows give their label. */
+.bind-routine {
+  flex: 1;
+  min-width: 0;
+}
 .bind-row.listening {
   box-shadow: inset 2px 0 0 var(--accent);
   padding-left: 10px;

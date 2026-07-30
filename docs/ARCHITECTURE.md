@@ -1144,6 +1144,39 @@ the settings page rather than an ssh session. The reader also publishes
 `state()`, the raw axes and buttons it currently sees, which is what lets that
 page offer "press the button you want" instead of asking for an index.
 
+**Routines on buttons.** Every other binding is a fixed field, because the
+action it fires ships with the build — there is exactly one E-STOP. Routines are
+the opposite: the operator writes them, names them, and keeps them on the
+*robot*, so the mapping instead carries `ROUTINE_SLOTS` (4) **slots**, each a
+`(btn_routine_N, routine_N)` pair of a button index and a routine id. A bound
+slot emits `routine:<id>` into the same action vocabulary as everything else,
+and `app.py::on_action` turns it into the two frames the driving view's routine
+buttons already send. A slot with only one half filled binds nothing — that is
+the state the settings page is in for as long as it takes to fill the other
+half, and either guess moves a machine nobody aimed.
+
+The id is **not** validated on the base station. It does not know which routines
+a rover carries, the rover may be switched off while somebody is editing
+bindings, and a binding that broke whenever a rover was off would be worse than
+one the robot rejects out loud (`RoutineController.select` refuses an unknown id
+and leaves the previous selection alone). Four slots because a flat whitelist of
+settings paths has to enumerate them, and a pad has fewer spare buttons than
+that before it has more routines than that.
+
+> **Why choosing a routine is routed past the active controller.** Running one
+> is choose-then-switch: `select_routine`, then `mode: routine`. `ControlManager`
+> hands anything it doesn't own to the *active* controller, so in teleop the
+> select reached `TeleopController`, which drops what it doesn't recognise — and
+> the mode switch that followed started whichever routine had been selected
+> **before**. Pressing one routine and watching another drive away is a bug you
+> can only find outdoors. `Robot._drain_inbox` now routes `select_routine` /
+> `routine_cmd` / `routine_event` straight to the routine controller, the same
+> treatment `set_config` and `jog` get and for the same reason: choosing what
+> runs next is not something the thing currently driving gets a vote on.
+> Sending the mode first would only have shortened the wrong run to a burst,
+> which is no better when the burst is a motor. This fixed the on-screen and
+> voice paths too — the pad was just the first thing to make it obvious.
+
 Analog triggers arm before they steer: SDL scales a trigger to -1 released /
 +1 pulled, but some drivers report a flat `0.0` for a trigger untouched since
 the joystick opened — which rescales to *half throttle*. `Trigger` therefore

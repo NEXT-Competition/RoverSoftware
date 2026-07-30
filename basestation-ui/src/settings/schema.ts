@@ -613,6 +613,26 @@ export const BUTTON_FIELDS: { path: string; label: string; help?: string }[] = [
   { path: "controller.btn_fire", label: "Fire" },
 ];
 
+/** How many buttons may be bound to a routine. Mirrors
+ *  basestation/settings.py::ROUTINE_SLOTS, which is the authority. */
+export const ROUTINE_SLOTS = 4;
+
+/** The (button, routine id) pairs, one per slot.
+ *
+ * Every binding above is a fixed field with a label written here, because the
+ * action it fires is part of the build. Routines are not: the operator writes
+ * them, names them, and keeps them on the ROBOT. So a slot has no label of its
+ * own — it is named by whichever routine gets picked into it — and the id is
+ * carried as text rather than an enum, because the list of valid ids belongs
+ * to a rover that may not be connected while somebody is editing bindings.
+ */
+export const ROUTINE_BIND_SLOTS = Array.from({ length: ROUTINE_SLOTS }, (_, n) => ({
+  slot: n + 1,
+  button: `controller.btn_routine_${n + 1}`,
+  routine: `controller.routine_${n + 1}`,
+  label: `Routine slot ${n + 1}`,
+}));
+
 export const FEEL_FIELDS: Field[] = [
   f("controller.deadzone", "Dead zone", 0, 0.5, 0.005, {
     help: "Stick and trigger movement smaller than this reads as zero.",
@@ -640,6 +660,10 @@ const ALL_FIELDS: Field[] = [
   ...BUTTON_FIELDS.map((btn) =>
     i(btn.path, btn.label, UNBOUND, 31, { help: btn.help })
   ),
+  ...ROUTINE_BIND_SLOTS.flatMap((s) => [
+    i(s.button, s.label, UNBOUND, 31),
+    t(s.routine, `${s.label} — routine id`),
+  ]),
 ];
 
 export const FIELD_BY_PATH: Record<string, Field> = Object.fromEntries(
