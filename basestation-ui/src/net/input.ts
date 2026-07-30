@@ -19,6 +19,20 @@
 // for a gamepad that is controller_input.py applying the saved mapping, and for
 // the touch pad it is `deadzone()` here. A second dead zone downstream would
 // silently swallow a lowered throttle authority.
+//
+// --- An idle pad says NOTHING, and that is load-bearing ---
+// While no thumb is down this loop sends no frames at all. It must not "just
+// keep commanding zero": the drive sender re-transmits every 250 ms to keep the
+// robot's command_timeout alive, so an idle browser doing that would interleave
+// throttle=0 at 4 Hz with the base station's held-trigger throttle=1 — both go
+// out through the same app.py::dispatch — and the rover lurches. Silence is the
+// only way for a browser with nothing to say to stay out of the gamepad's way.
+//
+// Silence is also safe, which is what makes it available: the robot stops on its
+// own when commands stop arriving (command_timeout), so releasing the pad does
+// not depend on a stop frame being delivered. We send one anyway, on the falling
+// edge, so the stop is immediate rather than a timeout away. The keepalive still
+// applies while a thumb IS down — a held stick must not look like a dead link.
 
 import { signal } from "@preact/signals";
 import { deadzone, makeDriveSender } from "./drive.ts";
@@ -28,14 +42,19 @@ export const padInput = signal<{ throttle: number; steer: number } | null>(null)
 
 const sender = makeDriveSender();
 let running = false;
+// Was a thumb down on the last tick? Drives the falling edge below.
+let engaged = false;
 
 function tick(): void {
   if (!running) return;
   const pad = padInput.value;
   if (pad) {
+    engaged = true;
     sender.update(deadzone(pad.throttle), deadzone(pad.steer));
-  } else {
-    sender.update(0, 0);
+  } else if (engaged) {
+    // Thumb just lifted: one hard zero, then silence.
+    engaged = false;
+    sender.release();
   }
   requestAnimationFrame(tick);
 }
@@ -49,5 +68,6 @@ export function startInputLoop(): void {
 /** Stop everything and command a hard zero (page hidden / unmount). */
 export function releaseDrive(): void {
   padInput.value = null;
+  engaged = false;
   sender.release();
 }
