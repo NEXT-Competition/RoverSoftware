@@ -17,12 +17,12 @@ pyserial>=3.5
 # needed (remove it if it was set for the old sensor). Strap PS0/PS1 for I2C mode.
 # Verify with tools/imu_selftest.py.
 #
-# Wheel encoders (robot/sensors/encoder.py) need a GPIO library, and WHICH one
-# depends on the Pi. Install exactly one; without either, encoders stay inert
-# and the drivetrain runs open-loop as it always did.
-#   pip install pigpio     # Pi 4 and older. Also: sudo systemctl enable --now pigpiod
-#   pip install lgpio      # Pi 5 / Bookworm. No daemon.
-# Both are Pi-only and so stay out of pyproject.toml, same as everything above.
+# Wheel encoders (robot/sensors/encoder.py) read the Fusion HAT's digital pins
+# through that same fusion_hat library — no extra package and no daemon. On a
+# Pi 5, fusion_hat wants `rpi.lgpio` in place of `RPi.GPIO`; that is part of
+# installing the HAT library, not a separate thing to remember here. Without
+# fusion_hat the encoders stay inert and the drivetrain runs open-loop, which is
+# the same fallback the motors take.
 # Verify with tools/encoder_monitor.py, which is also how you measure the
 # counts-per-rev the speed loop needs.
 
