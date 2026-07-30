@@ -496,6 +496,15 @@ class NavConfig:
             kp=0.008, ki=0.0, kd=0.006, out_limit=0.4, i_limit=50.0
         )
     )
+    # Report the active mode's closed loops in telemetry (setpoint, error,
+    # output, and the P/I/D split), so the dashboard can graph them while you
+    # turn the gains above.
+    #
+    # OFF by default, and that is not timidity: it is ~60 bytes per loop on
+    # every telemetry frame, on a 57600-baud radio that is also carrying
+    # driving. Switch it on to tune, off to race. It applies live, so switching
+    # it on costs a tap and no restart.
+    pid_trace: bool = False
 
 
 @dataclass

@@ -75,6 +75,13 @@ _CAMERA_RE = re.compile(
 )
 _CAMERA_BARE = ("camera", "fpv", "camera feed", "fpv feed", "video", "the camera")
 
+# Verbs that mean "run this routine". Longest first, same reason as _LEAD_INS.
+# Deliberately narrow: these are the words that only ever precede the name of
+# something to run, so "run collect" is certain in a way "do collect" is not.
+_RUN_VERBS = tuple(sorted((
+    "run", "start", "execute", "launch", "begin", "play", "perform",
+), key=len, reverse=True))
+
 
 def match(text: str, vocab: Vocabulary) -> Optional[Tuple[str, Dict[str, Any]]]:
     """Recognise a command without a model, or return None to fall through.
@@ -118,7 +125,19 @@ def match(text: str, vocab: Vocabulary) -> Optional[Tuple[str, Dict[str, Any]]]:
             return "show_camera", {"robot": who}
         return None
 
-    # 3. A bare rover name, or "switch to <rover>". Checked before modes so a
+    # 3. "run the collect routine". A verb the operator only ever says before
+    #    the name of something to run, plus a name that resolves against the
+    #    routines actually loaded on the rover being addressed — nothing else
+    #    can match this shape, so it does not need a model to disambiguate it.
+    #
+    #    Before the rover and mode rules: "start" is not a rover or a mode, and
+    #    a routine somebody named "waypoint" should still be reachable by the
+    #    sentence that names it explicitly.
+    named = _routine_named(said, vocab)
+    if named:
+        return "start_routine", named
+
+    # 4. A bare rover name, or "switch to <rover>". Checked before modes so a
     #    fleet with a rover named "auto" doesn't lose its own name to an alias.
     #
     #    Both the whole phrase and the lead-in-stripped one are tried, because a
@@ -128,13 +147,64 @@ def match(text: str, vocab: Vocabulary) -> Optional[Tuple[str, Dict[str, Any]]]:
         if vocab.resolve_robot(candidate):
             return "select_robot", {"robot": candidate}
 
-    # 4. A bare mode name. Only when the phrase resolves to a mode on its own —
+    # 5. A bare mode name. Only when the phrase resolves to a mode on its own —
     #    "align to the bucket" has an object in it and belongs to the model.
     for candidate in _candidates(said):
         if vocab.resolve_mode(candidate):
             return "set_mode", {"mode": candidate}
 
+    # 6. A routine's bare name, last of all, so it can never take a word off a
+    #    rover or a mode. A routine the operator programmed and named is a
+    #    button on their screen; saying its name should press it. Starting one
+    #    still needs a tap to confirm (intents.py), which is what makes it safe
+    #    to recognise a single word this way.
+    if vocab.resolve_routine(vocab.selected, said):
+        return "start_routine", {"routine": said}
+
     return None
+
+
+def _routine_named(said: str, vocab: Vocabulary) -> Optional[Dict[str, Any]]:
+    """The args for "run the collect routine", or None if that isn't what it is.
+
+    Carries what was SAID, not the resolved id: the executor re-resolves it
+    against the rover the intent finally lands on. It also carries the rover
+    whenever one was named, because an autonomous routine started on the wrong
+    machine is the worst thing this file could produce.
+
+    The rover goes before the verb — "rover2 run collect" — because "run
+    collect on rover2" puts a rover where a place name goes, and telling those
+    two apart is exactly the job the model exists for.
+    """
+    for rest, robot in _robot_prefixes(said, vocab):
+        for verb in _RUN_VERBS:
+            body = _strip_prefix(rest, verb)
+            if body is None:
+                continue
+            for article in ("the ", "a ", "an ", "my "):
+                if body.startswith(article):
+                    body = body[len(article):].strip()
+                    break
+            if not body:
+                return None  # "run the routine" — which one? Ask the model.
+            if vocab.resolve_routine(robot or vocab.selected, body):
+                return {"routine": body, **({"robot": robot} if robot else {})}
+    return None
+
+
+def _robot_prefixes(said: str, vocab: Vocabulary) -> Tuple[Tuple[str, Optional[str]], ...]:
+    """`(remainder, robot)` for the phrase as-is, and with a leading rover name
+    stripped off it. Literal first, so a rover is only assumed when the plain
+    reading found nothing."""
+    out: list = [(said, None)]
+    words = said.split()
+    for take in (2, 1):  # "rover 2 run collect", then "rover2 run collect"
+        if len(words) > take:
+            rid = vocab.resolve_robot(" ".join(words[:take]))
+            if rid and rid != "*":
+                out.append((" ".join(words[take:]), rid))
+                break
+    return tuple(out)
 
 
 def _candidates(said: str) -> Tuple[str, ...]:

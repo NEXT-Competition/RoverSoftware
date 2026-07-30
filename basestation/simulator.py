@@ -22,11 +22,12 @@ from __future__ import annotations
 import math
 import threading
 import time
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from robot import layout, tuning
 from robot.comms.doc_transfer import Reassembler, split
-from robot.config import RobotConfig
+from robot.config import PIDConfig, RobotConfig
+from robot.control.pid import PID
 from robot.control.waypoint import bearing_deg, haversine_m
 from robot.routine import schema as routine_schema
 from robot.routine import store as routine_store
@@ -44,6 +45,26 @@ M_PER_DEG_LAT = 111_320.0
 
 def _clamp(v, lo=-1.0, hi=1.0):
     return lo if v < lo else hi if v > hi else v
+
+
+# A venue's worth of fake access points, and the one password that works. Not
+# secrets — the simulator has no network to protect; they exist so the Network
+# page can be tried, including its failure paths, before a competition.
+_SIM_NETWORKS = (
+    {"ssid": "Venue-Guest", "signal": 82, "secure": True},
+    {"ssid": "PitCrew", "signal": 64, "secure": True},
+    {"ssid": "FreeWiFi", "signal": 47, "secure": False},
+    {"ssid": "hotspot-5G", "signal": 29, "secure": True},
+)
+_SIM_PASSWORD = "letmein"
+
+
+def _retune_pid(pid: PID, cfg: PIDConfig) -> None:
+    """Copy gains onto the live loop without touching its integrator — the same
+    rule as robot.py::_retune, so a gain typed in Settings nudges the fake rover
+    instead of making it forget where it was pointing."""
+    pid.kp, pid.ki, pid.kd = cfg.kp, cfg.ki, cfg.kd
+    pid.out_limit, pid.i_limit = cfg.out_limit, cfg.i_limit
 
 
 class _SimRobot:
@@ -68,6 +89,21 @@ class _SimRobot:
         self.engine = None
         self.mech_power: Dict[str, float] = {}
         self._events: set = set()
+        # The heading loop, the real one. A fake rover always knows its own
+        # heading exactly, so this is always the absolute-heading loop
+        # (nav.heading_pid) and never the GPS-course one.
+        self.heading_pid = PID(**vars(self.cfg.nav.heading_pid))
+        self._bearing: Optional[float] = None
+        # Which fake network this fake Pi has joined. None = not on WiFi, which
+        # is the state the Network page exists to get a rover out of.
+        self.wifi_ssid: Optional[str] = None
+
+    def wifi_ip(self) -> Optional[str]:
+        """An address once joined, and none before — the thing an operator
+        actually looks at to know whether it worked."""
+        if not self.wifi_ssid:
+            return None
+        return f"192.168.4.{20 + int(self.rid[-1]) if self.rid[-1].isdigit() else 20}"
 
     def _limit(self, value: float, motor) -> float:
         """Apply one motor's dead band and direction caps, as ESCMotor does."""
@@ -113,7 +149,7 @@ class _SimRobot:
         self.left = self._limit(throttle + steer, self._first(drive.roles.left))
         self.right = self._limit(throttle - steer, self._first(drive.roles.right))
 
-    def _auto_waypoint(self) -> None:
+    def _auto_waypoint(self, dt: float = 0.02) -> None:
         if self.wp_idx >= len(self.waypoints):
             self.left = self.right = 0.0
             return
@@ -122,9 +158,21 @@ class _SimRobot:
         if haversine_m(self.lat, self.lon, tlat, tlon) <= nav.arrive_radius_m:
             self.wp_idx += 1
             self.left = self.right = 0.0
+            # A new leg gets a clean loop, as WaypointController does: the
+            # integral wound up chasing the last bearing means nothing about the
+            # next one.
+            self.heading_pid.reset()
+            self._bearing = None
             return
-        err = (bearing_deg(self.lat, self.lon, tlat, tlon) - self.heading + 540) % 360 - 180
-        steer = _clamp(err / 45.0)
+        bearing = bearing_deg(self.lat, self.lon, tlat, tlon)
+        err = (bearing - self.heading + 540) % 360 - 180
+        # The REAL PID with this rover's own gains, not a hand-rolled
+        # proportional law. Two reasons, and the second is the one that matters:
+        # turning a gain in Settings changes how the fake rover drives, which is
+        # what makes the tuning graphs testable without owning a robot.
+        _retune_pid(self.heading_pid, nav.heading_pid)
+        steer = self.heading_pid.update(err, dt)
+        self._bearing = bearing
         # Point-then-go, like the real controller: pivot while badly off bearing.
         if abs(err) > nav.pivot_threshold_deg:
             self.set_arcade(0.0, steer)
@@ -185,7 +233,7 @@ class _SimRobot:
         self.engine = RoutineEngine(routine, self._routine_ctx(), self.cfg.routines)
         self.engine.start()
 
-    def _run_routine(self) -> None:
+    def _run_routine(self, dt: float = 0.02) -> None:
         if self.engine is None:
             self.left = self.right = 0.0
             return
@@ -208,7 +256,7 @@ class _SimRobot:
         if state.drive_source == "manual":
             self.set_arcade(state.drive_throttle, state.drive_steer)
         elif state.drive_controller == "waypoint":
-            self._auto_waypoint()
+            self._auto_waypoint(dt)
         else:
             self.left = self.right = 0.0
 
@@ -220,9 +268,9 @@ class _SimRobot:
                 self.engine.stop("e-stopped")
                 self.engine = None
         elif self.mode == "waypoint":
-            self._auto_waypoint()
+            self._auto_waypoint(dt)
         elif self.mode == "routine":
-            self._run_routine()
+            self._run_routine(dt)
 
         v = (self.left + self.right) / 2.0 * V_MAX
         turn = (self.left - self.right) / 2.0  # +ve => clockwise (heading increases)
@@ -249,6 +297,12 @@ class _SimRobot:
         if self.mode == "routine":
             t["routine"] = (self.engine.status() if self.engine is not None
                             else {"id": None, "state": None, "done": True})
+        # The heading loop, on the same switch and in the same shape the rover
+        # uses (robot/robot.py::_telemetry) — keyed by the loop's tuning path,
+        # and only while a loop is actually steering.
+        if self.cfg.nav.pid_trace and self._bearing is not None:
+            t["pid"] = {"nav.heading_pid": self.heading_pid.trace(
+                setpoint=self._bearing, measured=self.heading)}
         return t
 
 
@@ -310,6 +364,52 @@ class SimulatedFleet:
         for frame in split(doc, mtype, r.rid, txid=f"{mtype}-{extra.get('rev', 0)}",
                            **extra):
             self.on_message(frame)
+
+    def _wifi(self, r: _SimRobot, mtype: str, msg: dict) -> None:
+        """A fake Pi's WiFi, in the shapes robot/comms/wifi.py returns.
+
+        Here rather than left unimplemented because the Network page is exactly
+        the kind of thing you want to have already used once before you are
+        standing in a venue with a rover that is not on the network. The fake
+        refuses a wrong password and forgets a profile, because those are the two
+        paths whose UI is worth having tried.
+        """
+        if mtype == "scan_wifi":
+            self.on_message({"type": "wifi", "from": r.rid, "ok": True,
+                             "networks": list(_SIM_NETWORKS)})
+            return
+        if mtype == "forget_wifi":
+            name = str(msg.get("ssid") or "")
+            if r.wifi_ssid == name:
+                r.wifi_ssid = None
+            self.on_message({"type": "wifi", "from": r.rid, "ok": True,
+                             "forgot": name, "ssid": r.wifi_ssid,
+                             "ip": r.wifi_ip()})
+            return
+        if mtype == "set_wifi":
+            ssid = str(msg.get("ssid") or "")
+            known = next((n for n in _SIM_NETWORKS if n["ssid"] == ssid), None)
+            if known is None:
+                self.on_message({"type": "wifi", "from": r.rid, "ok": False,
+                                 "error": f"No network with SSID {ssid!r} found.",
+                                 "ssid": r.wifi_ssid, "ip": r.wifi_ip()})
+                return
+            if known["secure"] and str(msg.get("psk") or "") != _SIM_PASSWORD:
+                # What nmcli actually says, because the copy in the UI is only
+                # as good as the string it is given to show.
+                self.on_message({"type": "wifi", "from": r.rid, "ok": False,
+                                 "error": "Secrets were required, but not provided.",
+                                 "ssid": r.wifi_ssid, "ip": r.wifi_ip()})
+                return
+            r.wifi_ssid = ssid
+            self.on_message({"type": "wifi", "from": r.rid, "ok": True,
+                             "ssid": ssid, "ip": r.wifi_ip(),
+                             "signal": known["signal"]})
+            return
+        self.on_message({"type": "wifi", "from": r.rid, "ok": True,
+                         "managed": True, "device": "wlan0",
+                         "ssid": r.wifi_ssid, "ip": r.wifi_ip(),
+                         "signal": 71 if r.wifi_ssid else None})
 
     def _receive_doc(self, r: _SimRobot, mtype: str, msg: dict) -> None:
         rx = self._rx.setdefault(r.rid, {}).setdefault(mtype, Reassembler())
@@ -383,6 +483,9 @@ class SimulatedFleet:
         if t in ("put_layout", "put_routines"):
             self._receive_doc(r, t, msg)
             return
+        if t in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
+            self._wifi(r, t, msg)
+            return
         if t == "select_routine":
             r.start_routine(str(msg.get("id", "")))
             return
@@ -415,6 +518,11 @@ class SimulatedFleet:
             previous, r.mode = r.mode, msg.get("mode", r.mode)
             if r.mode not in ("waypoint", "routine"):
                 r.left = r.right = 0.0
+                # No loop is steering any more, so stop reporting one. A frozen
+                # trace left on screen is a graph that lies about what the rover
+                # is doing.
+                r._bearing = None
+                r.heading_pid.reset()
             if r.mode == "routine" and previous != "routine":
                 r.start_routine()
             elif previous == "routine" and r.mode != "routine":

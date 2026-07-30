@@ -15,6 +15,7 @@ from .config import PIDConfig, RobotConfig
 from .comms.doc_transfer import Reassembler, split
 from .comms.ip_link import IPLink
 from .comms.xbee_link import XBeeLink
+from .comms import wifi
 from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
@@ -179,6 +180,10 @@ class Robot:
             if config.comms.base_host else None
         )
         self._running = False
+        # One WiFi request at a time (see _wifi_command). Plain bool rather than
+        # a lock: only the inbox drain sets it True, and only the worker clears
+        # it, so there is no window where two threads could both claim it.
+        self._wifi_busy = False
 
         # Adafruit Ultimate GPS feeds waypoint navigation, position telemetry and
         # the track-angle heading. Reads on its own thread; pose() is a cheap
@@ -298,6 +303,11 @@ class Robot:
             if self.pose_provider is not None:
                 self.routine_controller.set_pose_provider(self.pose_provider)
             self.routine_controller.set_estop_provider(lambda: self.manager.estop)
+            # What a state aligns to. The config object, shared by reference
+            # with the detector, so a state's target takes effect on the frame
+            # after it is set and is put back when the state is left.
+            if config.vision.enabled:
+                self.routine_controller.set_vision_config(config.vision)
         # Documents the base station has saved on this robot. A layout needs a
         # restart to take effect, so it is loaded in run_robot.py before the
         # hardware is built; routines are just data, so they load here.
@@ -363,6 +373,11 @@ class Robot:
                 self._send_doc("routines", self._routine_doc, self._routine_rev)
             elif mtype in ("put_layout", "put_routines"):
                 self._receive_doc(mtype, msg)
+            # WiFi. Handled here for the same reason config is — it reaches past
+            # every controller — and worked off-thread because nmcli blocks for
+            # seconds (see _wifi_task).
+            elif mtype in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
+                self._wifi_command(msg)
             elif mtype == "jog":
                 self._jog(msg)
             else:
@@ -480,6 +495,96 @@ class Robot:
         self._queue(self._config_frame(
             applied, rejected=rejected, restart=restart, save_error=error),
             radio_ok=bootstrap)
+
+    # --- WiFi ---------------------------------------------------------------
+
+    def _wifi_command(self, msg: dict) -> None:
+        """Run one WiFi request on a worker thread and report the result.
+
+        Off-thread without exception. `nmcli device wifi connect` takes seconds
+        — association, then a DHCP lease — and a scan with `--rescan yes` takes
+        a few more. Any of that inside the control loop stops the drivetrain
+        being commanded for long enough to trip the teleop failsafe, which on a
+        moving rover means it coasts to a halt mid-manoeuvre because somebody
+        pressed a button on a settings page.
+
+        One at a time: two overlapping `connect` calls would fight over the same
+        interface, and the second answer would describe a state the first one was
+        still changing.
+        """
+        if self._wifi_busy:
+            self._queue(self._wifi_frame(
+                {"ok": False, "error": "still working on the last WiFi request"}),
+                radio_ok=True)
+            return
+        self._wifi_busy = True
+        threading.Thread(target=self._wifi_task, args=(msg,),
+                         name="wifi", daemon=True).start()
+
+    def _wifi_task(self, msg: dict) -> None:
+        mtype = msg.get("type")
+        try:
+            if mtype == "scan_wifi":
+                result = wifi.scan()
+                result["networks"] = result.get("networks") or []
+            elif mtype == "set_wifi":
+                # The country first, when one was given: with no regulatory
+                # domain set, a Pi has 5 GHz soft-blocked, so the network the
+                # operator is standing next to is simply missing from the scan.
+                country_error = None
+                if msg.get("country"):
+                    country_error = wifi.set_country(str(msg["country"]))
+                result = wifi.connect(str(msg.get("ssid") or ""),
+                                      str(msg.get("psk") or ""),
+                                      bool(msg.get("hidden")))
+                if country_error and result.get("ok"):
+                    result["error"] = country_error
+            elif mtype == "forget_wifi":
+                result = wifi.forget(str(msg.get("ssid") or ""))
+                result.update({k: v for k, v in wifi.status().items()
+                               if k in ("ssid", "ip", "signal")})
+            else:
+                result = wifi.status()
+        except Exception as e:  # nothing about a WiFi button may take a robot down
+            result = {"ok": False, "error": str(e)}
+        finally:
+            self._wifi_busy = False
+        # radio_ok, and this is the entire point of the feature: a rover that
+        # just failed to join a network has no WiFi to answer over, and a rover
+        # that succeeded has just changed which one it is on. Either way the
+        # answer goes by radio — it is one small frame, asked for by hand.
+        self._queue(self._wifi_frame(result), radio_ok=True)
+        # A successful join usually means a new address on the base station's
+        # network, so re-dial the bulk link rather than waiting for a restart.
+        if result.get("ok") and mtype == "set_wifi":
+            self._redial_ip_link()
+
+    def _wifi_frame(self, result: dict) -> dict:
+        """The reply. Never carries a credential — only what a scanner standing
+        next to the rover could see anyway."""
+        return {"type": "wifi", "from": self.cfg.robot_id,
+                **{k: v for k, v in result.items() if k != "psk"}}
+
+    def _redial_ip_link(self) -> None:
+        """Rebuild the bulk link on the same address after the network changed.
+
+        `_retarget_ip_link` returns early when the address is unchanged, which is
+        correct for a config edit and wrong here: the address is the same, the
+        network underneath it is not, and the old socket is dead.
+        """
+        old, self.ip_link = self.ip_link, None
+        host, port = self.cfg.comms.base_host, self.cfg.comms.base_port
+
+        def swap() -> None:
+            if old is not None:
+                old.stop()
+            if not host:
+                return
+            link = IPLink(host, port, self._inbox.put, self.cfg.robot_id)
+            link.start()
+            self.ip_link = link
+
+        threading.Thread(target=swap, name="ip-redial", daemon=True).start()
 
     def _retarget_ip_link(self) -> None:
         """Re-dial the bulk link after comms.base_host/base_port changed.
@@ -792,6 +897,18 @@ class Robot:
         # state highlight that lags by a second is worse than none.
         if isinstance(active, RoutineController):
             t["routine"] = active.status()
+        # Whatever closed loops the active mode is running: setpoint, error,
+        # output and the P/I/D split, so a gain can be tuned against a picture
+        # of what it did rather than by watching the rover and guessing.
+        #
+        # Only the ACTIVE controller, only loops it is actually stepping, and
+        # only while `nav.pid_trace` is on. It is off by default: this is ~60
+        # bytes per loop per frame on a radio shared with driving, and a graph
+        # nobody is looking at is not worth the airtime a graph costs.
+        if self.cfg.nav.pid_trace:
+            traces = active.pid_traces() if active is not None else {}
+            if traces:
+                t["pid"] = traces
         return t
 
     def start(self) -> None:

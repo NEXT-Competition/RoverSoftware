@@ -27,7 +27,7 @@ Two things are deliberately not forwarded:
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from ..config import RoutineConfig
 from ..routine.conditions import RoutineContext
@@ -54,6 +54,10 @@ class RoutineController(Controller):
         self.engine: Optional[RoutineEngine] = None
         self._delegate: Optional[Controller] = None
         self._active = False
+        # The detector's live config, if this build has vision, and the target
+        # label to put back when we are done borrowing it. See _apply_target.
+        self._vision: Optional[Any] = None
+        self._target_restore: Optional[str] = None
         self._ctx = RoutineContext(controllers=self.controllers,
                                    mechanisms=self.mechanisms,
                                    allow_arm=lambda: self.cfg.allow_arm)
@@ -65,6 +69,17 @@ class RoutineController(Controller):
 
     def set_estop_provider(self, provider) -> None:
         self._ctx.estop = provider
+
+    def set_vision_config(self, vision) -> None:
+        """The detector's live config, so a state can say what to align to.
+
+        The object itself, not a copy: the detector re-reads `target_label` on
+        every frame, which is what makes a change take effect on the run that is
+        already going rather than the next one. Optional — a build with no
+        camera has no vision config, and a routine that names a target on one
+        simply says so in the log instead of failing to load.
+        """
+        self._vision = vision
 
     def set_routines(self, routines: Dict[str, Routine]) -> None:
         """Install a freshly validated routine set.
@@ -180,6 +195,10 @@ class RoutineController(Controller):
             print(f"[routine] {self.engine.routine.id}: {reason}")
         self.engine = None
         self._release_delegate()
+        # Hand the detector's target back on every exit path — finished,
+        # stopped, timed out, e-stopped, or the mode switched out from under it.
+        # This is the only place that is guaranteed to run for all of them.
+        self._restore_target()
         # Mechanisms are stopped whatever the reason. A routine that ends with
         # an intake still spinning is a routine that ended unsafely; Robot's
         # e-stop hook covers the latch case, and this covers all the others.
@@ -195,6 +214,12 @@ class RoutineController(Controller):
             self._delegate = None
 
     def _sync_delegate(self, state: State) -> None:
+        # The target BEFORE the delegate is activated, not after: an alignment
+        # controller resets its search timers in on_activate and then looks for
+        # whatever the detector is filtering on. Setting the label second means
+        # the first fraction of a second of every aiming state hunts the wrong
+        # object — or locks onto it.
+        self._apply_target(state.drive_target)
         wanted = (self.controllers.get(state.drive_controller)
                   if state.drive_source == "controller" else None)
         if wanted is self._delegate:
@@ -203,6 +228,48 @@ class RoutineController(Controller):
         if wanted is not None:
             wanted.on_activate()
             self._delegate = wanted
+
+    def _apply_target(self, target: str) -> None:
+        """Point the detector at what this state aligns to, remembering what it
+        was pointed at before.
+
+        BORROWED, not taken. The operator's own choice — from Settings, or from
+        a spoken "track the cone" — is restored the moment the routine stops
+        needing it, because a routine that silently re-filtered the detector for
+        the rest of the match would make the NEXT thing anybody does behave
+        oddly, with nothing on screen to explain why.
+
+        `""` means "whatever is already selected", so a state that does not
+        care puts the operator's value back rather than clearing it. That also
+        makes every routine written before this field existed behave exactly as
+        it did.
+
+        Not pushed back to the base station as a config frame. It is transient
+        and self-reverting, and a frame per state entry would spend radio
+        airtime on a value that is about to be put back.
+        """
+        if self._vision is None:
+            if target:
+                print(f"[routine] cannot align to {target!r}: this build has "
+                      "no vision config")
+            return
+        if not target:
+            self._restore_target()
+            return
+        if self._target_restore is None:
+            self._target_restore = str(getattr(self._vision, "target_label", ""))
+        if getattr(self._vision, "target_label", "") != target:
+            self._vision.target_label = target
+            print(f"[routine] aligning to {target!r}")
+
+    def _restore_target(self) -> None:
+        if self._vision is None or self._target_restore is None:
+            return
+        previous, self._target_restore = self._target_restore, None
+        if getattr(self._vision, "target_label", "") != previous:
+            self._vision.target_label = previous
+            print("[routine] target back to "
+                  + (repr(previous) if previous else "any label"))
 
     def _command_for(self, state: State, dt: float) -> DriveCommand:
         if state.drive_source == "controller":
@@ -216,6 +283,12 @@ class RoutineController(Controller):
         return DriveCommand.stopped()
 
     # --- telemetry ------------------------------------------------------------
+
+    def pid_traces(self) -> Dict[str, dict]:
+        """The delegate's loops, because a routine that aligns is aligning with
+        the real controller — the same loop, the same gains, and the same reason
+        to want a graph of it."""
+        return self._delegate.pid_traces() if self._delegate is not None else {}
 
     def status(self) -> Optional[dict]:
         if self.engine is None:

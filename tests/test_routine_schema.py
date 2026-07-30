@@ -122,6 +122,64 @@ def test_a_controller_this_build_does_not_have_is_rejected():
     assert "unknown drive mode" in " ".join(result.errors)
 
 
+# --- what an aligning state aims at ------------------------------------------
+
+def test_an_aligning_state_may_name_the_object_it_aims_at():
+    """The point of the field: a routine that says it lines up must be able to
+    say what it lines up ON. Without it the answer is whatever the detector was
+    last left filtering on, which makes the same routine behave differently
+    depending on what somebody typed in Settings an hour ago."""
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "bucket"},
+         "transitions": [{"when": "aligned", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    assert result.routines["r1"].states["aim"].drive_target == "bucket"
+
+
+def test_the_shooter_aims_at_something_too():
+    """Shooting IS a routine — align, arm, fire — so the aiming half of it needs
+    the same field as object align."""
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "shooter_align", "target": "goal"},
+         "on_enter": [{"do": "arm"}],
+         "transitions": [{"when": "shots", "mech": "shooter", "at_least": 1, "to": "done"}]},
+        {"id": "done", "terminal": True}]), allow_arm=True)
+    assert result.ok, result.errors
+    assert result.routines["r1"].states["aim"].drive_target == "goal"
+
+
+def test_no_target_means_whatever_is_already_selected():
+    """Every routine written before this field existed says nothing, and must go
+    on meaning exactly what it meant."""
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "object_align"},
+         "transitions": [{"when": "aligned", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    assert result.routines["r1"].states["aim"].drive_target == ""
+
+
+def test_a_target_on_a_mode_that_cannot_aim_is_rejected():
+    """Storing it would put a target on the editor's screen that nothing reads —
+    a routine that looks like it aims and doesn't."""
+    result = parse(routine([
+        {"id": "a", "drive": {"mode": "waypoint", "target": "bucket"},
+         "transitions": [{"when": "route_done", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert not result.ok
+    assert "target" in " ".join(result.errors)
+
+
+def test_an_absurdly_long_target_is_rejected():
+    """Bounded like everything else that crosses a 57600-baud radio."""
+    result = parse(routine([
+        {"id": "aim", "drive": {"mode": "object_align", "target": "b" * 200},
+         "transitions": [{"when": "aligned", "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert not result.ok
+
+
 def test_an_unreachable_state_is_a_warning_not_an_error():
     result = parse(routine([
         {"id": "a", "terminal": True},

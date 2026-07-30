@@ -38,12 +38,38 @@ except Exception:  # pragma: no cover
 
 from . import protocol
 from .airtime import Airtime
+from collections import deque
+import time
 
 # What became of one write. BUSY is the only one worth offering again: the port
 # is fine, it just can't take this frame yet.
 SENT = "sent"
 BUSY = "busy"
 DEAD = "dead"
+
+
+class _Stats:
+    def __init__(self, n=1000):
+        self.wait = deque(maxlen=n)  # readline block time
+        self.decode = deque(maxlen=n)  # protocol.decode
+        self.handler = deque(maxlen=n)  # on_message
+        self.gap = deque(maxlen=n)  # line-to-line interval (throughput)
+        self.partials = 0
+        self.drops = 0
+
+    def __str__(self) -> str:
+        """Returns a readable string representation of the current stats."""
+
+        # FIX: We use [-1] to look at the last element without removing it.
+        wait_val = self.wait[-1] if self.wait else "N/A"
+        gap_val = self.gap[-1] if self.gap else "N/A"
+        handler_val = self.handler[-1] if self.handler else "N/A"
+        decode_val = self.decode[-1] if self.decode else "N/A"
+
+        return (
+            f"Wait: {wait_val}, Partials: {self.partials}, Drops: {self.drops}, "
+            f"Gap: {gap_val}, Handler: {handler_val}, Decode: {decode_val}"
+        )
 
 
 class XBeeLink:
@@ -55,6 +81,7 @@ class XBeeLink:
         self._thread = None
         self._running = False
         self._write_lock = threading.Lock()
+        self._stats = _Stats()
         self.airtime = Airtime(baud)
 
     def start(self) -> None:
@@ -64,33 +91,64 @@ class XBeeLink:
         # draining the buffer — RF congestion, a flaky USB adapter, flow-control
         # stall) blocks forever and freezes the control loop that calls send().
         # With it, a stuck write raises SerialTimeoutException, caught in send().
-        self._serial = serial.Serial(self.port, self.baud, timeout=0.2, write_timeout=0.2)
+        self._serial = serial.Serial(
+            self.port, self.baud, timeout=0.2, write_timeout=0.2
+        )
         self._running = True
-        self._thread = threading.Thread(target=self._read_loop, name="xbee-rx", daemon=True)
+        self._thread = threading.Thread(
+            target=self._read_loop, name="xbee-rx", daemon=True
+        )
+        self._dump_stats_thread = threading.Thread(
+            target=self._dump_stats, name="dump_stats", daemon=True
+        )
         self._thread.start()
+        self._dump_stats_thread.start()
+
+    def _dump_stats(self):
+        while self._running:
+            print(str(self._stats))
+            time.sleep(1)
 
     def _read_loop(self) -> None:
         buf = bytearray()
+        st = self._stats
+        last_line = None
         while self._running:
+            t0 = time.perf_counter_ns()
             try:
-                chunk = self._serial.readline()  # up to '\n' or the read timeout
-            except Exception as e:  # keep the link alive across transient errors
+                chunk = self._serial.readline()
+            except Exception as e:
                 print(f"[XBeeLink] read error: {e}")
                 continue
+            t1 = time.perf_counter_ns()
+            st.wait.append(t1 - t0)
             if not chunk:
                 continue
             buf.extend(chunk)
             if not chunk.endswith(b"\n"):
-                continue  # partial line (timeout); keep accumulating
+                st.partials += 1
+                continue
             line = bytes(buf)
             buf.clear()
+
+            t2 = time.perf_counter_ns()
             msg = protocol.decode(line)
+            print(msg)
+            t3 = time.perf_counter_ns()
+            st.decode.append(t3 - t2)
             if msg is None:
+                st.drops += 1
                 continue
+
             try:
                 self.on_message(msg)
             except Exception as e:
                 print(f"[XBeeLink] handler error: {e}")
+            st.handler.append(time.perf_counter_ns() - t3)
+
+            if last_line is not None:
+                st.gap.append(t3 - last_line)
+            last_line = t3
 
     def send(self, message: dict) -> bool:
         """Put a realtime frame on the radio now. True if it went out.

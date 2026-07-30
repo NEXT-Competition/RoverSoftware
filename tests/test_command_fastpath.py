@@ -26,6 +26,13 @@ def vocab():
             {"id": "start", "name": "start", "lat": 3.0, "lon": 4.0, "kind": "start"},
         ],
         labels=["bucket", "cone"],
+        # Two routines on the selected rover, one on another, exactly as
+        # `build` collects them: a generated id and the name somebody typed.
+        routines={
+            "rover1": [{"id": "routine2", "name": "Collect cones"},
+                       {"id": "return_home", "name": "return_home"}],
+            "rover3": [{"id": "sweep", "name": "Sweep the field"}],
+        },
     )
 
 
@@ -109,6 +116,63 @@ def test_pulling_up_the_camera(vocab, said, expected):
 def test_clearing_an_estop(vocab):
     assert fastpath.match("clear", vocab) == ("clear_estop", {})
     assert fastpath.match("clear the e stop", vocab) == ("clear_estop", {})
+
+
+# --- running a routine somebody programmed --------------------------------
+#
+# The point of the whole feature: a routine an operator built and named is a
+# button on their screen, and saying its name presses it. Starting one still
+# needs a tap to confirm (intents.py), which is what makes it safe to recognise
+# these without a model in the loop.
+
+@pytest.mark.parametrize("said,routine", [
+    ("run collect cones", "collect cones"),
+    ("start collect cones", "collect cones"),
+    ("run the collect cones routine", "collect cones routine"),
+    ("execute the collect cones sequence", "collect cones sequence"),
+    ("launch collect cones", "collect cones"),
+    ("start return home", "return home"),
+])
+def test_running_a_routine_by_the_name_it_was_given(vocab, said, routine):
+    """The phrase is passed on as it was said, noun and all — the executor
+    re-resolves it against the rover the intent finally lands on, and deciding
+    that here would decide it in the wrong place."""
+    assert fastpath.match(said, vocab) == ("start_routine", {"routine": routine}), said
+
+
+def test_a_bare_routine_name_runs_it(vocab):
+    """One word, because that is how an operator refers to their own routine
+    mid-match. Last rule in the file, so it can never take a word off a rover
+    or a mode."""
+    assert fastpath.match("collect cones", vocab) == (
+        "start_routine", {"routine": "collect cones"})
+
+
+def test_a_routine_can_be_run_on_a_rover_that_is_not_selected(vocab):
+    """The rover travels with the intent. An autonomous routine started on the
+    wrong machine is the worst thing this file could produce."""
+    assert fastpath.match("rover 3 run sweep the field", vocab) == (
+        "start_routine", {"routine": "sweep the field", "robot": "rover3"})
+
+
+def test_a_routine_not_loaded_on_that_rover_is_not_a_match(vocab):
+    """rover1 is selected and does not carry "sweep the field". Falling through
+    lets the model (or the operator) sort out which rover was meant."""
+    assert fastpath.match("run sweep the field", vocab) is None
+
+
+def test_run_with_no_name_belongs_to_the_model(vocab):
+    """"run the routine" — which one? The selected one is a guess, and a guess
+    that drives the robot."""
+    assert fastpath.match("run the routine", vocab) is None
+    assert fastpath.match("start it", vocab) is None
+
+
+def test_the_bare_word_routine_is_still_the_mode(vocab):
+    """A rover carrying routines must not lose "routine" as a mode name — it is
+    how an operator resumes whatever was already selected."""
+    assert fastpath.match("routine", vocab) == ("set_mode", {"mode": "routine"})
+    assert fastpath.match("switch to routine mode", vocab)[0] == "set_mode"
 
 
 # --- what it must NOT recognise -------------------------------------------

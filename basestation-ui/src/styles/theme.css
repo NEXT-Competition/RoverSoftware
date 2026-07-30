@@ -59,6 +59,18 @@
 
   /* The plan: routes, pending waypoints, anything proposed but not yet done.
      Distinct from the flags — amber here means "drawn", not "wrong". */
+  /* Categorical chart slots, in fixed order — the P, I and D contributions on
+     the tuning graphs, and whatever comes next. Not the accent and not the
+     status colours: those are UI identity and robot state, and a series that
+     borrows them says something it doesn't mean. Taken from a validated ramp
+     and stepped for THIS surface (OKLCH L 0.48-0.67, >=3:1 on the panel); the
+     three of them clear the colour-vision-deficiency floors on every pair, not
+     just adjacent ones, because three lines share one plot. Re-validate before
+     adding a fourth. */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+
   --data: #f0a53a;
   --on-data: #231602;
 
@@ -152,6 +164,13 @@
   --accent-deep: #0b8d75;
   --accent-lift: #6fe6cd;
   --on-accent: #04211c;
+
+  /* The same three hues, re-stepped for a paper surface rather than lightened
+     — a dark-mode step flipped onto white is what makes a chart look washed
+     out outdoors, which is the one place this console has to be readable. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
 
   --data: #b0600a;
   --on-data: #fff8ee;
@@ -733,6 +752,294 @@ body {
    rendering bug. Let it span instead. */
 .mode-grid .btn:last-child:nth-child(odd) {
   grid-column: 1 / -1;
+}
+
+/* ---------- Network tab ---------- */
+
+.wifi-now,
+.wifi-scan,
+.wifi-join {
+  margin-bottom: 18px;
+}
+.wifi-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 8px 0 10px;
+  font-size: 13px;
+}
+.wifi-facts dt {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  align-self: center;
+}
+.wifi-facts dd {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wifi-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* A row is the whole hit target, not a radio button beside a label: this gets
+   tapped on a 7" panel with gloves on. */
+.wifi-row {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.wifi-row.chosen {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+.wifi-ssid {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wifi-open {
+  font-size: 11px;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.wifi-lock {
+  font-size: 12px;
+}
+
+/* Four bars, bottom-aligned. Read as strength without needing a legend. */
+.wifi-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  flex: none;
+}
+.wifi-bars i {
+  width: 3px;
+  background: var(--hairline-strong);
+}
+.wifi-bars i.on {
+  background: var(--accent);
+}
+
+.wifi-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.wifi-form .arg {
+  flex: 1 1 180px;
+}
+.wifi-form .arg.wifi-hidden {
+  flex: 0 0 auto;
+}
+.wifi-form .field-input {
+  width: 100%;
+}
+
+/* ---------- PID tuning graphs ---------- */
+
+.pid-graph {
+  margin: 0 0 14px;
+  padding: 10px 12px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-input);
+  background: var(--panel-2);
+}
+.pid-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+/* The gains, beside the curve they produced. Monospaced and tabular so a column
+   of them does not jitter as digits change under a slider. */
+.pid-gains {
+  display: inline-flex;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.pid-gain b {
+  color: var(--muted);
+  font-weight: 500;
+  margin-right: 4px;
+}
+.pid-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--faint);
+}
+/* Saturation gets the warn flag: it is the state where turning the gain up
+   changes nothing, which is "not yet" rather than "wrong". */
+.pid-sat {
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+}
+
+.pid-pane {
+  margin-top: 8px;
+}
+.pid-axis-label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+  margin-bottom: 2px;
+}
+.pid-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+.pid-grid {
+  stroke: var(--hairline);
+  stroke-width: 1;
+}
+.pid-tick {
+  fill: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+/* The error, as the gap between where it aims and where it points. Low alpha
+   so the lines that bound it stay the figure and this stays the ground. */
+.pid-band {
+  fill: var(--muted);
+  opacity: 0.14;
+}
+.pid-cursor {
+  stroke: var(--hairline-strong);
+  stroke-width: 1;
+}
+/* A ring in the surface colour, so a dot landing on a line of another colour
+   still reads as a separate mark. */
+.pid-dot {
+  stroke: var(--panel-solid);
+  stroke-width: 2;
+}
+
+.pid-legend {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.pid-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.pid-swatch {
+  width: 14px;
+  height: 0;
+  border-top: 2px solid var(--swatch);
+  flex: none;
+}
+.pid-swatch.dashed {
+  border-top-style: dashed;
+}
+.pid-swatch.band {
+  height: 9px;
+  border-top: 0;
+  background: var(--swatch);
+  opacity: 0.3;
+}
+.pid-legend-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.pid-unit {
+  color: var(--faint);
+  margin-left: 2px;
+}
+.pid-note,
+.pid-empty {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+/* ---------- Routines, on the driving view ---------- */
+
+/* One per row, unlike the mode grid: these are names somebody typed, so they
+   are long, and half a rail column would truncate most of them. Reading the
+   list is how the operator finds the routine they want. */
+.routine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 8px;
+}
+.routine-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+  padding: 0 12px;
+  text-align: left;
+}
+.routine-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The live state's name, on the routine that is running. Monospaced and quiet:
+   it changes several times a second on a fast sequence, and a bold label that
+   flickers pulls the eye off the map. */
+.routine-state {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.routine-stop {
+  width: 100%;
+  margin-top: 7px;
+}
+.routines-panel .hint {
+  margin-top: 6px;
 }
 
 /* ---------- Telemetry ---------- */

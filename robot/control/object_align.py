@@ -34,7 +34,7 @@ loop rate to detector rate, in either direction.
 from __future__ import annotations
 
 import time
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 from .commands import DriveCommand
 from .controller import Controller
@@ -123,6 +123,18 @@ class ObjectAlignController(Controller):
     def last_detection(self) -> Optional[Detection]:
         """The sample the last update() acted on, or None if nothing was seen."""
         return self._last_detection
+
+    def pid_traces(self) -> Dict[str, dict]:
+        """The steering loop, for the tuning graphs.
+
+        The setpoint is 0 and always will be: "aligned" means the target sits at
+        the centre of the frame, so the error IS the normalised horizontal
+        offset and there is no separate measurement to report. Reported in the
+        loop's own units — [-1, 1] across the lens, not degrees — because those
+        are the units the gains are expressed in, and a graph whose y-axis
+        doesn't match the numbers you type is a graph that mistunes a robot.
+        """
+        return {"align.pid": self.pid.trace(setpoint=0.0)}
 
     def update(self, dt: float) -> Optional[DriveCommand]:
         if self.detection_provider is None:

@@ -46,6 +46,23 @@ export interface MechStatus {
   cool?: number;
 }
 
+/** One step of a PID loop (robot/control/pid.py::trace).
+ *
+ *  Short keys because this rides every telemetry frame on a 57600-baud radio.
+ *  `p`/`i`/`d` are the CONTRIBUTIONS — kp times the error, not kp — so they sum
+ *  to `o`, which is what lets one chart show the output and its split without a
+ *  second axis. */
+export interface PidTrace {
+  sp: number; // setpoint, in the loop's own units
+  e: number; // error
+  o: number; // output, after clamping
+  p: number;
+  i: number;
+  d: number;
+  m?: number; // the measurement, when it is a separate quantity from the error
+  sat?: boolean; // the clamp ate the request — more gain would change nothing
+}
+
 /** Which state the FSM is in, present only while `routine` is the active mode
  *  (robot/routine/engine.py::status). Non-sticky, like ShooterStatus. */
 export interface RoutineStatus {
@@ -86,6 +103,10 @@ export interface Robot {
   shooter?: ShooterStatus | null; // absent unless shooter_align is active
   mech?: Record<string, MechStatus> | null; // absent unless the layout has any
   routine?: RoutineStatus | null; // absent unless `routine` is active
+  /** Live closed-loop traces, keyed by the loop's own tuning path
+   *  ("align.pid", "nav.heading_pid"). Absent unless the robot has
+   *  `nav.pid_trace` switched on AND is in a mode that runs a loop. */
+  pid?: Record<string, PidTrace> | null;
   online: boolean;
   age: number | null; // seconds since last telemetry, or null
   trail: LatLon[]; // breadcrumb of past positions
@@ -208,8 +229,14 @@ export interface ActionSpec {
 
 export interface RoutineStateSpec {
   id: string;
-  /** stop | hold | manual | the name of a controller to delegate driving to. */
-  drive?: { mode: string; throttle?: number; steer?: number };
+  /** stop | hold | manual | the name of a controller to delegate driving to.
+   *
+   *  `target` is the detector class an aligning mode should lock onto while
+   *  this state is current — the answer to "align to WHAT". The robot borrows
+   *  the detector's target for the state and puts the operator's own back when
+   *  it is left (robot/control/routine_controller.py), so an empty value means
+   *  "whatever is already selected" rather than "anything". */
+  drive?: { mode: string; throttle?: number; steer?: number; target?: string };
   timeout?: number; // omitted = inherit routines.state_timeout_default
   terminal?: boolean;
   on_enter?: ActionSpec[];
@@ -280,6 +307,39 @@ export interface RobotDocuments {
 
 /** The cold channel: sent on connect and then only when something changes.
  *  Kept out of the 30 Hz fleet frame because a robot's config is ~2.4 KB. */
+/** One access point the rover can see (robot/comms/wifi.py::scan). */
+export interface WifiNetwork {
+  ssid: string;
+  signal: number; // 0-100, as NetworkManager reports it
+  secure: boolean;
+}
+
+/** A robot's answer to a WiFi question — a status, a scan, or the verdict on a
+ *  join. One shape for all three, because the panel shows one thing at a time
+ *  and the last answer is the one that is true.
+ *
+ *  Never carries a credential: the robot strips it, and nothing on this side
+ *  stores one either (see state/wifi.ts). */
+export interface WifiState {
+  /** Bumped by the base station on every answer, so the dashboard can tell a
+   *  new one from the same one being re-pushed (basestation/fleet.py::wifi). */
+  rev: number;
+  ok: boolean;
+  /** Present on a failure, and it is the message NetworkManager itself gave —
+   *  "Secrets were required, but not provided." is a wrong password. */
+  error?: string;
+  /** False when the Pi has no NetworkManager, which is a different problem
+   *  from a failed join and needs different advice. */
+  managed?: boolean;
+  device?: string;
+  ssid?: string | null;
+  ip?: string | null;
+  signal?: number | null;
+  state?: string;
+  networks?: WifiNetwork[];
+  forgot?: string;
+}
+
 export interface SettingsMessage {
   type: "settings";
   settings: Record<string, SettingValue>; // "base.*" and "controller.*"
@@ -293,6 +353,9 @@ export interface SettingsMessage {
   } | null;
   configs: Record<string, RobotConfigEntry>; // by robot_id
   documents: Record<string, RobotDocuments>; // by robot_id
+  /** Each robot's WiFi state, as it last reported it. Absent for a robot that
+   *  has never been asked. */
+  wifi: Record<string, WifiState>; // by robot_id
   /** Named field positions, shared by the whole fleet (basestation/places.py). */
   places: Place[];
   places_result: PlacesResult | null;
@@ -389,7 +452,9 @@ export interface CommandVocabulary {
   online: string[];
   selected: string | null;
   places: { id: string; name: string }[];
-  routines: Record<string, string[]>;
+  /** robot_id -> the routines loaded on it. Named, because the name is what an
+   *  operator says and what the recogniser matches (command/vocabulary.py). */
+  routines: Record<string, { id: string; name: string }[]>;
   labels: string[];
   modes: string[];
 }
@@ -465,6 +530,25 @@ export type Action =
   | { action: "get_layout"; robot_id: string }
   | { action: "get_routines"; robot_id: string }
   | { action: "get_fields"; robot_id: string }
+  // WiFi. The one configuration path that reaches a rover with no network at
+  // all — it goes over the radio when there is no WiFi to carry it, because
+  // otherwise a rover could never be told about the network it is not on.
+  | { action: "get_wifi"; robot_id: string }
+  | { action: "scan_wifi"; robot_id: string }
+  | {
+    action: "set_wifi";
+    robot_id: string;
+    ssid: string;
+    /** Sent, relayed, applied, forgotten. Never stored on this side, never
+     *  echoed back by the robot, never written to a config snapshot. */
+    psk?: string;
+    hidden?: boolean;
+    /** Two-letter regulatory domain. Worth setting once per country: with none,
+     *  a Pi has 5 GHz soft-blocked and the venue's network is simply missing
+     *  from the scan. */
+    country?: string;
+  }
+  | { action: "forget_wifi"; robot_id: string; ssid: string }
   // Saved whole, not per field. A half-applied state machine is meaningless,
   // and the transfer is all-or-nothing to match.
   | { action: "set_layout"; robot_id: string; doc: LayoutDoc; save?: boolean }

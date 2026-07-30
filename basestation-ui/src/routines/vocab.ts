@@ -273,10 +273,19 @@ export const DRIVE_MODES = [
   { value: "hold", label: "Hold position" },
   { value: "manual", label: "Fixed throttle/steer" },
   { value: "teleop", label: "Teleop (driver takes over)" },
-  { value: "object_align", label: "Object align" },
-  { value: "shooter_align", label: "Shooter align" },
+  { value: "object_align", label: "Object align", targets: true },
+  { value: "shooter_align", label: "Shooter align", targets: true },
   { value: "waypoint", label: "Waypoint route" },
 ];
+
+/** Does this drive mode aim at something the camera sees, and so want a target?
+ *
+ *  Mirrors TARGETING_CONTROLLERS in robot/routine/schema.py, which REFUSES a
+ *  target on any other mode — so this is not merely which field to show, it is
+ *  which documents will save. */
+export function driveTakesTarget(mode: string | undefined): boolean {
+  return DRIVE_MODES.some((m) => m.value === mode && m.targets);
+}
 
 export const CONDITION_BY_KEY = Object.fromEntries(
   CONDITIONS.map((c) => [c.key, c]),

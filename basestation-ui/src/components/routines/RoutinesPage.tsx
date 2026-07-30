@@ -51,7 +51,7 @@ function RunBar() {
     <div class="run-bar">
       {running
         ? (
-          <button type="button" class="btn small danger" onClick={stopRoutine}>
+          <button type="button" class="btn small danger" onClick={() => stopRoutine()}>
             Stop
           </button>
         )

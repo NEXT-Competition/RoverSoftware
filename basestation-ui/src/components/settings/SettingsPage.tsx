@@ -10,6 +10,7 @@ import { tab } from "../../state/settings.ts";
 import { showView } from "../../state/view.ts";
 import { HardwarePage } from "../hardware/HardwarePage.tsx";
 import { RoutinesPage } from "../routines/RoutinesPage.tsx";
+import { NetworkPage } from "./NetworkPage.tsx";
 import { BaseSettings } from "./BaseSettings.tsx";
 import { ControllerSettings } from "./ControllerSettings.tsx";
 import { RobotSettings } from "./RobotSettings.tsx";
@@ -21,6 +22,9 @@ const TABS = [
   { key: "robot", label: "Tuning" },
   { key: "hardware", label: "Hardware" },
   { key: "routines", label: "Routines" },
+  // Network sits with the other per-robot tabs, not under Base station: it is
+  // the rover's WiFi that changes when you travel, and it changes per rover.
+  { key: "network", label: "Network" },
   { key: "controller", label: "Controller" },
   { key: "base", label: "Base station" },
 ] as const;
@@ -61,6 +65,7 @@ export function SettingsPage() {
           {active === "robot" && <RobotSettings />}
           {active === "hardware" && <HardwarePage />}
           {active === "routines" && <RoutinesPage />}
+          {active === "network" && <NetworkPage />}
           {active === "controller" && <ControllerSettings />}
           {active === "base" && <BaseSettings />}
           <p class="hint pad footnote">

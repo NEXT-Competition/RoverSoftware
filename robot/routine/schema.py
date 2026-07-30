@@ -54,6 +54,17 @@ MAX_DOC_BYTES = 16384
 # routine that silently does nothing.
 DRIVE_SOURCES = ("stop", "hold", "manual", "controller")
 
+# Controllers that align to something the camera sees, and so accept a `target`
+# on their drive spec: "line up on the BUCKET". Without it, a routine can say it
+# aligns but not what it aligns to, and the answer comes from whatever the
+# detector's config happened to be left on — which is a routine that behaves
+# differently depending on what somebody typed in Settings an hour ago.
+TARGETING_CONTROLLERS = ("object_align", "shooter_align")
+
+# A detector class name. Bounded like everything else that crosses the radio;
+# generous next to any real label ("bucket", "traffic cone").
+MAX_TARGET_LEN = 40
+
 _ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
@@ -75,6 +86,12 @@ class State:
     drive_controller: str = ""
     drive_throttle: float = 0.0
     drive_steer: float = 0.0
+    # Which detector class the aligning delegate should lock onto while this
+    # state is current. "" means whatever the detector is already filtering on,
+    # which is also what every routine written before this field existed means.
+    # Applied and then RESTORED by RoutineController — a routine borrows the
+    # detector's target, it does not redefine it.
+    drive_target: str = ""
     # None = inherit RoutineConfig.state_timeout_default, read by the engine on
     # every tick rather than baked in here. That is what makes the default a
     # genuinely live parameter: raising it from the dashboard applies to the
@@ -126,27 +143,60 @@ def _check_id(value: Any, what: str, errors: List[str]) -> str:
 
 
 def _parse_drive(raw: Any, state_id: str, controllers: Tuple[str, ...],
-                 errors: List[str]) -> Tuple[str, str, float, float]:
+                 errors: List[str]) -> Tuple[str, str, float, float, str]:
     if raw is None:
-        return "stop", "", 0.0, 0.0
+        return "stop", "", 0.0, 0.0, ""
     if not isinstance(raw, dict):
         errors.append(f"state {state_id!r}: 'drive' must be an object")
-        return "stop", "", 0.0, 0.0
+        return "stop", "", 0.0, 0.0, ""
 
     mode = str(raw.get("mode", "stop")).strip()
+    target = _parse_target(raw, mode, state_id, errors)
     # A controller name is accepted directly, because that is how anyone would
     # write it: {"mode": "object_align"} rather than
     # {"source": "controller", "controller": "object_align"}.
     if mode in controllers:
-        return "controller", mode, 0.0, 0.0
+        return "controller", mode, 0.0, 0.0, target
     if mode in ("stop", "hold"):
-        return mode, "", 0.0, 0.0
+        return mode, "", 0.0, 0.0, ""
     if mode == "manual":
-        return "manual", "", _num(raw, "throttle", 0.0), _num(raw, "steer", 0.0)
+        return "manual", "", _num(raw, "throttle", 0.0), _num(raw, "steer", 0.0), ""
     errors.append(
         f"state {state_id!r}: unknown drive mode {mode!r} — expected stop, "
         f"hold, manual, or one of {', '.join(controllers)}")
-    return "stop", "", 0.0, 0.0
+    return "stop", "", 0.0, 0.0, ""
+
+
+def _parse_target(raw: dict, mode: str, state_id: str, errors: List[str]) -> str:
+    """The detector class this state aligns to, validated but not resolved.
+
+    Whether the label is one the model can actually report is not knowable here
+    — the label set belongs to whatever model is loaded, which may not even be
+    running yet. The detector already logs "nothing will ever match" for an
+    unknown one (robot/sensors/detector.py), and that is the right place for it:
+    refusing the document would make a routine unsaveable on a bench with no
+    camera attached.
+
+    A target on a mode that cannot align IS refused, though. Storing it would
+    mean the editor shows a target that nothing reads — a routine that looks
+    like it aims and doesn't.
+    """
+    said = raw.get("target")
+    if said is None or said == "":
+        return ""
+    target = str(said).strip()
+    if not target:
+        return ""
+    if mode not in TARGETING_CONTROLLERS:
+        errors.append(
+            f"state {state_id!r}: 'target' only means something when driving "
+            f"with {' or '.join(TARGETING_CONTROLLERS)}, not {mode!r}")
+        return ""
+    if len(target) > MAX_TARGET_LEN:
+        errors.append(f"state {state_id!r}: target {target[:20]!r}… is longer "
+                      f"than {MAX_TARGET_LEN} characters")
+        return ""
+    return target
 
 
 # Counting is a per-visit act, so it belongs in on_enter. In on_tick a counter
@@ -269,11 +319,11 @@ def _parse_routine(raw: Any, cfg: RoutineConfig, controllers: Tuple[str, ...],
             errors.append(f"routine {rid!r}: duplicate state id {sid!r}")
             continue
 
-        source, controller, throttle, steer = _parse_drive(
+        source, controller, throttle, steer, target = _parse_drive(
             raw_state.get("drive"), sid, controllers, errors)
         state = State(
             id=sid, drive_source=source, drive_controller=controller,
-            drive_throttle=throttle, drive_steer=steer,
+            drive_throttle=throttle, drive_steer=steer, drive_target=target,
             terminal=bool(raw_state.get("terminal", False)),
             timeout=(max(0.0, _num(raw_state, "timeout", 0.0))
                      if "timeout" in raw_state else None),

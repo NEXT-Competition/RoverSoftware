@@ -96,6 +96,14 @@ exactly one thing commands the motors at any moment.
 4. **Stop** ends the run. The e-stop does too, and the routine's *on e-stop*
    setting decides whether it aborts or holds.
 
+A saved routine is not confined to this tab. Every one the robot carries appears
+by name under **Routines** on the driving view, next to the mode buttons — one
+tap selects and runs it, the running one shows the state it is in, and pressing
+it again restarts it. It is also sayable: "run the collect cones routine", or
+just its name. Naming a routine is therefore how you invoke it, so name it the
+way you would ask for it out loud. Starting one by voice always asks for a tap
+to confirm; stopping never does.
+
 > **Test it dry**
 >
 > The simulator runs the real state-machine engine with the real validators. You

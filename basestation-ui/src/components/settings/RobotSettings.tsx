@@ -9,7 +9,22 @@
 
 import { useState } from "preact/hooks";
 import { robotConfigs, robotDocuments, robots } from "../../net/ws.ts";
-import { robotGroupsFor } from "../../settings/schema.ts";
+import { type Group, robotGroupsFor } from "../../settings/schema.ts";
+import { PidGraph } from "./PidGraph.tsx";
+
+/**
+ * The tuning path of the PID loop this group owns, or null.
+ *
+ * Found from the fields themselves — a group with an `<x>.kp` in it is a group
+ * about the loop `<x>` — rather than from a table of group titles. A title is
+ * prose somebody will reword; the gain path is the same string the robot names
+ * its trace with (robot/control/waypoint.py::pid_traces), so matching on it is
+ * what guarantees the graph and the knobs beneath it are the same loop.
+ */
+function loopIn(group: Group): string | null {
+  const gain = group.fields.find((f) => f.path.endsWith(".kp"));
+  return gain ? gain.path.slice(0, -3) : null;
+}
 import { useRadioFetch } from "../../state/fetch.ts";
 import {
   configTarget,
@@ -140,6 +155,18 @@ export function RobotSettings() {
             onToggle={() =>
               setOpen((prev) => ({ ...prev, [group.title]: !prev[group.title] }))}
           >
+            {/* A group that owns a closed loop leads with what that loop is
+                doing. Above the gains rather than below them: you read the
+                curve, then reach for the knob — and the two cannot be about
+                different loops, because the graph is identified by the same
+                path prefix the gain fields carry. */}
+            {loopIn(group) && (
+              <PidGraph
+                robotId={rid}
+                loop={loopIn(group)!}
+                unit={loopIn(group)!.startsWith("nav.") ? "°" : ""}
+              />
+            )}
             {group.fields.map((field) => (
               <SettingField
                 key={field.path}
