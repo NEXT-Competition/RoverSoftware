@@ -9,6 +9,10 @@
 | One side of the robot runs backwards | *Inverted* is unticked on the mirrored side. It is per-motor, on the motor's card. |
 | Both motors do the same thing | They are on the same PWM channel — except the Hardware tab refuses that, so check they are not both assigned to the same *side*. |
 | A hardware change did nothing | Layouts take effect on the next start. `just restart`, or `sudo systemctl restart roversoftware-robot`. |
+| The rover curves when told to go straight | Two motors never match on the same throttle. Fit [wheel encoders](wiring.md#wheel-encoders-optional) and set Tuning → Wheel speed matching → Mode to `match`. Without encoders, trim it by hand with the mirrored motor's *Forward cap*. |
+| No `wheels` row on the driving view | This build has no encoder pins set, or neither `pigpio` nor `lgpio` is installed on the robot — the journal says which at start-up. Pins are claimed at start-up, so a newly saved layout needs a restart. |
+| The `wheels` row says "not turning — matching off" | A wheel was commanded and its encoder never moved: the encoder is unplugged, its pins are wrong, or the wheel is genuinely stalled. The loop opened itself deliberately; it clears when the drivetrain next stops. |
+| The RPM readout is wildly wrong but steady | *Counts per rev* is wrong. Measure it rather than deriving it: `tools/encoder_monitor.py`, turn the wheel one turn, read the count. `match` mode still works with a wrong value; `velocity` mode does not. |
 | A tuning value came back different | It was clamped, not refused. The field shows what the robot is actually using. |
 | Waypoint mode steers but does not move | A steered chassis with *pivot creep* at zero. It cannot turn on the spot. |
 | The map is blank | No route to the tile provider. Point `--tiles` at a local server, or build a cache first with `tools/fetch_tiles.py`. |

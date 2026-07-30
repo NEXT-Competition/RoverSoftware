@@ -126,7 +126,14 @@ function format(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 100) return value.toFixed(1);
   if (abs >= 10) return value.toFixed(1);
-  return value.toFixed(2);
+  if (abs >= 0.01 || abs === 0) return value.toFixed(2);
+  // Below a hundredth, two decimals is not a rounded number — it is "0.00" for
+  // every value, which is the one thing a readout beside a curve must not be.
+  // Loops whose error is in real units have gains this small BY CONSTRUCTION:
+  // the heading loops see degrees and the wheel-speed loop sees RPM, so their
+  // useful gains live two or three decimals down. Show enough digits to be a
+  // digit, and drop the zeros that padding adds.
+  return value.toPrecision(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 /** An axis label with enough precision to be a DIFFERENT number from its

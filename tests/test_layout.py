@@ -263,6 +263,73 @@ def test_a_failed_document_leaves_the_config_untouched():
     assert layout.to_doc(cfg) == before
 
 
+# --- wheel encoders ----------------------------------------------------------
+
+def encoder_doc(**pins):
+    """The stock tank layout with an encoder on the left motor."""
+    doc = tank_doc()
+    doc["drive"]["actuators"][0].update(
+        {"encoder_a": 17, "encoder_b": 27, "encoder_cpr": 1200, **pins})
+    return doc
+
+
+def test_a_layout_without_encoders_does_not_carry_encoder_fields():
+    """Four extra fields on every actuator of a sixteen-motor build is a few
+    hundred bytes of a radio spent saying "no encoder" over and over, and the
+    document is capped."""
+    for actuator in layout.default_doc()["drive"]["actuators"]:
+        assert "encoder_a" not in actuator
+
+
+def test_encoder_wiring_round_trips_through_the_document():
+    """A build that HAS encoders must always carry them, or a round trip
+    through the editor would quietly unplug one."""
+    cfg = RobotConfig()
+    result = layout.apply(cfg, encoder_doc())
+    assert result.ok, result.errors
+    assert cfg.drive.actuators["left"].encoder_a == 17
+    assert cfg.drive.actuators["left"].encoder_cpr == 1200
+    assert layout.to_doc(cfg)["drive"]["actuators"][0]["encoder_b"] == 27
+
+
+def test_two_actuators_reading_one_pin_are_rejected():
+    """Nastier than a PWM clash: both count the same edges, so a robot with one
+    genuinely dragging track reports both wheels at exactly the same speed —
+    the single symptom that would convince you the encoders were working."""
+    doc = encoder_doc()
+    doc["drive"]["actuators"][1].update(
+        {"encoder_a": 17, "encoder_b": 22, "encoder_cpr": 1200})
+    errors = " ".join(layout.validate(doc).errors)
+    assert "GPIO 17" in errors
+
+
+def test_both_channels_on_one_pin_are_rejected():
+    """A quadrature decoder needs two phases to have a phase relationship."""
+    errors = " ".join(layout.validate(encoder_doc(encoder_b=17)).errors)
+    assert "two separate pins" in errors
+
+
+def test_half_an_encoder_is_rejected():
+    """One channel decodes nothing at all, so this is a typo, not a choice."""
+    errors = " ".join(layout.validate(encoder_doc(encoder_b=-1)).errors)
+    assert "both A and B" in errors
+
+
+def test_an_out_of_range_pin_is_clamped_rather_than_refusing_the_layout():
+    """Same rule as every other actuator number: a field pinned at its limit is
+    honest, dropping the whole layout over one typo is not."""
+    result = layout.validate(encoder_doc(encoder_a=99, encoder_b=22))
+    assert result.ok, result.errors
+    assert result.drive.actuators["left"].encoder_a == 27
+
+
+def test_a_pin_clamped_onto_a_neighbours_pin_is_still_caught():
+    """The clamp runs first and the conflict check runs on what it produced, so
+    a wild number cannot land on a real pin and be waved through."""
+    result = layout.validate(encoder_doc(encoder_a=99, encoder_b=27))
+    assert not result.ok
+
+
 # --- persistence -------------------------------------------------------------
 
 def test_save_and_load_round_trip(tmp_path):
