@@ -54,17 +54,21 @@ function derive(axes: number[]) {
   };
 }
 
-/** Signed -1..1 bar, filling out from the centre. */
+/** Signed -1..1 bar, filling out from the centre.
+ *
+ * Scaled rather than resized, like the track bars on the fleet cards: a stick
+ * being waved produces a new value every animation frame on every axis at once,
+ * and animating `width` re-lays-out the settings sheet each time. */
 function SignedBar({ value }: { value: number }) {
   const pct = Math.min(Math.abs(value), 1) * 50;
-  const geom = value >= 0
-    ? `left:50%;width:${pct}%`
-    : `left:${50 - pct}%;width:${pct}%`;
+  const from = value >= 0 ? 50 : 50 - pct;
   return (
     <div class="axis-track">
       <div
         class="axis-fill"
-        style={`${geom};background:${value >= 0 ? "var(--accent)" : "var(--warn)"}`}
+        style={`transform:translateX(${from}%) scaleX(${pct / 100});background:${
+          value >= 0 ? "var(--accent)" : "var(--warn)"
+        }`}
       />
     </div>
   );

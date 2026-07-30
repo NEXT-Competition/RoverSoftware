@@ -107,6 +107,14 @@
   --lift-cap: 0 8px 18px -6px rgba(0, 0, 0, 0.8),
     inset 0 1px 0 rgba(190, 225, 228, 0.1);
 
+  /* The moulded cap on a toggle — the one part of a switch that is a physical
+     object rather than a surface. It is its own token because the two
+     renditions want opposite things from it: on the graphite well it has to be
+     the light thing, and on the paper well it is a white cap that reads by its
+     shadow. It was a literal #cdd7e4 in one place, which meant the daylight
+     rendition inherited a dark-console colour. */
+  --cap: #cdd7e4;
+
   /* How far the map is pulled down so plates read against it. */
   --map-dim: 0.34;
 
@@ -129,6 +137,12 @@
      a notch on every plate is a texture, not a mark. */
   --chamfer: 13px;
   --tap: 52px;
+
+  /* The check mark, as a shape rather than a colour — it is used as a mask, so
+     the ink comes from `--on-accent` and inverts with the rendition. Geometry
+     lives here beside the radii for the same reason `--ease` does: it is the
+     same mark in both renditions. Inline, because the kiosk is offline. */
+  --tick: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M3.2 8.4l3.1 3.2 6.5-6.9"/></svg>');
 
   /* Safe-area shorthands (iPad home indicator / notch) */
   --sa-t: env(safe-area-inset-top, 0px);
@@ -194,6 +208,12 @@
   --lift-cap: 0 6px 14px -4px rgba(20, 22, 15, 0.4),
     inset 0 1px 2px rgba(255, 255, 255, 0.6);
 
+  /* Dark, where the console's is light. The cap is always the opposite of the
+     track it sits on — off it rides the pale well, on it rides teal and turns
+     to `--paper` — and a white cap on `--well` is 1.2:1, which is no switch at
+     all through a windscreen of sunlight. */
+  --cap: #4e5449;
+
   /* Sunlight already flattens the imagery; dimming it further costs legibility
      of the one thing the operator is navigating by. */
   --map-dim: 0;
@@ -223,6 +243,23 @@ body {
   overscroll-behavior: none;
   touch-action: manipulation;
   overflow: hidden;
+}
+
+/* Keyboard focus.
+ *
+ * The console is touch-first, but it is also driven from a laptop with a
+ * gamepad, and every custom control here replaces a native one — so without
+ * this there was no visible focus anywhere in the interface. The ring sits
+ * OUTSIDE the control on purpose: the loudest objects on screen are filled
+ * (the selected rover's card in teal, the e-stop in red), and a ring drawn on
+ * top of a fill is a ring you cannot see. Offset, it lands on the plate behind.
+ *
+ * `:focus-visible`, not `:focus`, so a thumb on the drive pad does not leave a
+ * ring behind it. The text fields keep their own accent-border treatment —
+ * their `:focus` rules outrank this one, which is why it is written weak. */
+:where(button, a[href], input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 /* ---------- Layout: full-bleed map + floating HUD overlay ---------- */
@@ -536,15 +573,16 @@ body {
   color: var(--danger);
 }
 
-/* Icon-only control (settings gear). Sized to the same tap target as a .btn
-   even though it looks smaller — it is on a touchscreen, in the field. */
+/* Icon-only control (settings gear, rendition toggle). Sized to the same tap
+   target as a .btn even though it looks smaller — it is on a touchscreen, in
+   the field. That is what the comment always claimed; it was 44px. */
 .icon-btn {
   appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: var(--tap);
+  height: var(--tap);
   flex: none;
   border-radius: 13px;
   color: var(--muted);
@@ -659,6 +697,13 @@ body {
   color: var(--muted);
   font-family: var(--font-mono);
 }
+/* The glyph sits on the cap-height of the reading beside it rather than on the
+   baseline — a battery hung off a mono digit's baseline reads as dropped. */
+.robot .batt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 
 /* L/R track output bars */
 .bars {
@@ -683,11 +728,18 @@ body {
   overflow: hidden;
   position: relative;
 }
+/* Full width, scaled from the left edge — see barStyle() in FleetPanel. The
+   transition is on the transform so a moving track bar costs a composite
+   rather than a re-layout of the whole rail. */
 .bar-fill {
   position: absolute;
   top: 0;
   bottom: 0;
-  transition: left 0.12s linear, width 0.12s linear;
+  left: 0;
+  width: 100%;
+  transform-origin: left center;
+  will-change: transform;
+  transition: transform 0.12s linear;
 }
 
 /* ---------- Buttons ---------- */
@@ -791,13 +843,15 @@ body {
   gap: 6px;
 }
 /* A row is the whole hit target, not a radio button beside a label: this gets
-   tapped on a 7" panel with gloves on. */
+   tapped on a 7" panel with gloves on — which is also why it carries the full
+   52px tap floor rather than sizing to its own 14px line. */
 .wifi-row {
   appearance: none;
   width: 100%;
   display: flex;
   align-items: center;
   gap: 10px;
+  min-height: var(--tap);
   padding: 9px 12px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-input);
@@ -825,10 +879,17 @@ body {
   letter-spacing: 0.08em;
 }
 .wifi-lock {
-  font-size: 12px;
+  display: inline-flex;
+  color: var(--faint);
+  flex: none;
 }
 
-/* Four bars, bottom-aligned. Read as strength without needing a legend. */
+/* Four bars, bottom-aligned. Read as strength without needing a legend.
+   Ink rather than teal: signal strength is a measurement, and teal in this
+   console means "the rover you are calling" — the row's own accent tint says
+   which network is picked, and two teals in one row would be asking the
+   operator which question the colour is answering. The count of lit bars is
+   the signal; hue has nothing left to add. */
 .wifi-bars {
   display: inline-flex;
   align-items: flex-end;
@@ -841,7 +902,7 @@ body {
   background: var(--hairline-strong);
 }
 .wifi-bars i.on {
-  background: var(--accent);
+  background: var(--text);
 }
 
 .wifi-form {
@@ -854,8 +915,14 @@ body {
 .wifi-form .arg {
   flex: 1 1 180px;
 }
+/* The row is bottom-aligned, so a 26px checkbox under its label would drag that
+   label 12px below the three beside it. Centring the box in a 38px slot puts
+   every label in this form on one line. */
 .wifi-form .arg.wifi-hidden {
   flex: 0 0 auto;
+}
+.wifi-form .arg.wifi-hidden input {
+  margin-block: 6px;
 }
 .wifi-form .field-input {
   width: 100%;
@@ -1141,6 +1208,16 @@ body {
     box-shadow: 0 10px 42px -4px rgba(var(--danger-rgb), 0.72), var(--inset-hi);
   }
 }
+/* The latch is the one state on this console that must survive every setting.
+   Reduced motion freezes the pulse, and the pulse animates only the glow — so
+   without this a latched e-stop looked exactly like a live one to anyone who
+   asked the system for less movement. Hold the bright end of the pulse
+   statically instead of dropping the signal. */
+@media (prefers-reduced-motion: reduce) {
+  .estop.armed {
+    box-shadow: 0 10px 42px -4px rgba(var(--danger-rgb), 0.72), var(--inset-hi);
+  }
+}
 .estop-clear {
   min-height: 60px;
   padding: 0 16px;
@@ -1374,12 +1451,6 @@ body {
   margin-left: auto;
   flex-wrap: wrap;
 }
-.btn.small {
-  min-height: 34px;
-  padding: 0 12px;
-  font-size: 12px;
-}
-
 .cmd-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.9fr);
@@ -2095,6 +2166,18 @@ kbd {
   color: var(--faint);
 }
 
+/* Only the primary button had a disabled face, so every other one — Delete,
+   Scan, Refresh, Forget, Ask again — looked armed while it was inert. On a
+   console where the disabled reason is usually "the radio is down", a control
+   that gives no sign it is off reads as a control that was pressed and
+   ignored. Primary keeps its own recolour above; the rest dim. */
+.btn:disabled {
+  cursor: not-allowed;
+}
+.btn:not(.primary):disabled {
+  opacity: 0.42;
+}
+
 /* ---------- Route chips (routine editor) ---------- */
 
 .arg-route {
@@ -2215,13 +2298,24 @@ kbd {
 
 /* A capsule of pills: one object with internal divisions, per the
    Cluster-Is-A-Capsule rule. */
+/* Six tabs, and on the 800px panel they do not fit beside the e-stop: the strip
+   shrank its buttons instead, so "Base station" broke onto two lines and sat a
+   line taller than the five beside it. Labels never wrap now; if the strip
+   still runs out of room it scrolls, which a touch panel can do and a wrapped
+   tab row cannot undo. */
 .tabs {
   display: flex;
   gap: 3px;
   padding: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
   background: var(--well);
   border: 1px solid var(--hairline);
   border-radius: 999px;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tabs button {
   appearance: none;
@@ -2235,6 +2329,8 @@ kbd {
   border-radius: 999px;
   min-height: 38px;
   padding: 0 16px;
+  flex: none;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.25s var(--ease), color 0.25s var(--ease);
 }
@@ -2412,9 +2508,18 @@ kbd {
   border-color: rgba(var(--data-rgb), 0.45);
 }
 
-/* Inputs */
+/* Inputs
+ *
+ * `.field-input` belongs in this group and was missing from it, which is not a
+ * cosmetic omission: an input with no rule keeps `appearance: auto`, so the
+ * eighteen places that use it — an SSID, a password, a routine's name, a state
+ * id, a mechanism, a place — rendered as the BROWSER's widget. Arial, square
+ * corners, a 2px grey border, and a UA background that does not follow the
+ * rendition, so in daylight they came out dark-on-light: the one thing the two
+ * renditions exist to prevent, on the panel that is read in the sun. */
 .field-num,
 .field-text,
+.field-input,
 .field-select {
   appearance: none;
   font-family: var(--font-mono);
@@ -2437,6 +2542,24 @@ kbd {
   font-size: 13px;
   text-align: left;
 }
+/* The field an operator types WORDS into, so it speaks in Archivo: the two type
+   voices split on who authored the value, not on which widget holds it. The
+   numeric variant below goes back to mono, because a time limit in seconds is
+   measured whoever typed it. */
+/* Sized by width, not by `flex`: unlike `.field-text` this one lives inside
+   `.arg`, which is a COLUMN, so a flex-basis would be read as a height and the
+   field would grow to fill the label stack instead of sitting at 38px. */
+.field-input {
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font-ui);
+  text-align: left;
+}
+.field-input[type="number"] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
 .field-select {
   flex: none;
   min-width: 130px;
@@ -2445,15 +2568,26 @@ kbd {
 }
 .field-num:focus,
 .field-text:focus,
+.field-input:focus,
 .field-select:focus {
   outline: none;
   border-color: var(--accent);
 }
+/* Placeholders are text too: the UA default is well under 4.5:1 on the well. */
+.field-input::placeholder,
+.field-text::placeholder {
+  color: var(--faint);
+}
 /* The spinners are useless at 52 px tap targets and steal width. */
 .field-num::-webkit-outer-spin-button,
-.field-num::-webkit-inner-spin-button {
+.field-num::-webkit-inner-spin-button,
+.field-input::-webkit-outer-spin-button,
+.field-input::-webkit-inner-spin-button {
   appearance: none;
   margin: 0;
+}
+.field-input[type="number"] {
+  -moz-appearance: textfield;
 }
 .field-num {
   -moz-appearance: textfield;
@@ -2521,13 +2655,63 @@ kbd {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: #cdd7e4;
+  background: var(--cap);
   box-shadow: 0 2px 6px rgba(var(--shadow-rgb), 0.28);
   transition: transform 0.28s var(--ease);
 }
+/* On the teal track the cap is whatever this rendition puts on an accent fill —
+   which is what `--on-accent` is for. It was `--paper`, and paper is near-white
+   in daylight: a white cap on the daylight teal is 2.6:1, so the ON state of
+   every switch in the field rendition was the weakest mark on the panel. */
 .toggle.on .knob {
   transform: translateX(24px);
-  background: var(--paper);
+  background: var(--on-accent);
+}
+
+/* Checkboxes.
+ *
+ * Three of these ship — "hidden" on the network join, "final" on a routine
+ * state, and every hardware ToggleField — and none had a single rule, so they
+ * were the browser's 13px widget: a target you cannot hit with gloves on a 7"
+ * panel, in a chrome that follows neither rendition. Same well, hairline and
+ * radius as every other field; teal when on, which is the one meaning teal
+ * already has for a toggle. */
+input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-inner);
+  background: var(--well);
+  box-shadow: var(--inset-hi);
+  cursor: pointer;
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* The tick is masked rather than drawn in a fixed colour, so it inverts with
+   the fill the way every other ink-on-accent mark in the console does. */
+input[type="checkbox"]::after {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--on-accent);
+  opacity: 0;
+  transition: opacity 0.2s var(--ease);
+  -webkit-mask: var(--tick) center / 15px 15px no-repeat;
+  mask: var(--tick) center / 15px 15px no-repeat;
+}
+input[type="checkbox"]:checked::after {
+  opacity: 1;
+}
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Segmented enum */
@@ -2680,11 +2864,17 @@ kbd {
   border-radius: 4px;
   overflow: hidden;
 }
+/* See SignedBar in ControllerSettings — full width, scaled from the left edge,
+   so a stick at 60 Hz composites instead of re-laying-out the sheet. */
 .axis-fill {
   position: absolute;
   top: 0;
   bottom: 0;
-  transition: left 0.08s linear, width 0.08s linear;
+  left: 0;
+  width: 100%;
+  transform-origin: left center;
+  will-change: transform;
+  transition: transform 0.08s linear;
 }
 
 .button-grid {
@@ -2855,10 +3045,20 @@ kbd {
   }
   .settings-head {
     padding: 6px 10px;
-    padding-right: 190px;
+    /* The e-stop is 107px wide at this breakpoint and sits 14px off the edge,
+       so it needs 121; reserving 190 was costing the tab strip 55px it did not
+       have, which is what pushed the last tab out of the row. */
+    padding-right: 145px;
+  }
+  /* Tightened so all six still fit on the panel rather than scrolling: a tab
+     an operator has to discover by swiping is a tab they will not find. */
+  .tabs {
+    padding: 4px;
   }
   .tabs button {
     min-height: 34px;
+    font-size: 13px;
+    padding: 0 10px;
   }
   .group-head {
     min-height: 44px;
@@ -3497,11 +3697,21 @@ kbd {
   min-width: 0;
 }
 
+/* Denser, for the document editors — a ten-state routine puts a lot of these on
+   one rail. Height stays 38px so a tiny input and the tiny select beside it sit
+   on the same line; only the type and the width come down. */
 .field-input.tiny,
 .field-select.tiny {
   font-size: 12px;
-  padding: 5px 8px;
+  padding: 0 8px;
   max-width: 150px;
+}
+/* A floor as well as a ceiling: these sit in flex rows, where a width of 100%
+   and a min-width of 0 let the box collapse onto its own text — "default"
+   rendered as "defaul" in the state inspector. 92px is the width `.field-num`
+   already uses for a number you have to be able to read. */
+.field-input.tiny {
+  min-width: 92px;
 }
 
 .btn.subtle {

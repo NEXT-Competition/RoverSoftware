@@ -38,6 +38,26 @@ import {
 } from "../../state/wifi.ts";
 import type { WifiNetwork } from "../../net/types.ts";
 
+/* Drawn rather than set as an emoji, for the same reason the gear and the moon
+   in the top bar are: an emoji lock renders in the system's colour font, at the
+   system's weight, and ignores `currentColor` — so it was the one glyph in the
+   console that did not follow the rendition or sit at the stroke weight of
+   everything beside it. */
+function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+      <path
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        d="M7.6 10V7.4a4.4 4.4 0 0 1 8.8 0V10"
+      />
+      <rect x="4.6" y="10" width="14.8" height="10.4" rx="2.4" fill="currentColor" />
+    </svg>
+  );
+}
+
 /** Signal strength as four bars. A percentage is a number you have to interpret;
  *  bars are the thing every phone has already taught everybody to read. */
 function Bars({ signal }: { signal: number }) {
@@ -69,7 +89,11 @@ function NetworkRow({ net }: { net: WifiNetwork }) {
         <Bars signal={net.signal} />
         <span class="wifi-ssid">{net.ssid}</span>
         {net.secure
-          ? <span class="wifi-lock" title="Password required">🔒</span>
+          ? (
+            <span class="wifi-lock" role="img" aria-label="password required" title="Password required">
+              <LockIcon />
+            </span>
+          )
           : <span class="wifi-open">open</span>}
       </button>
     </li>
