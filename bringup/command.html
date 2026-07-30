@@ -228,9 +228,15 @@ everything except the microphone. The screen says which you have. Flags:
 <tr><td><code>send rover2 to bucket A then start</code></td><td>Routes through both saved places</td></tr>
 <tr><td><code>show me rover3's camera</code></td><td>Selects it and pulls up the FPV</td></tr>
 <tr><td><code>what is rover2 doing</code></td><td>Answers from live telemetry</td></tr>
+<tr><td><code>run the collect cones routine</code> · <code>collect cones</code></td><td><strong>Asks first</strong> — starts a routine you built and named</td></tr>
+<tr><td><code>stop the routine</code></td><td>Ends it and returns to teleop — never asks</td></tr>
 <tr><td><code>fire</code> · <code>arm the shooter</code></td><td><strong>Asks first</strong> — a card you tap</td></tr>
 </tbody></table>
 </div>
+<p>Routines are matched by the name you typed in the editor, not by the id it
+generated, and only against the ones actually loaded on the rover being
+addressed — the <em>You can say</em> panel lists them, so what is on screen is exactly
+what will be understood. Both forms above work with no model running.</p>
 <h2 id="letting-claude--or-any-ai--command-the-fleet"><a class="header" href="#letting-claude--or-any-ai--command-the-fleet">Letting Claude — or any AI — command the fleet</a></h2>
 <p><code>basestation/mcp_server.py</code> is a stdio MCP server. It connects to a <em>running</em>
 base station over the same WebSocket the dashboard uses, which is the point: an

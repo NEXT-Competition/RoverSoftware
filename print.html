@@ -490,6 +490,12 @@ robot with <code>--fpv --fpv-host &lt;base-ip&gt;</code>.</p>
 <p><img src="bringup/../img/modes.webp" alt="A grid of mode buttons: Teleop, Object align, Shooter, Waypoint, Routine — with Waypoint filled teal." /></p>
 <p>One is always active. Switching is instant and reversible; the drive layer does
 not change.</p>
+<p>Under the grid, <strong>Routines</strong> lists the state machines this rover is carrying, by
+the name you gave each one — see <a href="bringup/routines.html">Routines</a>. Tapping one selects and
+runs it, which is the fifth mode; the running one shows the step it is in, and a
+<strong>Stop</strong> below returns the rover to teleop. Nothing is listed until you have
+built one, because "run a routine" is not something an operator wants — running
+a <em>particular</em> routine is.</p>
 <h2 id="the-pad"><a class="header" href="#the-pad">The pad</a></h2>
 <p><img src="bringup/../img/drivepad.webp" alt="A circular on-screen joystick with its thumb pushed up and to the right." /></p>
 <p>Up is throttle, sideways is steer. It releases to zero and rate-limits to the
@@ -750,6 +756,13 @@ satisfy a transition it was not meant for.</li>
 <li><strong>Stop</strong> ends the run. The e-stop does too, and the routine's <em>on e-stop</em>
 setting decides whether it aborts or holds.</li>
 </ol>
+<p>A saved routine is not confined to this tab. Every one the robot carries appears
+by name under <strong>Routines</strong> on the driving view, next to the mode buttons — one
+tap selects and runs it, the running one shows the state it is in, and pressing
+it again restarts it. It is also sayable: "run the collect cones routine", or
+just its name. Naming a routine is therefore how you invoke it, so name it the
+way you would ask for it out loud. Starting one by voice always asks for a tap
+to confirm; stopping never does.</p>
 <blockquote>
 <p><strong>Test it dry</strong></p>
 <p>The simulator runs the real state-machine engine with the real validators. You
@@ -787,12 +800,35 @@ calibration to the next event.</p>
 <p>Radio airtime budget (<code>drive_hz</code>), dashboard refresh, video frame rate, basemap
 URL and trail length. Point the basemap at a local tile server here for offline
 field use.</p>
+<h2 id="watching-a-loop-instead-of-guessing-at-it"><a class="header" href="#watching-a-loop-instead-of-guessing-at-it">Watching a loop instead of guessing at it</a></h2>
+<p>A PID is the one thing here you cannot tune by watching the rover. "It wobbles"
+does not say whether <code>kp</code> is too high or <code>kd</code> is doing nothing, and the loop runs
+fifty times a second with every value in between thrown away.</p>
+<p>Switch on <strong>Graph the loops</strong> (under Control loop) and each loop group grows a
+pair of plots above its gains:</p>
+<p><strong>Tracking</strong>, in the loop's own units — the dashed line is where it is aiming,
+the solid line is where it is pointing, and the shaded gap between them is the
+error. What you want to see is the gap closing and staying closed.</p>
+<p><strong>Output</strong>, split into the P, I and D contributions that add up to it. These are
+contributions, not gains: <code>kp</code> times the error, not <code>kp</code>. It answers the question
+a gain by itself cannot — <em>which term is actually driving this?</em> A D trace that
+never leaves zero is a <code>kd</code> that is not participating. An I trace that climbs and
+stays up is wind-up. <strong>at limit</strong> means the output is pinned at <code>out_limit</code>, and
+more gain will change nothing at all.</p>
+<p>Hovering reads every series at that instant; <strong>Clear</strong> throws the history away,
+which is what you want right after changing a gain — the next curve should be the
+one your new value produced.</p>
+<p>Two things to know. It is sampled at the <strong>telemetry rate</strong>, not the control
+rate, so a wobble faster than half that rate aliases — raise <em>Telemetry rate</em>
+while you look at it. And it costs airtime on every frame, on a radio shared with
+driving: switch it on to tune, off to race.</p>
 <h2 id="a-tuning-order-that-works"><a class="header" href="#a-tuning-order-that-works">A tuning order that works</a></h2>
 <ol>
 <li><strong>Drive limits first.</strong> Slew rate and max throttle, until hand-driving feels
 controllable. Everything downstream inherits this.</li>
 <li><strong>Then heading hold.</strong> Waypoint mode with two points and nothing else
-running; raise <code>kp</code> until it oscillates, then back off a third.</li>
+running; raise <code>kp</code> until it oscillates, then back off a third. Watch the
+tracking plot rather than the rover — the oscillation shows there first.</li>
 <li><strong>Then alignment.</strong> Object align against a stationary target. The standoff
 distance is geometry, not a gain — measure it.</li>
 <li><strong>Firing policy last</strong>, and only with the launcher pointed somewhere safe.</li>
@@ -847,9 +883,15 @@ everything except the microphone. The screen says which you have. Flags:
 <tr><td><code>send rover2 to bucket A then start</code></td><td>Routes through both saved places</td></tr>
 <tr><td><code>show me rover3's camera</code></td><td>Selects it and pulls up the FPV</td></tr>
 <tr><td><code>what is rover2 doing</code></td><td>Answers from live telemetry</td></tr>
+<tr><td><code>run the collect cones routine</code> · <code>collect cones</code></td><td><strong>Asks first</strong> — starts a routine you built and named</td></tr>
+<tr><td><code>stop the routine</code></td><td>Ends it and returns to teleop — never asks</td></tr>
 <tr><td><code>fire</code> · <code>arm the shooter</code></td><td><strong>Asks first</strong> — a card you tap</td></tr>
 </tbody></table>
 </div>
+<p>Routines are matched by the name you typed in the editor, not by the id it
+generated, and only against the ones actually loaded on the rover being
+addressed — the <em>You can say</em> panel lists them, so what is on screen is exactly
+what will be understood. Both forms above work with no model running.</p>
 <h2 id="letting-claude--or-any-ai--command-the-fleet"><a class="header" href="#letting-claude--or-any-ai--command-the-fleet">Letting Claude — or any AI — command the fleet</a></h2>
 <p><code>basestation/mcp_server.py</code> is a stdio MCP server. It connects to a <em>running</em>
 base station over the same WebSocket the dashboard uses, which is the point: an
@@ -941,6 +983,33 @@ the bridge still runs, just without the UI.</p>
 sheet collapses, the map keeps the space, and the stop button stays where it
 was. Large tap targets, iPad safe-area insets, and locally-bundled map and fonts
 — no CDN, so it works fully offline.</p>
+<h2 id="arriving-somewhere-new"><a class="header" href="#arriving-somewhere-new">Arriving somewhere new</a></h2>
+<p>The rovers are on last week's WiFi and nothing that rides it — configuration,
+layouts, routines, the camera feed — works until each Pi is told about the
+network in front of you. <em>Settings → Network</em> does that from the dashboard,
+per rover:</p>
+<ol>
+<li><strong>Scan.</strong> The rover lists what it can see, strongest first.</li>
+<li>Pick one, type the password, <strong>Connect</strong>. It reports what NetworkManager
+said — including "Secrets were required, but not provided.", which is a wrong
+password — and shows the address it got.</li>
+<li><strong>Forget</strong> the old network if the rover keeps preferring it.</li>
+</ol>
+<p>This works on a rover that is on <strong>no network at all</strong>, which is the whole point:
+the request goes over the radio when there is no WiFi to carry it, the same
+exception <code>comms.base_host</code> gets, one layer down. Driving and the e-stop are
+untouched throughout — they never left the radio.</p>
+<blockquote>
+<p><strong>The password crosses the radio in the clear</strong> when the rover is not already
+on WiFi, because the XBee is unencrypted unless you have set its AES key. The
+page says so before you type one. A rover already on some network is moved to
+another over WiFi instead, and nothing goes on air.</p>
+</blockquote>
+<p>Two things that save an afternoon: set the <strong>country</strong> once (with no regulatory
+domain a Pi has 5 GHz soft-blocked, so a venue's 5 GHz network is <em>missing from
+the scan</em> rather than refusing to connect), and note that this needs
+NetworkManager — Raspberry Pi OS Bookworm or later. An older dhcpcd image says
+so on the page rather than pretending to work.</p>
 <h2 id="when-the-loop-is-over"><a class="header" href="#when-the-loop-is-over">When the loop is over</a></h2>
 <p>Once the code is worth handing to someone else, tag it and let CI build the
 packages, the desktop binaries and the apt index:
@@ -1070,6 +1139,12 @@ refuses.</p>
 {"type": "routine_event", "name": "go", "to": "rover1"}              // advance a "when I press" transition
 {"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}      // bench test, teleop only
 
+// WiFi: the one config path that must work with NO WiFi, so it may ride the radio
+{"type": "get_wifi", "to": "rover1"}                                 // what network am I on
+{"type": "scan_wifi", "to": "rover1"}                                // what can I see
+{"type": "set_wifi", "ssid": "Venue-Guest", "psk": "…", "country": "GB", "to": "rover1"}
+{"type": "forget_wifi", "ssid": "Venue-Guest", "to": "rover1"}
+
 // robot → base station (telemetry, ~5 Hz)
 {"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
  "left": 0.4, "right": 0.6, "battery": 87.0,
@@ -1079,7 +1154,27 @@ refuses.</p>
 {"type": "layout_result", "from": "rover1", "ok": true, "errors": [], "restart_required": true}
 {"type": "routines_result", "from": "rover1", "ok": false,
  "errors": ["state 'shoot': unknown mechanism 'intak'"]}
+{"type": "wifi", "from": "rover1", "ok": true, "ssid": "Venue-Guest",
+ "ip": "10.0.0.9", "signal": 82}                                     // never carries a psk
 </code></pre>
+<h2 id="wifi-is-the-exception-that-proves-the-rule"><a class="header" href="#wifi-is-the-exception-that-proves-the-rule">WiFi is the exception that proves the rule</a></h2>
+<p>Everything bulk goes over WiFi and never the radio — a config snapshot is half a
+second of airtime on a channel shared with every rover. <code>set_wifi</code> is the one
+command that inverts that, because a rover cannot be told about a network over
+that network. The base station sends it over WiFi when there is a link and falls
+back to the radio when there is not, and the reply comes back the same way (a
+rover that just failed to join has nothing else to answer over).</p>
+<p>Two consequences worth stating plainly:</p>
+<p><strong>The password crosses the radio in the clear</strong> when the rover is not already on
+WiFi, because the XBee runs transparent mode with no encryption unless you have
+configured its AES key (<code>ATEE</code>/<code>ATKY</code>). The dashboard says so at the point of
+typing. A rover that is already on some network is moved to another one over
+WiFi, and nothing goes on air.</p>
+<p><strong>It is not a tunable path.</strong> Config is snapshotted, echoed to every connected
+browser and saved to <code>tuning.json</code>; a credential belongs in none of those. So
+WiFi travels as its own message type, is handed straight to NetworkManager, and
+is stripped from the reply — the robot's <code>wifi</code> frame carries only what a scanner
+standing next to the rover would see anyway.</p>
 <h2 id="config-is-merged-documents-are-not"><a class="header" href="#config-is-merged-documents-are-not">Config is merged; documents are not</a></h2>
 <p>A <code>config</code> payload is independent scalars, so half a snapshot is a valid smaller
 snapshot. The payload is a <em>partial</em> set the base station merges: everything in

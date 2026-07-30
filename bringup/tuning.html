@@ -209,12 +209,35 @@ calibration to the next event.</p>
 <p>Radio airtime budget (<code>drive_hz</code>), dashboard refresh, video frame rate, basemap
 URL and trail length. Point the basemap at a local tile server here for offline
 field use.</p>
+<h2 id="watching-a-loop-instead-of-guessing-at-it"><a class="header" href="#watching-a-loop-instead-of-guessing-at-it">Watching a loop instead of guessing at it</a></h2>
+<p>A PID is the one thing here you cannot tune by watching the rover. "It wobbles"
+does not say whether <code>kp</code> is too high or <code>kd</code> is doing nothing, and the loop runs
+fifty times a second with every value in between thrown away.</p>
+<p>Switch on <strong>Graph the loops</strong> (under Control loop) and each loop group grows a
+pair of plots above its gains:</p>
+<p><strong>Tracking</strong>, in the loop's own units — the dashed line is where it is aiming,
+the solid line is where it is pointing, and the shaded gap between them is the
+error. What you want to see is the gap closing and staying closed.</p>
+<p><strong>Output</strong>, split into the P, I and D contributions that add up to it. These are
+contributions, not gains: <code>kp</code> times the error, not <code>kp</code>. It answers the question
+a gain by itself cannot — <em>which term is actually driving this?</em> A D trace that
+never leaves zero is a <code>kd</code> that is not participating. An I trace that climbs and
+stays up is wind-up. <strong>at limit</strong> means the output is pinned at <code>out_limit</code>, and
+more gain will change nothing at all.</p>
+<p>Hovering reads every series at that instant; <strong>Clear</strong> throws the history away,
+which is what you want right after changing a gain — the next curve should be the
+one your new value produced.</p>
+<p>Two things to know. It is sampled at the <strong>telemetry rate</strong>, not the control
+rate, so a wobble faster than half that rate aliases — raise <em>Telemetry rate</em>
+while you look at it. And it costs airtime on every frame, on a radio shared with
+driving: switch it on to tune, off to race.</p>
 <h2 id="a-tuning-order-that-works"><a class="header" href="#a-tuning-order-that-works">A tuning order that works</a></h2>
 <ol>
 <li><strong>Drive limits first.</strong> Slew rate and max throttle, until hand-driving feels
 controllable. Everything downstream inherits this.</li>
 <li><strong>Then heading hold.</strong> Waypoint mode with two points and nothing else
-running; raise <code>kp</code> until it oscillates, then back off a third.</li>
+running; raise <code>kp</code> until it oscillates, then back off a third. Watch the
+tracking plot rather than the rover — the oscillation shows there first.</li>
 <li><strong>Then alignment.</strong> Object align against a stationary target. The standoff
 distance is geometry, not a gain — measure it.</li>
 <li><strong>Firing policy last</strong>, and only with the launcher pointed somewhere safe.</li>

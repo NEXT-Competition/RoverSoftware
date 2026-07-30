@@ -253,6 +253,33 @@ the bridge still runs, just without the UI.</p>
 sheet collapses, the map keeps the space, and the stop button stays where it
 was. Large tap targets, iPad safe-area insets, and locally-bundled map and fonts
 — no CDN, so it works fully offline.</p>
+<h2 id="arriving-somewhere-new"><a class="header" href="#arriving-somewhere-new">Arriving somewhere new</a></h2>
+<p>The rovers are on last week's WiFi and nothing that rides it — configuration,
+layouts, routines, the camera feed — works until each Pi is told about the
+network in front of you. <em>Settings → Network</em> does that from the dashboard,
+per rover:</p>
+<ol>
+<li><strong>Scan.</strong> The rover lists what it can see, strongest first.</li>
+<li>Pick one, type the password, <strong>Connect</strong>. It reports what NetworkManager
+said — including "Secrets were required, but not provided.", which is a wrong
+password — and shows the address it got.</li>
+<li><strong>Forget</strong> the old network if the rover keeps preferring it.</li>
+</ol>
+<p>This works on a rover that is on <strong>no network at all</strong>, which is the whole point:
+the request goes over the radio when there is no WiFi to carry it, the same
+exception <code>comms.base_host</code> gets, one layer down. Driving and the e-stop are
+untouched throughout — they never left the radio.</p>
+<blockquote>
+<p><strong>The password crosses the radio in the clear</strong> when the rover is not already
+on WiFi, because the XBee is unencrypted unless you have set its AES key. The
+page says so before you type one. A rover already on some network is moved to
+another over WiFi instead, and nothing goes on air.</p>
+</blockquote>
+<p>Two things that save an afternoon: set the <strong>country</strong> once (with no regulatory
+domain a Pi has 5 GHz soft-blocked, so a venue's 5 GHz network is <em>missing from
+the scan</em> rather than refusing to connect), and note that this needs
+NetworkManager — Raspberry Pi OS Bookworm or later. An older dhcpcd image says
+so on the page rather than pretending to work.</p>
 <h2 id="when-the-loop-is-over"><a class="header" href="#when-the-loop-is-over">When the loop is over</a></h2>
 <p>Once the code is worth handing to someone else, tag it and let CI build the
 packages, the desktop binaries and the apt index:

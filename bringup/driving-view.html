@@ -204,6 +204,12 @@ robot with <code>--fpv --fpv-host &lt;base-ip&gt;</code>.</p>
 <p><img src="../img/modes.webp" alt="A grid of mode buttons: Teleop, Object align, Shooter, Waypoint, Routine — with Waypoint filled teal." /></p>
 <p>One is always active. Switching is instant and reversible; the drive layer does
 not change.</p>
+<p>Under the grid, <strong>Routines</strong> lists the state machines this rover is carrying, by
+the name you gave each one — see <a href="routines.html">Routines</a>. Tapping one selects and
+runs it, which is the fifth mode; the running one shows the step it is in, and a
+<strong>Stop</strong> below returns the rover to teleop. Nothing is listed until you have
+built one, because "run a routine" is not something an operator wants — running
+a <em>particular</em> routine is.</p>
 <h2 id="the-pad"><a class="header" href="#the-pad">The pad</a></h2>
 <p><img src="../img/drivepad.webp" alt="A circular on-screen joystick with its thumb pushed up and to the right." /></p>
 <p>Up is throttle, sideways is steer. It releases to zero and rate-limits to the
