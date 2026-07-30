@@ -1529,7 +1529,7 @@ from environment variables / CLI flags, and hands it to <code>Robot</code>.</p>
 <tr><td><code>RoutineConfig</code></td><td><code>state_timeout_default=60</code>, <code>allow_arm=False</code></td><td>What a UI-authored state machine is allowed to do.</td></tr>
 <tr><td><code>CommsConfig</code></td><td><code>port="/dev/ttyUSB0"</code>, <code>baud=57600</code>, <code>command_timeout=0.5</code></td><td>XBee serial + teleop failsafe window. Must match the base station and the radios' <code>BD</code>.</td></tr>
 <tr><td><code>ShooterConfig</code></td><td><code>enabled=False</code>, <code>channel=2</code>, <code>rest_angle=-30</code>, <code>fire_angle=30</code>, <code>fire_seconds=0.35</code>, <code>retract_seconds=0.35</code>, <code>dwell=0.5</code>, <code>cooldown=2.0</code>, <code>require_arm=True</code>, <code>require_arrived=True</code>, <code>max_shots=0</code></td><td>Servo launcher geometry + the firing policy for <code>shooter_align</code>. Off by default.</td></tr>
-<tr><td><code>GPSConfig</code></td><td><code>enabled</code>, <code>port="/dev/ttyAMA0"</code>, <code>baud=9600</code>, <code>fix_timeout=5.0</code>, <code>min_move_mps=0.5</code>, <code>update_rate_ms=1000</code></td><td>Adafruit Ultimate GPS reader settings.</td></tr>
+<tr><td><code>GPSConfig</code></td><td><code>enabled</code>, <code>port="/dev/ttyAMA0"</code>, <code>baud=57600</code>, <code>fix_timeout=5.0</code>, <code>min_move_mps=0.5</code>, <code>update_rate_ms=200</code></td><td>Adafruit Ultimate GPS reader settings. 5 Hz fixes; the baud is raised over <code>PMTK251</code> to carry them.</td></tr>
 <tr><td><code>PIDConfig</code></td><td><code>kp</code>, <code>ki</code>, <code>kd</code>, <code>out_limit</code>, <code>i_limit</code></td><td>Gains for one loop, so they are tunable rather than edit-and-redeploy constants.</td></tr>
 <tr><td><code>AlignConfig</code></td><td><code>forward_speed=0.25</code>, <code>pivot_threshold=0.25</code>, <code>aligned_tolerance=0.05</code>, <code>search_after=0.5</code>, <code>search_timeout=10</code>, <code>pid</code></td><td>The <code>object_align</code> / <code>shooter_align</code> state machine.</td></tr>
 <tr><td><code>NavConfig</code></td><td><code>arrive_radius_m=2.0</code>, <code>cruise_speed=0.35</code>, <code>acquire_speed=0.4</code>, <code>pivot_threshold_deg=25</code>, <code>heading_pid</code>, <code>gps_heading_pid</code></td><td>Waypoint navigation. Two heading loops: <code>heading_pid</code> for an absolute IMU heading, the slower <code>gps_heading_pid</code> for a GPS course over ground.</td></tr>
@@ -1786,9 +1786,12 @@ radio, which is the reason it doesn't live on the base station.</p>
 <pre><code class="language-jsonc">{ "id": "collect", "start": "seek", "on_end": "stop", "on_estop": "abort",
   "states": [
     { "id": "seek",
-      "drive": {"mode": "object_align"},              // DELEGATE, don't reimplement
+      // DELEGATE, don't reimplement. `target` is what to align to and
+      // `stop_within_m` is how near to get — both BORROWED from the controller
+      // and handed back when the state is left.
+      "drive": {"mode": "object_align", "target": "bucket", "stop_within_m": 1.5},
       "on_enter": [{"do": "mech_preset", "mech": "intake", "preset": "in"}],
-      "transitions": [{"when": "aligned", "for_seconds": 0.4, "to": "shoot"},
+      "transitions": [{"when": "arrived", "for_seconds": 0.4, "to": "shoot"},
                       {"when": "elapsed", "seconds": 20, "to": "done"}] },
     { "id": "shoot", "drive": {"mode": "shooter_align"},
       "on_enter": [{"do": "arm"}],
@@ -1805,6 +1808,16 @@ user-editable blocks. <code>RoutineController</code> owns the delegate's lifecyc
 view every non-active controller is inactive; it syncs <em>before</em> evaluating
 transitions, since conditions like <code>aligned</code> read state the delegate publishes
 from its own <code>update()</code>.</p>
+<p><strong>An aiming state borrows, it does not take.</strong> <code>target</code> (which detector class)
+and <code>stop_within_m</code> (how near, in metres) are set on entry and put back on <em>every</em>
+exit path — finished, stopped, timed out, e-stopped, or the mode switched out
+from under it. A routine that left either rewritten would make the next thing
+anybody does behave oddly with nothing on screen to explain why: a detector still
+filtering on buckets, or a manual alignment stopping at a distance nobody chose.
+Omitting them means "whatever the operator set", which is also exactly what every
+routine written before the fields existed means. The metres go through the
+bounding-box rangefinder, so an uncalibrated build ignores them and stops at its
+own <code>standoff_size</code> rather than refusing to run.</p>
 <p><strong>Conditions read what the controllers already publish</strong> — <code>aligned</code>, <code>arrived</code>,
 <code>last_detection</code>, <code>route_done</code>, <code>shots</code> — rather than deriving a second, subtly
 different answer that would drift from the first. Each is a pure read through an
@@ -2006,16 +2019,24 @@ course over ground, and all three of these swing on it:</p>
 </tbody></table>
 </div>
 <p>The GPS loop is deliberately about half the authority: it is closing around a
-sensor that refreshes at <code>gps.update_rate_ms</code> (1 Hz by default) while the control
-loop runs at 50 Hz, and it carries no integral at all — a course over ground has
-no steady-state bias to trim, and integrating a once-a-second error only winds
+sensor that refreshes at <code>gps.update_rate_ms</code> (200 ms — 5 Hz — by default) while
+the control loop runs at 50 Hz, and it carries no integral at all — a course over
+ground has no steady-state bias to trim, and integrating a stale error only winds
 up. Switching source mid-route (the IMU finishing calibration, or dropping out)
 resets both loops so neither inherits a stale integrator.</p>
+<blockquote>
+<p><strong>These gains were sized for a 1 Hz course</strong> and have not been re-tuned since
+the default moved to 5 Hz. They are wrong in the safe direction — a loop damped
+for a once-a-second sensor is merely sluggish on a five-times-a-second one, not
+unstable — but there is real authority left on the table. Re-tune on hardware
+with <code>nav.pid_trace</code> on before trusting the numbers in the table above.</p>
+</blockquote>
 <p>If the GPS heading feels sluggish, the fix is upstream of the gains: raise the
-GPS fix rate (<code>gps.update_rate_ms</code> — and the module baud with it, see below),
-lower <code>gps.min_move_mps</code> so slower motion still yields a course, and keep an IMU
-in the loop even if only for <code>heading_rate()</code> — a gyro-fed derivative is the one
-thing that lets this loop run at full rate on a 1 Hz heading.</p>
+GPS fix rate (<code>gps.update_rate_ms</code> — and the module baud with it, see below;
+5 Hz is the MTK3339's ceiling), lower <code>gps.min_move_mps</code> so slower motion still
+yields a course, and keep an IMU in the loop even if only for <code>heading_rate()</code> —
+a gyro-fed derivative is the one thing that lets this loop run at full rate on a
+heading slower than the control loop.</p>
 <p>Routes arrive live: <code>on_message({"type":"route","waypoints":[...]})</code> swaps the
 list in and resets to leg 0.</p>
 <blockquote>
@@ -2029,9 +2050,21 @@ caches the latest fix; the 50 Hz loop calls <code>pose()</code> (a cheap locked 
 never blocks on serial. Details:</p>
 <ul>
 <li><strong>Configured over PMTK at start-up</strong> — <code>PMTK314</code> asks for <strong>GGA + RMC + VTG</strong>
-only (no GSV satellite-detail spam on a 9600-baud link), <code>PMTK220</code> sets the fix
-interval (<code>update_rate_ms</code>, 1000 ms default). A non-MTK receiver — a u-blox
-NEO-6M, say — ignores both and still parses fine.</li>
+only (no GSV satellite-detail spam), then <code>PMTK300</code> and <code>PMTK220</code> set the
+interval (<code>update_rate_ms</code>, 200 ms / 5 Hz default) for solving a position and
+for talking about it <em>respectively</em>. Both, because <code>PMTK220</code> alone speeds up
+the sentences while the fix behind them repeats. A non-MTK receiver — a u-blox
+NEO-6M, say — ignores all three and still parses fine.</li>
+<li><strong>The baud follows the rate.</strong> GGA+RMC+VTG is ~190 bytes a fix, so 5 Hz is
+~9500 bps of payload — past what a 9600-baud line holds, and a truncated
+sentence fails its checksum and reads as "no fix", not as a baud problem. So
+the default is <strong>57600</strong>, and <code>start()</code> sends <code>PMTK251</code> from 9600 (the module's
+cold-boot baud) on <em>every</em> start — the change doesn't survive a power cycle
+without the breakout's CR1220 battery. <code>_check_link_budget</code> prints the
+arithmetic when the requested rate outruns either the link or the receiver.</li>
+<li><strong>5 Hz is the MTK3339's ceiling</strong> — its position engine solves no faster,
+whatever <code>PMTK220</code> is told. The MT3333-based PA1616D does a genuine 10 Hz, so
+a rate below 200 ms warns rather than being clamped.</li>
 <li><strong>Heading is the GPS track angle</strong> (course over ground, from RMC/VTG): a
 true-North heading with no compass, no calibration and no declination
 correction. It's what <code>pose()</code> returns whenever the IMU isn't supplying one.
@@ -2140,7 +2173,32 @@ frame — the model's cropped input on Edge Impulse (confirm colour order and
 framing by eye), the full frame with the sensor's boxes drawn on the IMX500
 (confirm the boxes land on the objects). Park at your stop distance and read
 the printed <code>size</code> — that's <code>RS_VISION_STANDOFF</code>.</p>
+<p>The same parked reading calibrates the <strong>rangefinder</strong>, which is what lets a
+routine ask for metres. Measure the distance with a tape, and the pair
+(<code>RS_VISION_RANGE_AT_M</code>, <code>RS_VISION_RANGE_SIZE</code>) is the entire model.</p>
 </blockquote>
+<p><strong>Distance from the bounding box (<code>control/rangefinder.py</code>).</strong> Pinhole optics
+make <code>distance × size</code> a constant once the object's real height, the focal
+length and the frame height are folded together — so one measured pair converts
+box heights to metres in both directions, and needs no lens data. That is what
+<code>stop_within_m</code> on a routine state is expressed in.</p>
+<p>It is a placeholder with a seam, and the seam is the point: <code>distance_m</code> and
+<code>size_at</code> are the whole interface, so a regression fitted on collected
+<code>(size, distance)</code> pairs — or a per-label table — replaces the arithmetic without
+the controller or the routine schema noticing. Three things it does not model,
+all of which matter before you trust a reading: every target is assumed to be the
+same height (the constant folds it in, so a cone and a bucket at one distance
+read differently), a box seen from an angle is shorter than one seen square on,
+and box jitter at the frame edge lands directly on the estimate.</p>
+<p>Failure is downward, never silent. No calibration, no box height (FOMO), or
+nothing in view all give <code>None</code>, and an aligning controller told to stop at a
+distance it cannot compute falls back to <code>standoff_size</code> — where it stopped
+before distances existed. A stop distance nearer than the target stays fully
+visible from would need a box height above 1.0, i.e. an arrival test no frame can
+pass and a robot that never stops; that is clamped and logged rather than
+obeyed. Telemetry carries <code>vision.dist</code> beside <code>vision.size</code> on purpose: the
+guess next to the measurement it came from is what lets someone with a tape
+measure see the drift — and collect the pairs a fitted model would want.</p>
 <p><strong>FPV live video (<code>sensors/fpv.py</code>, <code>comms/video_udp.py</code>).</strong> The camera is a
 single shared reader (<code>sensors/camera.py</code>) because a V4L2/CSI device can't be
 opened twice — the detector and the FPV streamer both sample its cached frame.
@@ -2508,7 +2566,7 @@ Each maps to a CLI flag on the respective entry point.</p>
 <tr><td><code>RS_START_MODE</code></td><td><code>teleop</code></td><td><code>teleop</code> | <code>object_align</code> | <code>shooter_align</code> | <code>waypoint</code> | <code>routine</code>.</td></tr>
 <tr><td><code>RS_LOOP_HZ</code> / <code>RS_TELEMETRY_HZ</code></td><td><code>50</code> / <code>5</code></td><td>Control-loop and telemetry rates.</td></tr>
 <tr><td><code>RS_MOCK_MOTORS</code></td><td><code>0</code></td><td>Force mock servos (no HAT).</td></tr>
-<tr><td><code>RS_GPS_ENABLED</code> / <code>RS_GPS_PORT</code> / <code>RS_GPS_BAUD</code> / <code>RS_GPS_RATE_MS</code></td><td><code>1</code> / <code>/dev/ttyAMA0</code> / <code>9600</code> / <code>1000</code></td><td>Adafruit GPS reader; <code>RATE_MS</code> is the PMTK220 fix interval.</td></tr>
+<tr><td><code>RS_GPS_ENABLED</code> / <code>RS_GPS_PORT</code> / <code>RS_GPS_BAUD</code> / <code>RS_GPS_RATE_MS</code></td><td><code>1</code> / <code>/dev/ttyAMA0</code> / <code>57600</code> / <code>200</code></td><td>Adafruit GPS reader; <code>RATE_MS</code> is the PMTK300+PMTK220 fix interval (200 = 5 Hz, the MTK3339's ceiling). The baud is set on the module over PMTK251 at every start.</td></tr>
 <tr><td><code>RS_HEADING_SOURCE</code></td><td><code>auto</code></td><td><code>auto</code> (IMU when calibrated, else the GPS track angle) | <code>gps</code> | <code>imu</code>.</td></tr>
 <tr><td><code>RS_VISION_BACKEND</code></td><td><code>auto</code></td><td><code>auto</code> | <code>edge_impulse</code> | <code>imx500</code> (AI Camera, on-sensor).</td></tr>
 <tr><td><code>RS_VISION_MODEL</code></td><td><code>/var/lib/roversoftware/model.eim</code></td><td>Edge Impulse model. Must be <code>chmod +x</code>.</td></tr>
@@ -2516,6 +2574,7 @@ Each maps to a CLI flag on the respective entry point.</p>
 <tr><td><code>RS_VISION_IMX500_LABELS</code> / <code>_IOU</code> / <code>_MAX_DET</code></td><td>`` / <code>0.65</code> / <code>10</code></td><td>Labels file (empty = embedded in the <code>.rpk</code>), NMS overlap, boxes per frame.</td></tr>
 <tr><td><code>RS_VISION_LABEL</code> / <code>RS_VISION_CONF</code></td><td>`` / <code>0.6</code></td><td>Label to track (empty = any); score floor.</td></tr>
 <tr><td><code>RS_VISION_STANDOFF</code> / <code>RS_VISION_HFOV</code></td><td><code>0.45</code> / <code>50</code></td><td><strong>Both backend-dependent</strong> — calibrate with <code>tools/detector_selftest.py</code>; HFOV is post-crop on Edge Impulse, the real ~66° on the IMX500.</td></tr>
+<tr><td><code>RS_VISION_RANGE_AT_M</code> / <code>RS_VISION_RANGE_SIZE</code></td><td><code>1.0</code> / <code>0.45</code></td><td>The bounding-box rangefinder's one calibration pair: "at this distance, the box measured this". <strong>Shipped values are a placeholder</strong> — measure them. <code>0</code> disables metre estimates.</td></tr>
 <tr><td><code>RS_CAMERA_DEVICE</code></td><td><code>auto</code></td><td><code>auto</code> | <code>imx500</code> | <code>picamera2</code> | <code>/dev/videoN</code> | index. Set for you when the IMX500 backend is selected.</td></tr>
 <tr><td><code>RS_SHOOTER_ENABLED</code> / <code>RS_SHOOTER_CHANNEL</code></td><td><code>0</code> / <code>2</code></td><td>Servo launcher. Channels 0–1 are the drive ESCs.</td></tr>
 <tr><td><code>RS_SHOOTER_REST</code> / <code>RS_SHOOTER_FIRE</code></td><td><code>-30</code> / <code>30</code></td><td>Home and fire angles (find with <code>tools/servo_sweep.py</code>).</td></tr>
