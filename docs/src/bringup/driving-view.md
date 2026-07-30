@@ -31,6 +31,21 @@ object `object_align` is tracking; amber is everything else it can see.
 FPV needs WiFi, not the radio — 57600 baud cannot carry a camera. Start the
 robot with `--fpv --fpv-host <base-ip>`.
 
+## The telemetry rows
+
+Under the fleet: mode, position, heading, GPS fix health, wheel speed, battery,
+what the detector sees, and the link. Each carries a colour that means the same
+thing everywhere — grey is "nothing to say", green is fine, red wants you.
+
+The **wheels** row appears only on a build with
+[encoders](hardware.md#the-encoder-if-this-motor-has-one) fitted, and it is the
+one number the rest of this screen cannot give you: `left`/`right` on the fleet
+row are what the rover was *told*, and this is what the wheels actually *did*. It
+leads with the gap between the two sides rather than the two speeds, because the
+gap is what you are watching for — a rover that curves shows it here before the
+map catches up. See
+[Wheel speed matching](tuning.md#making-both-tracks-turn-together).
+
 ## Modes
 
 ![A grid of mode buttons: Teleop, Object align, Shooter, Waypoint, Routine — with Waypoint filled teal.](../img/modes.webp)

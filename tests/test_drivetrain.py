@@ -245,3 +245,134 @@ def test_a_layout_reaches_all_the_way_to_the_hardware():
     dt.drive(0.8, 0.2)
     assert isinstance(dt, SteeredDrivetrain)
     assert dt.motors["rear"].throttle == pytest.approx(0.5)
+
+
+# --- wheel encoders and the speed loop ---------------------------------------
+#
+# The decoder and the loop have their own files (test_encoder.py,
+# test_rpm_trim.py). What is checked here is only the wiring between them and
+# the drivetrain — including the case that matters most on a real robot, which
+# is a build with no encoders behaving exactly as it did before any of this
+# existed.
+
+
+class FakeEncoder:
+    """Stands in for a wired encoder, reporting whatever the test says."""
+
+    def __init__(self, rpm=0.0):
+        self._rpm = rpm
+        self.samples = 0
+        self.started = self.stopped = False
+
+    def start(self):
+        self.started = True
+        return True
+
+    def stop(self):
+        self.stopped = True
+
+    def sample(self, now=None):
+        self.samples += 1
+
+    def rpm(self):
+        return self._rpm
+
+    def telemetry(self):
+        return round(self._rpm, 1)
+
+
+def tank_with_encoders(left_rpm, right_rpm, **trim):
+    cfg = DriveConfig()
+    cfg.slew_rate = 0
+    for key, value in trim.items():
+        setattr(cfg.trim, key, value)
+    dt = TankDrivetrain(cfg)
+    dt.encoders = {"left": FakeEncoder(left_rpm), "right": FakeEncoder(right_rpm)}
+    return dt
+
+
+def test_a_build_with_no_encoders_reports_nothing_and_drives_as_before():
+    """The compatibility claim, stated as a test: encoders are opt-in hardware
+    and a robot without them must not pay for the feature in any way."""
+    dt = TankDrivetrain(DriveConfig())
+    assert dt.encoders == {}
+    assert dt.status() is None
+    dt.drive(0.5, 0.5)
+    assert dt.left.throttle == pytest.approx(0.5)
+
+
+def test_the_trim_is_inert_until_a_mode_is_chosen():
+    """Off by default, however well the encoders are working: this is the one
+    thing here that can add throttle nobody asked for."""
+    dt = tank_with_encoders(90.0, 110.0)
+    dt.drive(0.5, 0.5)
+    assert dt.left.throttle == pytest.approx(0.5)
+    assert dt.right.throttle == pytest.approx(0.5)
+
+
+def test_match_mode_corrects_the_side_that_is_running_slow():
+    dt = tank_with_encoders(90.0, 110.0, mode="match")
+    for _ in range(50):
+        dt.drive(0.5, 0.5)
+    assert dt.left.throttle > 0.5
+    assert dt.right.throttle < 0.5
+
+
+def test_encoders_are_sampled_every_tick_even_with_the_trim_off():
+    """Measuring is useful on its own — it is what you read to set max_rpm in
+    the first place — so the readout does not depend on the loop being on."""
+    dt = tank_with_encoders(100.0, 100.0)
+    dt.drive(0.2, 0.2)
+    dt.drive(0.2, 0.2)
+    assert dt.encoders["left"].samples == 2
+
+
+def test_side_rpm_averages_the_encoders_on_a_multi_motor_side():
+    """A six-wheel side has three motors and the useful number is how fast the
+    TRACK is going."""
+    cfg = DriveConfig(
+        actuators={"l1": MotorConfig(channel=0, name="l1"),
+                   "l2": MotorConfig(channel=1, name="l2"),
+                   "r1": MotorConfig(channel=2, name="r1")},
+        roles=DriveRoles(left=["l1", "l2"], right=["r1"]))
+    dt = TankDrivetrain(cfg)
+    dt.encoders = {"l1": FakeEncoder(100.0), "l2": FakeEncoder(80.0),
+                   "r1": FakeEncoder(90.0)}
+    assert dt.side_rpm(["l1", "l2"]) == pytest.approx(90.0)
+
+
+def test_a_side_with_no_encoder_reports_no_measurement_rather_than_zero():
+    """None is what makes the loop fail open. Zero would make it chase a
+    standstill that isn't there."""
+    dt = tank_with_encoders(100.0, 100.0, mode="match")
+    del dt.encoders["right"]
+    assert dt.side_rpm(["right"]) is None
+    for _ in range(50):
+        dt.drive(0.5, 0.5)
+    assert dt.left.throttle == pytest.approx(0.5)
+
+
+def test_stopping_releases_the_loop_including_a_latched_fault():
+    dt = tank_with_encoders(0.0, 100.0, mode="match", stall_seconds=0.0)
+    dt.trim._fault = "left"
+    dt.stop()
+    assert dt.trim.fault == ""
+
+
+def test_arming_starts_the_encoders_and_shutdown_stops_them():
+    """Claimed while the ESCs hold neutral, so the first speed sample is taken
+    against a known standstill."""
+    dt = tank_with_encoders(0.0, 0.0)
+    dt.cfg.arm_seconds = 0
+    dt.arm()
+    assert dt.encoders["left"].started
+    dt.shutdown()
+    assert dt.encoders["left"].stopped
+
+
+def test_status_reports_rpm_per_actuator_and_what_the_trim_did():
+    dt = tank_with_encoders(90.0, 110.0, mode="match")
+    dt.drive(0.5, 0.5)
+    status = dt.status()
+    assert status["rpm"] == {"left": 90.0, "right": 110.0}
+    assert status["mode"] == "match"

@@ -3018,6 +3018,29 @@ kbd {
   flex: 1 1 160px;
 }
 
+/* An actuator's optional encoder. Set below the calibration it belongs to and
+   behind a hairline, because most builds have none and the four fields should
+   not make the common case look more complicated than it is. */
+.actuator-encoder {
+  border-top: 1px solid var(--hairline);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.encoder-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.encoder-head .doc-label {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
 .preset-editor {
   margin-top: 12px;
 }

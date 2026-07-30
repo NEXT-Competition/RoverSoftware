@@ -20,6 +20,7 @@ from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
+from .control.rangefinder import Rangefinder
 from .control.routine_controller import RoutineController
 from .control.shooter_align import ShooterAlignController
 from .control.teleop import TeleopController
@@ -109,6 +110,14 @@ class Robot:
         self._outbox: "collections.deque[Tuple[dict, bool]]" = collections.deque(
             maxlen=OUTBOX_MAX)
 
+        # Bounding box -> metres, so an aligning controller can be told to stop
+        # a distance away rather than at a box height. ONE of them, shared: it
+        # describes the camera and the target, not which loop is driving, and
+        # two copies would be two things to re-calibrate. Built even when
+        # controllers are injected, because _push_live_config re-calibrates it.
+        self.rangefinder = Rangefinder(config.vision.range_at_m,
+                                       config.vision.range_size)
+
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
         # sensor providers (camera target / GPS pose) are attached.
@@ -127,6 +136,7 @@ class Robot:
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
                     standoff_size=v.standoff_size,
+                    rangefinder=self.rangefinder,
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
@@ -140,6 +150,7 @@ class Robot:
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
                     standoff_size=v.standoff_size,
+                    rangefinder=self.rangefinder,
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
@@ -813,6 +824,17 @@ class Robot:
         only when a config frame arrives, never in the control loop.
         """
         cfg = self.cfg
+        # Re-measured from the dashboard without a restart, which is the whole
+        # point of a calibration you get right by parking the rover and reading
+        # a number: the next frame uses the value you just typed.
+        self.rangefinder.calibrate(cfg.vision.range_at_m, cfg.vision.range_size)
+        # Wheel encoders, for exactly the same reason: counts-per-rev is a
+        # number you get right by turning a wheel and typing what you counted,
+        # and the speed-matching mode is switched on, watched, and switched off
+        # again in the pit. Everything else the loop reads (mode, gains, limits)
+        # comes off the shared config object every tick, so this only has to
+        # reach what was cached.
+        self.drive.recalibrate()
         for c in self.manager.controllers.values():
             if isinstance(c, TeleopController):
                 c.command_timeout = cfg.comms.command_timeout
@@ -878,6 +900,14 @@ class Robot:
             "left": round(cmd.left, 3),
             "right": round(cmd.right, 3),
         }
+        # What the wheels ACTUALLY did with those two numbers, which is the
+        # whole reason encoders exist: `left`/`right` above are what the robot
+        # was told, and on real hardware they are not the same thing. Absent
+        # entirely on a build with no encoders wired, so it costs those builds
+        # nothing. See robot/drive/drivetrain.py::status.
+        encoders = self.drive.status()
+        if encoders is not None:
+            t["enc"] = encoders
         if self.pose_provider is not None:
             pose = self.pose_provider()
             if pose is not None:
@@ -898,6 +928,15 @@ class Robot:
         # A summary, never boxes or frames: the radio is 57600 baud and shared.
         if self.detector is not None:
             t["vision"] = self.detector.telemetry()
+            # Estimated metres to the target, alongside the box height it was
+            # derived from. Both, deliberately: `size` is what the model actually
+            # measured and `dist` is a guess built on one calibration pair, so
+            # showing them together is what lets someone standing next to the
+            # rover with a tape measure see the guess drift — and collect the
+            # pairs a fitted model would need. ~8 bytes a frame.
+            distance = self.rangefinder.distance_m(t["vision"].get("size"))
+            if distance is not None:
+                t["vision"]["dist"] = round(distance, 2)
         # Shooter state (armed, shots, dwelling, cooldown). Only while the mode
         # is active — an operator needs to see the arm latch before it matters,
         # and it's dropped on exit anyway, so there's nothing to report elsewhere.
@@ -924,6 +963,15 @@ class Robot:
         # nobody is looking at is not worth the airtime a graph costs.
         if self.cfg.nav.pid_trace:
             traces = active.pid_traces() if active is not None else {}
+            # The wheel-speed loop rides the same switch, but it is NOT the
+            # active controller's — it lives under the drivetrain and runs in
+            # every mode, which is exactly why it needs a graph of its own: the
+            # gains are the only ones here you cannot tune by watching, because
+            # what they act on is invisible from outside the rover.
+            trim = getattr(self.drive, "trim", None)
+            trace = trim.trace() if trim is not None else None
+            if trace is not None:
+                traces = {**traces, "drive.trim.pid": trace}
             if traces:
                 t["pid"] = traces
         return t
@@ -1016,6 +1064,10 @@ class Robot:
     def shutdown(self) -> None:
         print("\n[Robot] shutting down; stopping motors")
         self.drive.stop()
+        # Then hand the encoder GPIO back. After stop(), never instead of it:
+        # releasing the pins is housekeeping, and the motors coming to rest is
+        # the only part of this that matters if the next line raises.
+        self.drive.shutdown()
         # Park every mechanism at rest before anything else winds down: leaving
         # a launcher at the fire angle stalls the servo and leaves the mechanism
         # cocked, and leaving an intake powered is worse.

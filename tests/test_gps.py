@@ -208,11 +208,50 @@ def test_read_loop_survives_a_parse_error(capsys):
     assert "read/parse error" in capsys.readouterr().out
 
 
+class FakePort:
+    """A serial port that records what was written to it, usable as a context
+    manager (the baud handshake opens one with `with`)."""
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self.written = b""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def write(self, data):
+        self.written += data
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def fake_serial(monkeypatch, ports):
+    """Patch the serial module so every Serial(...) lands in `ports`."""
+    def _open(port, baud, **kwargs):
+        p = FakePort(port, baud, **kwargs)
+        ports.append(p)
+        return p
+
+    monkeypatch.setattr(gps_mod, "serial", types.SimpleNamespace(Serial=_open))
+
+
 def test_start_configures_sentences_and_rate(monkeypatch):
-    """We must ask for VTG (the track angle) and set the fix rate."""
+    """VTG (the track angle) plus BOTH rate commands: solve rate and talk rate.
+
+    PMTK220 on its own is the subtle failure — the module keeps solving at its
+    old rate and simply repeats each position, so the sentences speed up while
+    the navigation data behind them does not.
+    """
     chip = FakeChip()
-    monkeypatch.setattr(gps_mod, "serial",
-                        types.SimpleNamespace(Serial=lambda *a, **k: object()))
+    fake_serial(monkeypatch, [])
     monkeypatch.setattr(gps_mod, "adafruit_gps",
                         types.SimpleNamespace(GPS=lambda uart, debug=False: chip))
     g = GPS("/dev/null", 9600, update_rate_ms=200)
@@ -223,7 +262,87 @@ def test_start_configures_sentences_and_rate(monkeypatch):
         g.stop()
 
     assert chip.commands[0].startswith(b"PMTK314,0,1,1,1")  # GLL off, RMC/VTG/GGA on
-    assert chip.commands[1] == b"PMTK220,200"
+    assert chip.commands[1] == b"PMTK300,200,0,0,0,0"
+    assert chip.commands[2] == b"PMTK220,200"
+
+
+def test_start_raises_the_module_baud_first(monkeypatch):
+    """PMTK251 goes out at 9600 — the only baud a cold module is listening at.
+
+    And it goes out on EVERY start: without the CR1220 backup battery the module
+    forgets the change on each power cycle, so a one-off bring-up step would
+    leave the rover reading garbage after its next battery swap.
+    """
+    ports = []
+    fake_serial(monkeypatch, ports)
+    monkeypatch.setattr(gps_mod, "adafruit_gps",
+                        types.SimpleNamespace(GPS=lambda uart, debug=False: FakeChip()))
+    monkeypatch.setattr(gps_mod.time, "sleep", lambda *_: None)
+    g = GPS("/dev/null", 57600, update_rate_ms=200)
+    try:
+        g.start()
+    finally:
+        g.stop()
+
+    handshake, reader = ports
+    assert handshake.args[1] == 9600           # spoken at the module's boot baud
+    assert handshake.written == b"$PMTK251,57600*2C\r\n"
+    assert reader.args[1] == 57600             # ...then we listen at the new one
+
+
+def test_no_baud_handshake_when_already_at_the_module_default(monkeypatch):
+    """Nothing to change at 9600, so don't open a second port to say so."""
+    ports = []
+    fake_serial(monkeypatch, ports)
+    monkeypatch.setattr(gps_mod, "adafruit_gps",
+                        types.SimpleNamespace(GPS=lambda uart, debug=False: FakeChip()))
+    g = GPS("/dev/null", 9600)
+    try:
+        g.start()
+    finally:
+        g.stop()
+
+    assert len(ports) == 1
+    assert ports[0].written == b""
+
+
+def test_a_failed_baud_handshake_still_starts(monkeypatch, capsys):
+    """A module already at the target baud reads fine without the handshake."""
+    def _open(port, baud, **kwargs):
+        if baud == 9600:
+            raise OSError("port busy")
+        return FakePort(port, baud, **kwargs)
+
+    monkeypatch.setattr(gps_mod, "serial", types.SimpleNamespace(Serial=_open))
+    monkeypatch.setattr(gps_mod, "adafruit_gps",
+                        types.SimpleNamespace(GPS=lambda uart, debug=False: FakeChip()))
+    g = GPS("/dev/null", 57600)
+    try:
+        g.start()
+        assert g.is_running()
+    finally:
+        g.stop()
+    assert "PMTK251" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("rate_ms,baud,warns", [
+    (1000, 9600, False),   # the old 1 Hz setup: fits fine, must stay quiet
+    (200, 9600, True),     # 5 Hz of GGA+RMC+VTG is ~9500 bps of payload
+    (200, 57600, False),   # ...which is why the default moved up
+])
+def test_link_budget_warning(rate_ms, baud, warns, capsys):
+    """Too much NMEA for the baud truncates sentences, which reads as 'no fix'."""
+    g = GPS("/dev/null", baud, update_rate_ms=rate_ms)
+    g._check_link_budget()
+    assert ("truncate" in capsys.readouterr().out) is warns
+
+
+def test_rate_beyond_the_mtk3339_warns_but_is_not_clamped(capsys):
+    """10 Hz is real on a PA1616D, so warn — don't silently override the ask."""
+    g = GPS("/dev/null", 57600, update_rate_ms=100)
+    g._check_link_budget()
+    assert "repeat positions" in capsys.readouterr().out
+    assert g.update_rate_ms == 100
 
 
 def test_telemetry_reports_fix_health():

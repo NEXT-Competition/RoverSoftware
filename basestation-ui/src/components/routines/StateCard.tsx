@@ -13,6 +13,7 @@ import {
   seenLabels,
   setAction,
   setDrive,
+  setDriveStopWithin,
   setDriveTarget,
   setDriveValue,
   setStateField,
@@ -117,6 +118,31 @@ export function StateCard(
             <datalist id={`labels-${state.id}`}>
               {seenLabels.value.map((label) => <option key={label} value={label} />)}
             </datalist>
+          </label>
+        )}
+
+        {/* And the answer to "how CLOSE". Beside the target for the same reason
+            the target is beside the mode: a state that approaches something
+            without saying how near stops wherever Settings was last left, which
+            is a routine whose stopping distance changes between runs nobody
+            edited. Blank is still legal and still means exactly that — the
+            controller's own standoff — so this reads as an override, not a
+            required field. */}
+        {driveTakesTarget(mode) && (
+          <label class="arg">
+            <span>stop within (m)</span>
+            <input
+              class="field-input tiny"
+              type="number"
+              min={0.1}
+              max={50}
+              step={0.1}
+              placeholder="default"
+              value={state.drive?.stop_within_m ?? ""}
+              onInput={(e) =>
+                setDriveStopWithin(state.id, (e.target as HTMLInputElement).value)}
+              title="Metres. The robot estimates this from the bounding box height, so it is only as good as the range calibration in Settings — check it against a tape measure before trusting it. Left blank, the state stops at whatever standoff the controller is already set to."
+            />
           </label>
         )}
 

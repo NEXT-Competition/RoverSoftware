@@ -16,6 +16,15 @@ pyserial>=3.5
 # runs at the Pi's normal I2C bus speed — no dtparam=i2c_arm_baudrate workaround
 # needed (remove it if it was set for the old sensor). Strap PS0/PS1 for I2C mode.
 # Verify with tools/imu_selftest.py.
+#
+# Wheel encoders (robot/sensors/encoder.py) need a GPIO library, and WHICH one
+# depends on the Pi. Install exactly one; without either, encoders stay inert
+# and the drivetrain runs open-loop as it always did.
+#   pip install pigpio     # Pi 4 and older. Also: sudo systemctl enable --now pigpiod
+#   pip install lgpio      # Pi 5 / Bookworm. No daemon.
+# Both are Pi-only and so stay out of pyproject.toml, same as everything above.
+# Verify with tools/encoder_monitor.py, which is also how you measure the
+# counts-per-rev the speed loop needs.
 
 # --- Base station (Pi or Mac) ---
 fastapi>=0.110       # dashboard web server + WebSocket
