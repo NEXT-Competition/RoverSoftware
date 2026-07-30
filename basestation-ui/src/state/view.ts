@@ -18,10 +18,11 @@ export const view = signal<View>("ops");
  * down never gets its pointerup — without this, the last stick vector would
  * keep being re-sent by the keepalive while the operator reads about PID gains.
  *
- * A *physical* gamepad deliberately keeps driving: it is a real control
- * surface the operator is still holding, the server-side reader never stopped
- * anyway, and a pad that silently went dead behind a settings page is how you
- * end up unable to stop a rover with the stick in your hand.
+ * A *physical* gamepad is unaffected, and that is now structural rather than a
+ * decision this function makes: it is read on the base station and its commands
+ * never pass through the browser at all. Which is what you want — a pad that
+ * silently went dead behind a settings page is how you end up unable to stop a
+ * rover with the stick in your hand.
  */
 export function showView(next: View): void {
   if (next !== "ops") releaseDrive();

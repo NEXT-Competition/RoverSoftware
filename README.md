@@ -225,8 +225,11 @@ can drive from a tablet with no gamepad (up = throttle, sideways = steer; it
 release-to-zeros and rate-limits to ~30 Hz to match the radio), a floating
 always-visible **E-STOP**, responsive **landscape / portrait (bottom-sheet)**
 layouts with iPad safe-area insets, and locally-bundled map + fonts (no CDN, so
-it works fully offline). Physical gamepads still work via the browser Gamepad
-API, and the server-side gamepad path is unchanged.
+it works fully offline). A **physical gamepad plugs into the base station**, not
+into the tablet: it is read there by pygame and goes straight out over the radio,
+so nothing about driving with a controller depends on a browser being awake or a
+WebSocket being healthy. Its bindings are still edited from *Settings →
+Controller*.
 
 ### Commanding by voice — the Command tab
 

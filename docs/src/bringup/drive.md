@@ -1,16 +1,23 @@
 # 3 · Drive a rover
 
-*A gamepad or the touch joystick — both through the same sender.*
+*A gamepad on the base station, or the touch joystick in the browser.*
 
 1. Tap a rover in the fleet list. Everything that follows applies to it.
 2. Make sure it is in **Teleop**. The mode grid is under *Control* in the rail.
 3. Drive it: hold the on-screen pad, or use a gamepad — <kbd>R2</kbd> forward,
    <kbd>L2</kbd> reverse, right stick to steer.
 
-Both paths hand a throttle and steer already in `-1 … +1` to one sender, which
-only transmits on a meaningful change and never faster than the bridge's
-`drive_hz`. That single budget is why a physical pad and a tablet joystick feel
-identical and why two operators cannot flood the radio between them.
+**Plug the gamepad into the base station, not into the tablet.** It is read
+there by the bridge process itself and its commands go straight out over the
+radio. A pad connected to whatever machine is showing the dashboard does
+nothing: the browser has no part in the physical-controller path, so a laggy
+socket, a reconnect or a backgrounded tab cannot come between a trigger pull and
+a rover moving.
+
+Both inputs produce a throttle and steer in `-1 … +1` and both are rate-limited
+to the bridge's `drive_hz`, which is one shared airtime budget. That is why a
+physical pad and a tablet joystick feel identical, and why two operators cannot
+flood the radio between them.
 
 > **Failsafe**
 >
