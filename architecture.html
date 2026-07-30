@@ -274,6 +274,7 @@ messages are addressed with a <code>to</code> field.</p>
     detection.py              the Detection contract the controller consumes
     waypoint.py               GPS waypoint navigation — inject a pose provider
     routine_controller.py     the `routine` mode: runs a UI-authored state machine
+    rpm_trim.py               closed-loop wheel speed: hold the two tracks together
   routine/                    the FSM engine (its documents live in routines.json)
     schema.py                 parse + validate a document into compiled Routines
     conditions.py             what a transition may ask about the robot
@@ -282,7 +283,7 @@ messages are addressed with a <code>to</code> field.</p>
     store.py                  routines.json
   drive/
     motor.py                  ESCMotor: throttle [-1,1] → servo angle (mock if no HAT)
-    drivetrain.py             tank / servo_steer / single / none + slew limiting
+    drivetrain.py             tank / servo_steer / single / none + slew limiting + wheel-speed trim
     tank_drive.py             TankDrive — the name the tools and tests import
     mechanism.py              intakes, arms, launchers: power and pulse kinds
     shooter.py                the built-in launcher: non-blocking fire/retract cycle
@@ -291,6 +292,7 @@ messages are addressed with a <code>to</code> field.</p>
     xbee_link.py              threaded transparent-mode XBee serial reader
     doc_transfer.py           split/reassemble a whole document across frames
   sensors/
+    encoder.py                quadrature wheel encoders → signed RPM (pigpio / lgpio)
     gps.py                    Adafruit GPS reader → (lat, lon, track angle)
     bno085.py                 BNO085 IMU → absolute heading + yaw rate
     pose.py                   GPS position + IMU-or-track-angle heading → pose()
@@ -545,6 +547,52 @@ same swing both ways means an off-center neutral doesn't desync the normal vs
 inverted motor: both start at the same throttle and match speed. (<code>max_angle</code>/
 <code>min_angle</code> are the endpoints; the side closer to neutral sets the throw.)</li>
 </ol>
+<p><strong>Wheel encoders and the speed trim (<code>sensors/encoder.py</code>, <code>control/rpm_trim.py</code>).</strong>
+Everything above commands a <em>throttle</em>, and a throttle is an open-loop wish.
+<code>DriveCommand(0.5, 0.5)</code> says "both sides, half power"; it does not say "both
+sides, the same speed", and on real hardware those are different sentences —
+different ESCs, different gearbox friction, weight off centre, one track on
+grass. The rover drives a slow arc while every number in the system reports a
+straight line.</p>
+<p>A quadrature encoder on two Pi GPIO pins measures what the wheels actually did.
+<code>Encoder</code> decodes all four edges of each cycle (X4) through a transition table,
+counting only moves it can attribute a direction to — a diagonal jump means two
+edges arrived unseen, and inventing a direction for it would bias the rate. Speed
+is counts over a <code>rpm_window</code>, optionally smoothed by <code>rpm_tau</code>. Both GPIO
+libraries are optional: pigpio (Pi 4 and older, needs <code>pigpiod</code>) then lgpio (Pi
+5); with neither, every encoder is inert, <code>rpm()</code> returns <code>None</code>, and the
+drivetrain runs open-loop exactly as it always did.</p>
+<p><code>RpmTrim</code> closes the loop, in the tank drivetrain only, <strong>after</strong> the slew
+limiter — the limiter shapes the operator's intent, the trim corrects what the
+hardware then did with it, and rate-limiting a correction would only add lag.</p>
+<div class="table-wrapper"><table><thead><tr><th>Mode</th><th>Error it closes on</th><th>Calibration needed</th></tr></thead><tbody>
+<tr><td><code>off</code></td><td>none — RPM is still measured and reported</td><td>none</td></tr>
+<tr><td><code>match</code></td><td>the difference between the two sides, in the commanded direction; split half to each</td><td><strong>none at all</strong> — a shared scale factor cancels out of a difference</td></tr>
+<tr><td><code>velocity</code></td><td>each side against <code>throttle × max_rpm</code>, independently</td><td><code>max_rpm</code>, measured by driving flat out and reading telemetry</td></tr>
+</tbody></table>
+</div>
+<p><code>match</code> engages only while the two sides are commanded within
+<code>straight_tolerance</code> of each other: a commanded turn is a difference you asked
+for, and correcting it would fight the steering. It <strong>holds</strong> its integral
+across a turn rather than resetting, because a mismatch between two motors is a
+physical property that is still true after the corner.</p>
+<blockquote>
+<p><strong>It fails open, and that is the design.</strong> <code>rpm()</code> returning <code>None</code> means "no
+measurement", never "0 rpm" — a speed loop that cannot tell those apart will
+integrate against a dead sensor and pin that side at full throttle. On top of
+that, a wheel commanded above <code>min_throttle</code> for <code>stall_seconds</code> with the
+encoder still reading a standstill latches a fault: the loop opens, the
+dashboard says which side, and only <code>stop()</code> clears it — so an encoder that
+came loose cannot re-arm the loop while the rover is still moving.</p>
+</blockquote>
+<p>Gains are small because the error is in RPM, the same way <code>nav.heading_pid</code>'s are
+small because its error is in degrees. The <strong>integral</strong> carries the correction
+here (a pair of mismatched motors is a constant bias, which is exactly what an
+integrator cancels and a proportional term can only half-fix), <code>kd</code> is 0 because
+its input would be a differenced noisy measurement, and <code>out_limit</code> is the whole
+authority the loop has over the drivetrain — 0.2 by default, because a trim is a
+correction, not a second throttle. The loop publishes a <code>pid_trace</code> under
+<code>drive.trim.pid</code> on the same switch as the others, so the settings page graphs it.</p>
 <p><strong>Mock fallback.</strong> If <code>fusion_hat</code> can't be imported <em>or</em> <code>RS_MOCK_MOTORS=1</code>,
 <code>ESCMotor</code> uses a <code>_MockServo</code> that just records the last angle. This is what
 lets the whole stack run on a laptop — the control/comms/telemetry logic is
@@ -713,6 +761,11 @@ can block on a parked reader), so the new address takes effect without the
 service restart that would have meant walking out to the rover anyway.</p>
 <h3 id="46-sensors"><a class="header" href="#46-sensors">4.6 Sensors</a></h3>
 <p><strong><code>gps.py</code> — Adafruit Ultimate GPS reader.</strong> See <a href="#6-gps-waypoint-autonomy">§6</a>.</p>
+<p><strong><code>encoder.py</code> — quadrature wheel encoders.</strong> See <a href="#44-drive-layer">§4.4</a>. Not a
+position sensor: wheel odometry on a skid-steer chassis is dead reckoning
+through a slipping contact patch and the error grows without bound. It exists so
+the speed loop has a <em>relative</em> measurement over a fraction of a second, where
+the accumulated drift never matters.</p>
 <hr />
 <h2 id="5-wire-protocol-xbee"><a class="header" href="#5-wire-protocol-xbee">5. Wire protocol (XBee)</a></h2>
 <p>Newline-delimited JSON over one shared serial channel. <code>to</code> addresses a robot (or
@@ -756,6 +809,7 @@ told where the WiFi link is. See <a href="#45-comms-layer">§4.5</a>.</p>
  "imu_calib":3,
  "shooter":{"armed":true,"shots":1,"ready":false,"cool":0.0},  // only while in shooter_align
  "mech":{"intake":{"kind":"power","values":{"roller":1.0}}}, // only if the layout has any
+ "enc":{"rpm":{"left":118.2,"right":117.9},"mode":"match","tl":-0.01,"tr":0.01}, // wheel speed; only if encoders are wired
  "routine":{"id":"collect","state":"seek","t":3.4,"drive":"object_align"}}  // only in `routine`
 
 // robot -&gt; base station (documents + verdicts)
@@ -1387,6 +1441,10 @@ Each maps to a CLI flag on the respective entry point.</p>
 <tr><td><code>RS_SHOOTER_FIRE_S</code> / <code>RS_SHOOTER_RETRACT_S</code></td><td><code>0.35</code> / <code>0.35</code></td><td>Hold at the fire angle, then settle before re-arming.</td></tr>
 <tr><td><code>RS_SHOOTER_DWELL</code> / <code>RS_SHOOTER_COOLDOWN</code></td><td><code>0.5</code> / <code>2.0</code></td><td>Hold the aim this long before firing; min seconds between shots.</td></tr>
 <tr><td><code>RS_SHOOTER_REQUIRE_ARM</code> / <code>RS_SHOOTER_REQUIRE_ARRIVED</code> / <code>RS_SHOOTER_MAX_SHOTS</code></td><td><code>1</code> / <code>1</code> / <code>0</code></td><td>Firing gates; magazine size (0 = unlimited).</td></tr>
+<tr><td><code>RS_ENCODER_LEFT</code> / <code>RS_ENCODER_RIGHT</code></td><td><em>(blank)</em></td><td>Quadrature encoder pins as <code>"A,B"</code> <strong>BCM GPIO</strong> — the Pi header, not Fusion HAT channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Needs <code>pigpio</code> (Pi ≤4, plus <code>pigpiod</code>) or <code>lgpio</code> (Pi 5).</td></tr>
+<tr><td><code>RS_ENCODER_CPR</code></td><td><code>0</code></td><td>Counts per revolution <strong>of the wheel</strong>, gearbox included. Measure it with <code>tools/encoder_monitor.py</code> — turn the wheel one full turn and read the count.</td></tr>
+<tr><td><code>RS_ENCODER_LEFT_INVERT</code> / <code>RS_ENCODER_RIGHT_INVERT</code></td><td><code>0</code> / <code>0</code></td><td>Flip so forward reads as a positive RPM. Separate from the motor's own <code>inverted</code>: that mirrors the motor, this mirrors the sensor.</td></tr>
+<tr><td><code>RS_TRIM_MODE</code> / <code>RS_TRIM_MAX_RPM</code></td><td><code>off</code> / <code>200</code></td><td>Closed-loop wheel speed: <code>off</code> | <code>match</code> (hold the two sides to each other; no calibration) | <code>velocity</code> (hold each to <code>throttle × max_rpm</code>; measure that number). See <a href="#44-drive-layer">§4.4</a>.</td></tr>
 <tr><td><code>RS_TUNING_FILE</code></td><td><code>/var/lib/roversoftware/tuning.json</code></td><td>Where values set from the dashboard are saved. Applied <em>after</em> env and CLI (see <a href="#41-configuration-robotconfigpy">§4.1</a>).</td></tr>
 <tr><td><code>RS_LAYOUT_FILE</code></td><td><code>/var/lib/roversoftware/layout.json</code></td><td>The hardware layout. Applied <em>before</em> tuning, because it decides which tuning paths exist. Takes effect on the next start; no file = the stock tank drive.</td></tr>
 <tr><td><code>RS_ROUTINES_FILE</code></td><td><code>/var/lib/roversoftware/routines.json</code></td><td>UI-authored state machines. Unlike a layout these are hot-swappable.</td></tr>

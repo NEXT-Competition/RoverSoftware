@@ -200,6 +200,18 @@ Note rover3, latched.</p>
 object <code>object_align</code> is tracking; amber is everything else it can see.</p>
 <p>FPV needs WiFi, not the radio — 57600 baud cannot carry a camera. Start the
 robot with <code>--fpv --fpv-host &lt;base-ip&gt;</code>.</p>
+<h2 id="the-telemetry-rows"><a class="header" href="#the-telemetry-rows">The telemetry rows</a></h2>
+<p>Under the fleet: mode, position, heading, GPS fix health, wheel speed, battery,
+what the detector sees, and the link. Each carries a colour that means the same
+thing everywhere — grey is "nothing to say", green is fine, red wants you.</p>
+<p>The <strong>wheels</strong> row appears only on a build with
+<a href="hardware.html#the-encoder-if-this-motor-has-one">encoders</a> fitted, and it is the
+one number the rest of this screen cannot give you: <code>left</code>/<code>right</code> on the fleet
+row are what the rover was <em>told</em>, and this is what the wheels actually <em>did</em>. It
+leads with the gap between the two sides rather than the two speeds, because the
+gap is what you are watching for — a rover that curves shows it here before the
+map catches up. See
+<a href="tuning.html#making-both-tracks-turn-together">Wheel speed matching</a>.</p>
 <h2 id="modes"><a class="header" href="#modes">Modes</a></h2>
 <p><img src="../img/modes.webp" alt="A grid of mode buttons: Teleop, Object align, Shooter, Waypoint, Routine — with Waypoint filled teal." /></p>
 <p>One is always active. Switching is instant and reversible; the drive layer does

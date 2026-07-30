@@ -240,6 +240,39 @@ neutral is not centred.</p>
 above — the <em>Left side</em> and <em>Right side</em> pickers list the actuators that
 exist, so a motor you have not created yet cannot be assigned.</p>
 </blockquote>
+<h3 id="the-encoder-if-this-motor-has-one"><a class="header" href="#the-encoder-if-this-motor-has-one">The encoder, if this motor has one</a></h3>
+<p>Press <strong>Add</strong> in the Encoder row at the bottom of the card. Optional, and off on
+every motor until you do — a motor without one simply runs open-loop, exactly as
+the rover always has.</p>
+<p>Why bother: everything else on this page commands a <em>throttle</em>, and a throttle
+is a wish rather than a speed. Two motors handed the same pulse turn at
+different rates — different ESCs, different gearbox friction, weight off centre,
+one track on grass — so the rover drives a slow arc while every number in the
+dashboard reports a straight line. An encoder is the only thing that can see
+that, and <a href="tuning.html#making-both-tracks-turn-together">Wheel speed matching</a> is
+what then corrects it.</p>
+<p><strong>A pin / B pin</strong>
+: <strong>BCM GPIO numbers on the Pi header — not the PWM channel above.</strong> They are
+different buses, and mixing them up is the first mistake everyone makes here; it
+presents as an encoder that counts nothing at all. Set both or neither: one
+channel of a quadrature encoder decodes nothing, and the robot refuses a layout
+that sets only one. Claiming a pin twice is refused for the same reason a PWM
+channel is, and a worse one — two actuators reading one pin count the same edges,
+so a rover with one genuinely dragging track would report both wheels at exactly
+the same speed.</p>
+<p><strong>Counts per rev</strong>
+: Counts per revolution <strong>of the wheel</strong>, gearbox included. <em>Measure this, do not
+derive it</em> — the number on the encoder is per revolution of the motor, this
+decoder counts four edges per cycle, and the printed gear ratio is frequently
+not the real one. Run <code>python tools/encoder_monitor.py --pins 17,27</code>, zero it,
+turn the wheel exactly one full turn by hand, and read the count.</p>
+<p><strong>Count inverted</strong>
+: Tick it if a wheel counts <em>down</em> when driving forward. Separate from
+<strong>Inverted</strong> above: that one mirrors the motor, this one mirrors the sensor, and
+a mirrored track motor usually needs both.</p>
+<p>The pins need <code>pigpio</code> (Pi 4 and older, plus <code>pigpiod</code>) or <code>lgpio</code> (Pi 5) on the
+robot. With neither installed the encoders stay inert and nothing else changes —
+see <a href="../reference/wiring.html">Wiring and calibration</a>.</p>
 <h2 id="3--group-the-rest-into-mechanisms"><a class="header" href="#3--group-the-rest-into-mechanisms">3 · Group the rest into mechanisms</a></h2>
 <p>Anything that is not drive is a <strong>mechanism</strong>: an intake, an arm, a launcher. A
 mechanism owns one or more actuators and comes in two kinds.</p>

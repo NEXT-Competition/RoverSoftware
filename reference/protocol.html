@@ -210,8 +210,12 @@
 
 // robot → base station (telemetry, ~5 Hz)
 {"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
- "left": 0.4, "right": 0.6, "battery": 87.0,
- "lat": 37.77, "lon": -122.41, "heading": 30.0}
+ "left": 0.4, "right": 0.6, "battery": 87.0,                          // what it was TOLD
+ "lat": 37.77, "lon": -122.41, "heading": 30.0,
+ // what the wheels DID, and what the speed loop did about it. Absent entirely
+ // on a build with no encoders wired, which is the default.
+ "enc": {"rpm": {"left": 118.2, "right": 117.9}, "mode": "match",
+         "tl": -0.01, "tr": 0.01}}                                    // "fault":"left" if one stalled
 {"type": "config", "from": "rover1", "config": {"align.pid.kp": 0.6},
  "rejected": {}, "restart": [], "save_error": null}
 {"type": "layout_result", "from": "rover1", "ok": true, "errors": [], "restart_required": true}

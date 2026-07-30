@@ -197,6 +197,13 @@ commands and follow routes you click on the map. They answer Hardware and
 Routines edits with the <em>real</em> validators and run the <em>real</em> engine, which is
 the point: a settings page you can only test on a rover is a settings page that
 ships broken.</p>
+<p>The fake rovers also have a real defect: each one's right side is 6% weaker than
+its left, and the reported wheel speed lags the true one exactly as an encoder's
+does. So a simulated rover told to drive straight visibly curves on the map, and
+switching <strong>Settings → Robot → Wheel speed matching → Mode</strong> to <code>match</code>
+straightens it while you watch — the closed loop, the shipped gains and the
+tuning graph, all before anyone wires an encoder. See
+<a href="tuning.html#making-both-tracks-turn-together">Tune it in the field</a>.</p>
 <blockquote>
 <p><strong>It never invents robots</strong></p>
 <p>Running with neither <code>--port</code> nor <code>--sim</code> exits with a hint rather than

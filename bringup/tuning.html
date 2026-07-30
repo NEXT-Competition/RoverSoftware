@@ -231,6 +231,53 @@ one your new value produced.</p>
 rate, so a wobble faster than half that rate aliases — raise <em>Telemetry rate</em>
 while you look at it. And it costs airtime on every frame, on a radio shared with
 driving: switch it on to tune, off to race.</p>
+<h2 id="making-both-tracks-turn-together"><a class="header" href="#making-both-tracks-turn-together">Making both tracks turn together</a></h2>
+<p>Everything above commands a throttle, and a throttle is a wish rather than a
+speed. Two motors handed the same pulse turn at different rates, so the rover
+curves away while every number on this page says it is going straight. If the
+build has <a href="hardware.html#the-encoder-if-this-motor-has-one">wheel encoders</a>, the
+<strong>Wheel speed matching</strong> group is what closes that gap — and the <code>wheels</code> row on
+the driving view is where you watch it happen. That row leads with the <em>gap</em>
+between the two sides, because the gap is the thing you are looking for; two
+speeds side by side are two facts you then have to subtract.</p>
+<p><strong>Mode</strong> is the whole feature:</p>
+<p><code>off</code>
+: Measure only. RPM still reaches telemetry, which is what you read to set the
+other numbers here — so this is not a wasted setting.</p>
+<p><code>match</code>
+: Hold the two sides to <strong>each other</strong>. Needs no calibration whatsoever, not
+even counts-per-rev, because its error is a <em>difference</em> and a shared scale
+factor cancels out of one. Start here. It only acts while you are driving
+straight: a commanded turn is a difference you asked for, and correcting it would
+fight the steering.</p>
+<p><code>velocity</code>
+: Hold each side to <code>throttle × Max wheel RPM</code>. This also works in turns, and it
+makes the throttle mean something repeatable — half throttle is the same wheel
+speed on grass as on tarmac, until the motor runs out of authority. The price is
+one honest measurement: drive flat out on the surface you will run on and read
+<strong>Max wheel RPM</strong> off the <code>wheels</code> row. Too high and every setpoint is
+unreachable; too low and the loop throttles back against a wall that isn't there.</p>
+<p>Its gains are graphed like any other loop, in RPM. They look tiny next to the
+alignment gains because the error is in RPM rather than in throttle units — the
+same reason the heading loops' gains look tiny in degrees. Unusually, <strong>the
+integral is the term that matters here</strong>: a pair of mismatched motors is a
+constant bias, which is exactly what an integrator cancels and a proportional
+term can only ever half-fix. <code>kd</code> ships at zero because its input would be a
+differenced noisy measurement, which is noise with a gain on it.</p>
+<blockquote>
+<p><strong>What happens when an encoder falls off</strong></p>
+<p>A speed loop that keeps integrating against a sensor reading zero will wind
+that side to full throttle. So a wheel commanded above <em>Engage above</em> for
+<em>Stall timeout</em> with its encoder still reading a standstill trips a fault: the
+loop opens, the <code>wheels</code> row says which side, and it stays open until the
+drivetrain stops — an encoder that came loose cannot re-arm the loop while the
+rover is still moving. Setting the timeout to <code>0</code> disables that check, which is
+a bench-only thing to do.</p>
+</blockquote>
+<p>You can try all of this with no hardware at all. The simulated rover has the
+defect on purpose — its right side is 6% weaker — so <code>run_basestation.py --sim</code>
+drives a visible arc on the map, and switching the mode to <code>match</code> straightens it
+while you watch.</p>
 <h2 id="a-tuning-order-that-works"><a class="header" href="#a-tuning-order-that-works">A tuning order that works</a></h2>
 <ol>
 <li><strong>Drive limits first.</strong> Slew rate and max throttle, until hand-driving feels
