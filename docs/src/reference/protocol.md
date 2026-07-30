@@ -23,6 +23,12 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 {"type": "routine_event", "name": "go", "to": "rover1"}              // advance a "when I press" transition
 {"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}      // bench test, teleop only
 
+// WiFi: the one config path that must work with NO WiFi, so it may ride the radio
+{"type": "get_wifi", "to": "rover1"}                                 // what network am I on
+{"type": "scan_wifi", "to": "rover1"}                                // what can I see
+{"type": "set_wifi", "ssid": "Venue-Guest", "psk": "…", "country": "GB", "to": "rover1"}
+{"type": "forget_wifi", "ssid": "Venue-Guest", "to": "rover1"}
+
 // robot → base station (telemetry, ~5 Hz)
 {"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
  "left": 0.4, "right": 0.6, "battery": 87.0,
@@ -32,7 +38,32 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 {"type": "layout_result", "from": "rover1", "ok": true, "errors": [], "restart_required": true}
 {"type": "routines_result", "from": "rover1", "ok": false,
  "errors": ["state 'shoot': unknown mechanism 'intak'"]}
+{"type": "wifi", "from": "rover1", "ok": true, "ssid": "Venue-Guest",
+ "ip": "10.0.0.9", "signal": 82}                                     // never carries a psk
 ```
+
+## WiFi is the exception that proves the rule
+
+Everything bulk goes over WiFi and never the radio — a config snapshot is half a
+second of airtime on a channel shared with every rover. `set_wifi` is the one
+command that inverts that, because a rover cannot be told about a network over
+that network. The base station sends it over WiFi when there is a link and falls
+back to the radio when there is not, and the reply comes back the same way (a
+rover that just failed to join has nothing else to answer over).
+
+Two consequences worth stating plainly:
+
+**The password crosses the radio in the clear** when the rover is not already on
+WiFi, because the XBee runs transparent mode with no encryption unless you have
+configured its AES key (`ATEE`/`ATKY`). The dashboard says so at the point of
+typing. A rover that is already on some network is moved to another one over
+WiFi, and nothing goes on air.
+
+**It is not a tunable path.** Config is snapshotted, echoed to every connected
+browser and saved to `tuning.json`; a credential belongs in none of those. So
+WiFi travels as its own message type, is handed straight to NetworkManager, and
+is stripped from the reply — the robot's `wifi` frame carries only what a scanner
+standing next to the rover would see anyway.
 
 ## Config is merged; documents are not
 

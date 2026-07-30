@@ -153,6 +153,24 @@ def _singular(said: str) -> Optional[str]:
     return " ".join(tokens)
 
 
+_ROUTINE_NOUNS = ("routine", "sequence", "program", "auto", "autonomous")
+
+
+def _without_routine_noun(said: str) -> str:
+    """"collect routine" -> "collect", "the auto sequence" -> "the auto".
+
+    Only one noun, only at either end: an operator says the kind of thing after
+    the name ("run the collect routine") or before it ("run routine collect"),
+    never in the middle of it.
+    """
+    tokens = normalise(said).split()
+    if len(tokens) > 1 and tokens[-1] in _ROUTINE_NOUNS:
+        tokens = tokens[:-1]
+    elif len(tokens) > 1 and tokens[0] in _ROUTINE_NOUNS:
+        tokens = tokens[1:]
+    return " ".join(tokens)
+
+
 def _best(said: str, candidates: Sequence[Tuple[str, str]]) -> Optional[str]:
     """Pick one of `(key, display)` for what was said, or None if it's a coin flip.
 
@@ -221,8 +239,12 @@ class Vocabulary:
     places: List[Dict[str, Any]] = field(default_factory=list)
     """Saved field positions (basestation/places.py). Each has id/name/lat/lon/kind."""
 
-    routines: Dict[str, List[str]] = field(default_factory=dict)
-    """robot_id -> the routine ids loaded on it, from the documents cold channel."""
+    routines: Dict[str, List[Any]] = field(default_factory=dict)
+    """robot_id -> the routines loaded on it, from the documents cold channel.
+
+    Each entry is `{"id", "name"}`. A bare id string is accepted too, because
+    that is what a robot running older firmware sends and a routine you can see
+    on screen but cannot say would be a strange thing to ship."""
 
     labels: List[str] = field(default_factory=list)
     """Object classes the detector can see, gathered from the robots' vision
@@ -287,11 +309,51 @@ class Vocabulary:
         hit = _best(said, [(l, l) for l in self.labels]) if self.labels else None
         return hit or normalise(said) or None
 
+    def routine_pairs(self, robot_id: Optional[str]) -> List[Tuple[str, str]]:
+        """`(id, display name)` for one robot's routines, in document order.
+
+        The id is what the robot is commanded with; the name is what a person
+        says. They are rarely the same word — the editor makes `routine2` and
+        the operator calls it "Collect cones" — and a routine only reachable by
+        its id is one nobody can invoke out loud.
+        """
+        pairs: List[Tuple[str, str]] = []
+        for entry in self.routines.get(robot_id or "", []) or []:
+            if isinstance(entry, str) and entry:
+                pairs.append((entry, entry))
+            elif isinstance(entry, dict) and entry.get("id"):
+                rid = str(entry["id"])
+                pairs.append((rid, str(entry.get("name") or rid)))
+        return pairs
+
+    def routine_names(self, robot_id: Optional[str]) -> List[str]:
+        """What to offer back when a routine could not be resolved."""
+        return [name for _, name in self.routine_pairs(robot_id)]
+
     def resolve_routine(self, robot_id: Optional[str], said: Optional[str]) -> Optional[str]:
+        """Spoken routine name or id -> the id to command with, or None.
+
+        `_best` compares against the id AND the display name, and its
+        normaliser splits on underscores, so `collect_cones`, "collect cones"
+        and a routine named "Collect cones" are all the same phrase by the time
+        they are compared.
+        """
         if not said:
             return None
-        ids = self.routines.get(robot_id or "", [])
-        return _best(said, [(r, r.replace("_", " ")) for r in ids])
+        pairs = self.routine_pairs(robot_id)
+        if not pairs:
+            return None
+        # "the routine" names the kind of thing, not one of them, and must not
+        # resolve to whichever id happens to start with the word — the editor
+        # generates ids like `routine2`, so it always would.
+        tokens = normalise(said).split()
+        if tokens and all(t in _ROUTINE_NOUNS for t in tokens):
+            return None
+        # "run the collect routine" reaches here as "collect routine". The noun
+        # is the operator naming the KIND of thing, never part of the name, so
+        # a second attempt without it is tried before giving up — but only
+        # second, in case somebody really did call one "shooter routine".
+        return _best(said, pairs) or _best(_without_routine_noun(said), pairs)
 
     # --- for the model and the UI ----------------------------------------
 
@@ -308,9 +370,13 @@ class Vocabulary:
             lines.append("places: (none saved yet)")
         if self.labels:
             lines.append(f"detector object labels: {', '.join(self.labels)}")
-        routines = sorted({r for ids in self.routines.values() for r in ids})
-        if routines:
-            lines.append(f"routines: {', '.join(routines)}")
+        # By name, because that is what will be said, and scoped to the rover
+        # they are loaded on: "run collect" means nothing on a rover that does
+        # not carry it, and the model should be able to see that.
+        for rid in self.routines:
+            names = self.routine_names(rid)
+            if names:
+                lines.append(f"routines on {rid}: {', '.join(names)}")
         lines.append(f"modes: {', '.join(self.modes)}")
         return "\n".join(lines)
 
@@ -321,7 +387,10 @@ class Vocabulary:
             "online": list(self.online),
             "selected": self.selected,
             "places": [{"id": p["id"], "name": p.get("name") or p["id"]} for p in self.places],
-            "routines": {k: list(v) for k, v in self.routines.items()},
+            "routines": {
+                rid: [{"id": i, "name": n} for i, n in self.routine_pairs(rid)]
+                for rid in self.routines
+            },
             "labels": list(self.labels),
             "modes": list(self.modes),
         }
@@ -345,10 +414,11 @@ def build(fleet, places_store, now: float) -> Vocabulary:
         if label and label not in labels:
             labels.append(label)
 
-    routines: Dict[str, List[str]] = {}
+    routines: Dict[str, List[Any]] = {}
     for rid, docs in (fleet.documents() or {}).items():
         doc = (docs or {}).get("routines") or {}
-        found = [r.get("id") for r in (doc.get("routines") or []) if r.get("id")]
+        found = [{"id": r["id"], "name": r.get("name") or r["id"]}
+                 for r in (doc.get("routines") or []) if r.get("id")]
         if found:
             routines[rid] = found
 

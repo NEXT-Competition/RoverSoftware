@@ -330,9 +330,20 @@ for the rest — so field tuning survives the next power cycle.
   what makes it move on — after a delay, when lined up, once the route finishes,
   after N shots, or when you press a button. Saved routines run **on the robot**,
   so they survive losing the radio, and the box the robot is actually in lights
-  up as it runs. Transitions are checked in order, one per tick, and a condition
+  up as it runs. Every routine a rover carries then appears by name on the
+  driving view beside the mode buttons, and answers to that name out loud —
+  naming a routine is how you invoke it. Transitions are checked in order, one per tick, and a condition
   can be required to hold continuously before it counts — the same reason the
   launcher waits half a second before firing.
+- **Network** — put a rover on the WiFi in front of you, from the dashboard.
+  Scan, pick, connect; it reports what NetworkManager said and the address it
+  got. Works on a rover that is on **no network at all**, because the request
+  falls back to the radio — which is the point, since a rover cannot be told
+  about a network over that network. The password is sent, applied and
+  forgotten: never saved on the base station, never in a config snapshot, never
+  echoed back. It does cross the radio in the clear when there is no WiFi yet
+  (the XBee is unencrypted unless you set its AES key), and the page says so
+  before you type one.
 - **Controller** — remap the gamepad by *pressing the control you want*, with a
   live view of every axis and button and the throttle/steer the current mapping
   produces. Also dead zone, trigger rest value, throttle/steer authority and

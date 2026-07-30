@@ -163,6 +163,22 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             return True
         return False
 
+    def dispatch_or_radio(robot_id, msg: dict) -> None:
+        """WiFi if there is a link, the radio if there isn't.
+
+        For the one kind of command that cannot require the link it configures.
+        WiFi is preferred rather than merely allowed, and that is a security
+        property, not an optimisation: a `set_wifi` carries a password, the XBee
+        runs unencrypted by default, and a rover already on a network can be
+        moved to another one without that password ever going out over the air.
+        """
+        if not robot_id:
+            return
+        if not _in_process_link() and ip_server is not None \
+                and ip_server.send({**msg, "to": robot_id}):
+            return
+        link.send({**msg, "to": robot_id})
+
     def deliver_or_report(robot_id, msg: dict) -> None:
         """dispatch_config, but a failure reaches the operator's page.
 
@@ -330,6 +346,17 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             doc = data.get("doc")
             if isinstance(doc, dict):
                 send_document(rid, action, doc, bool(data.get("save", True)))
+        # ---- WiFi ----
+        # The one configuration path that must work with NO WiFi, because its
+        # whole job is to get the rover onto some. So: WiFi when there is one
+        # (which keeps a password off the air), the radio when there isn't.
+        #
+        # Same exception the base_host bootstrap gets and for the same reason —
+        # a rover cannot be told about a network over that network — except one
+        # layer down, since base_host is useless until the Pi is on a LAN at all.
+        elif action in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
+            payload = {k: v for k, v in data.items() if k != "action"}
+            dispatch_or_radio(rid, payload | {"type": action})
         elif action in ("select_routine", "routine_cmd", "routine_event"):
             # Pass-through: the robot owns every rule about what a routine may
             # do. Duplicating any of it here would give two sources of truth,
@@ -463,6 +490,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # the operator declared. Cold channel with the configs, for the same
             # reason: kilobytes that change on Save, not thirty times a second.
             "documents": fleet.documents(),
+            # Which network each rover is on, and what it can see. Cold for the
+            # same reason, and separate from `configs` on purpose: WiFi is not a
+            # tunable path and its credentials must never be in a snapshot that
+            # is echoed to every browser (robot/comms/wifi.py).
+            "wifi": fleet.wifi(),
             # Live gamepad axes/buttons, so the mapping editor can offer
             # "press the button you want" instead of asking for an index.
             "gamepad": controller.state() if controller is not None else None,

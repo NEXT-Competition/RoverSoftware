@@ -6,7 +6,7 @@ the ControlManager can switch between them without knowing their internals.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 
 from .commands import DriveCommand
 
@@ -42,3 +42,14 @@ class Controller:
         Called every control tick. `dt` is seconds since the last tick.
         """
         raise NotImplementedError
+
+    def pid_traces(self) -> Dict[str, dict]:
+        """Named traces of whatever closed loops this controller is running.
+
+        `{loop_name: PID.trace(...)}`, empty for a controller with no loop —
+        which is most of them, and why this is a base-class default rather than
+        an interface everything has to implement. Read only for the ACTIVE
+        controller, and only to be graphed: a loop nobody is running has nothing
+        to say about how it is behaving.
+        """
+        return {}

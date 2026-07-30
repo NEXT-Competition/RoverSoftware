@@ -188,6 +188,9 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("nav.gps_heading_pid.kd", 0, 5),
     _f("nav.gps_heading_pid.out_limit", 0, 1),
     _f("nav.gps_heading_pid.i_limit", 0, 180),
+    # Graph the loops while you tune them. Costs radio airtime on every frame,
+    # so it is a switch rather than something that is simply always on.
+    _b("nav.pid_trace"),
 
     # --- vision ---
     _f("vision.min_confidence", 0, 1),

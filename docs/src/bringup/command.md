@@ -61,7 +61,14 @@ everything except the microphone. The screen says which you have. Flags:
 | `send rover2 to bucket A then start` | Routes through both saved places |
 | `show me rover3's camera` | Selects it and pulls up the FPV |
 | `what is rover2 doing` | Answers from live telemetry |
+| `run the collect cones routine` · `collect cones` | **Asks first** — starts a routine you built and named |
+| `stop the routine` | Ends it and returns to teleop — never asks |
 | `fire` · `arm the shooter` | **Asks first** — a card you tap |
+
+Routines are matched by the name you typed in the editor, not by the id it
+generated, and only against the ones actually loaded on the rover being
+addressed — the *You can say* panel lists them, so what is on screen is exactly
+what will be understood. Both forms above work with no model running.
 
 ## Letting Claude — or any AI — command the fleet
 

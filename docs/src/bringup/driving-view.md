@@ -38,6 +38,13 @@ robot with `--fpv --fpv-host <base-ip>`.
 One is always active. Switching is instant and reversible; the drive layer does
 not change.
 
+Under the grid, **Routines** lists the state machines this rover is carrying, by
+the name you gave each one — see [Routines](routines.md). Tapping one selects and
+runs it, which is the fifth mode; the running one shows the step it is in, and a
+**Stop** below returns the rover to teleop. Nothing is listed until you have
+built one, because "run a routine" is not something an operator wants — running
+a *particular* routine is.
+
 ## The pad
 
 ![A circular on-screen joystick with its thumb pushed up and to the right.](../img/drivepad.webp)

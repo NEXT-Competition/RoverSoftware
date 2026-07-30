@@ -164,6 +164,15 @@ export const ROBOT_GROUPS: Group[] = [
         unit: "s",
         help: "Stop if no drive command arrives within this long. Must stay above the base station's 0.25 s keepalive.",
       }),
+      // Lives here, next to the telemetry rate, because that is what it spends:
+      // it adds the active loop's setpoint, error, output and P/I/D split to
+      // every frame. The graphs it feeds appear in the loop groups below.
+      b("nav.pid_trace", "Graph the loops", {
+        help:
+          "Report the active mode's PID loop so the graphs in Object align and " +
+          "Waypoint navigation can draw it. Costs radio airtime on every frame — " +
+          "switch it on to tune, off to race.",
+      }),
       e("heading_source", "Heading source", ["auto", "gps", "imu"], {
         help: "auto = IMU when calibrated, else the GPS track angle.",
       }),
