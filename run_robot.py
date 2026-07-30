@@ -12,6 +12,7 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/BACKEND/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
+    RS_VISION_RANGE_AT_M/RANGE_SIZE,
     RS_VISION_IMX500_MODEL/LABELS/IOU/MAX_DET,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
@@ -96,8 +97,8 @@ def main():
                         default=int(os.environ.get("RS_GPS_BAUD", cfg.gps.baud)))
     parser.add_argument("--gps-rate", type=int,
                         default=int(os.environ.get("RS_GPS_RATE_MS", cfg.gps.update_rate_ms)),
-                        help="ms between fixes (PMTK220; 1000 = 1 Hz). Below ~200 "
-                             "the sentences don't fit 9600 baud")
+                        help="ms between fixes (PMTK300+PMTK220; 200 = 5 Hz, the "
+                             "MTK3339's ceiling). Faster needs more baud too")
     parser.add_argument("--no-gps", dest="gps", action="store_false",
                         default=os.environ.get("RS_GPS_ENABLED", "1").strip().lower()
                         in ("1", "true", "yes", "on"),
@@ -192,6 +193,8 @@ def main():
     cfg.vision.min_confidence = float(os.environ.get("RS_VISION_CONF", cfg.vision.min_confidence))
     cfg.vision.max_fps = float(os.environ.get("RS_VISION_FPS", cfg.vision.max_fps))
     cfg.vision.standoff_size = float(os.environ.get("RS_VISION_STANDOFF", cfg.vision.standoff_size))
+    cfg.vision.range_at_m = float(os.environ.get("RS_VISION_RANGE_AT_M", cfg.vision.range_at_m))
+    cfg.vision.range_size = float(os.environ.get("RS_VISION_RANGE_SIZE", cfg.vision.range_size))
     cfg.vision.hfov_deg = float(os.environ.get("RS_VISION_HFOV", cfg.vision.hfov_deg))
     cfg.vision.search_speed = float(os.environ.get("RS_VISION_SEARCH_SPEED", cfg.vision.search_speed))
     cfg.vision.imx500_labels = os.environ.get("RS_VISION_IMX500_LABELS", cfg.vision.imx500_labels)

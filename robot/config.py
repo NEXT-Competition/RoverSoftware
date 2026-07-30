@@ -73,10 +73,11 @@ class DriveRoles:
     A role is a LIST because a side can have more than one motor — a six-wheel
     tank drives three motors per side off the same track speed.
     """
-    left: List[str] = field(default_factory=lambda: ["left"])    # tank
+
+    left: List[str] = field(default_factory=lambda: ["left"])  # tank
     right: List[str] = field(default_factory=lambda: ["right"])  # tank
-    throttle: List[str] = field(default_factory=list)            # servo_steer | single
-    steer: str = ""                                              # servo_steer
+    throttle: List[str] = field(default_factory=list)  # servo_steer | single
+    steer: str = ""  # servo_steer
 
 
 @dataclass
@@ -91,6 +92,7 @@ class DriveConfig:
     keeps every deployed tuning.json, every RS_* override and the whole
     existing test suite working unchanged.
     """
+
     # tank        - left/right track speeds, any number of motors per side
     # servo_steer - one or more drive motors plus a steering servo
     # single      - drive motors only; steering is ignored
@@ -127,13 +129,14 @@ class DriveConfig:
         if actuators is not None and name in actuators:
             return actuators[name]
         raise AttributeError(
-            f"{type(self).__name__!s} has no attribute or actuator {name!r}")
+            f"{type(self).__name__!s} has no attribute or actuator {name!r}"
+        )
 
 
 @dataclass
 class CommsConfig:
     port: str = "/dev/ttyUSB0"  # XBee serial port (USB adapter; use /dev/serial0 for the GPIO header)
-    baud: int = 57600
+    baud: int = 115200
     command_timeout: float = (
         0.5  # Failsafe: stop if no drive command arrives within this many seconds
     )
@@ -163,16 +166,21 @@ class GPSConfig:
     # preferred heading source at a standstill; see RobotConfig.heading_source.
     enabled: bool = True
     port: str = "/dev/ttyAMA0"
-    baud: int = 9600
+    # NOT the module's factory 9600: 5 Hz of GGA+RMC+VTG is ~9500 bps of payload,
+    # which a 9600-baud line cannot hold. The driver sends PMTK251 on every start
+    # to move the module here, because that setting doesn't survive a power cycle
+    # without the breakout's CR1220 backup battery fitted.
+    baud: int = 57600
     fix_timeout: float = 5.0  # drop the fix (return None) after this long w/o an update
     min_move_mps: float = (
         0.5  # below this speed, the track angle is noise; hold last heading
     )
-    # Fix interval in ms (PMTK220). 1000 = 1 Hz, the module's default. Lower is a
-    # fresher heading, but the sentences have to fit the link: below ~200 ms they
-    # won't at 9600 baud, and truncated sentences read as "no fix". Ignored by a
-    # non-MTK receiver (a NEO-6M keeps whatever rate it was configured for).
-    update_rate_ms: int = 1000
+    # Fix interval in ms, sent as both PMTK300 (solve rate) and PMTK220 (output
+    # rate). 200 = 5 Hz, which is the ceiling on the Ultimate GPS's MTK3339 — ask
+    # for less and the sentences just repeat positions. A PA1616D (MT3333) does a
+    # genuine 10 Hz at 100. Ignored by a non-MTK receiver (a NEO-6M keeps whatever
+    # rate it was configured for). Raise `baud` with it; see gps.py.
+    update_rate_ms: int = 200
 
 
 @dataclass
@@ -315,7 +323,25 @@ class VisionConfig:
     # model input height, on the edge_impulse backend). Calibrate it, don't
     # guess: park at the distance you want, run tools/detector_selftest.py, and
     # read off the printed size.
+    #
+    # This is the fallback standoff, in box-height units. A routine state that
+    # names `stop_within_m` overrides it for as long as that state is current,
+    # converting metres through the calibration below.
     standoff_size: float = 0.45
+    # Bounding box -> metres, as ONE measured pair: "at range_at_m, the box
+    # measured range_size". See control/rangefinder.py for why one pair is the
+    # whole model (the frame height and the focal length cancel).
+    #
+    # *** THESE TWO ARE A PLACEHOLDER, NOT A MEASUREMENT. *** They say the
+    # shipped standoff_size of 0.45 sits at 1 m, which is self-consistent but
+    # invented — it has no idea how tall your target actually is, and the real
+    # object height is the term folded into the constant. One tape measure and
+    # one run of tools/detector_selftest.py replaces them, and until that happens
+    # every distance the dashboard shows is a guess with two significant figures
+    # of false confidence. Set range_at_m to 0 to disable metre estimates
+    # entirely and keep everything in box-height units.
+    range_at_m: float = 1.0
+    range_size: float = 0.45
     search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
 
 
@@ -389,6 +415,7 @@ class MechanismConfig:
     name "shooter" is reserved by layout validation to avoid two things
     answering to it.
     """
+
     name: str = ""
     label: str = ""  # what the dashboard calls it; "" => derived from `name`
     kind: str = "power"  # power | pulse
@@ -419,6 +446,7 @@ class RoutineConfig:
     The documents themselves live in routines.json, not here — this is only the
     handful of knobs that decide what a routine is ALLOWED to do.
     """
+
     # A state that never transitions is a robot that never stops. Any state
     # without its own timeout inherits this one.
     state_timeout_default: float = 60.0
@@ -487,10 +515,12 @@ class NavConfig:
     )
     # Gains used instead whenever the heading is the GPS track angle rather than
     # an IMU attitude (heading_source="gps", or "auto" with the IMU absent or
-    # still calibrating). Deliberately slower: this loop closes around a ~1 Hz
-    # course over ground, so it gets about half the authority, heavier damping,
-    # and no integral at all (a course has no steady-state bias worth trimming,
-    # and integrating a once-a-second error only winds up).
+    # still calibrating). Deliberately slower: this loop closes around a 5 Hz
+    # course over ground against a 50 Hz control loop, so it gets about half the
+    # authority, heavier damping, and no integral at all (a course has no
+    # steady-state bias worth trimming, and integrating a stale error only winds
+    # up). Sized when the fix rate was 1 Hz and not re-tuned since — conservative
+    # rather than wrong, but there is authority here to reclaim on hardware.
     gps_heading_pid: PIDConfig = field(
         default_factory=lambda: PIDConfig(
             kp=0.008, ki=0.0, kd=0.006, out_limit=0.4, i_limit=50.0

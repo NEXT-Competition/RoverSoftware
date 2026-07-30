@@ -5,7 +5,7 @@ Use this to confirm the receiver is wired, fixed, and reporting a usable track
 angle before trusting it for navigation:
 
     python tools/gps_monitor.py
-    python tools/gps_monitor.py --port /dev/ttyAMA0 --baud 9600 --rate-ms 200
+    python tools/gps_monitor.py --port /dev/ttyAMA0 --baud 57600 --rate-ms 200
 
 What to look for, in order:
 
@@ -40,9 +40,11 @@ from robot.sensors.gps import GPS, adafruit_gps, serial
 def main():
     p = argparse.ArgumentParser(description="Adafruit GPS live fix monitor")
     p.add_argument("--port", default="/dev/ttyAMA0", help="serial port (Pi UART)")
-    p.add_argument("--baud", type=int, default=9600)
-    p.add_argument("--rate-ms", type=int, default=1000,
-                   help="ms between fixes (PMTK220); below ~200 won't fit 9600 baud")
+    p.add_argument("--baud", type=int, default=57600,
+                   help="port baud; the driver sends PMTK251 to move the module here")
+    p.add_argument("--rate-ms", type=int, default=200,
+                   help="ms between fixes (PMTK300+PMTK220); 200 = 5 Hz, the "
+                        "MTK3339's ceiling")
     p.add_argument("--min-move", type=float, default=0.5,
                    help="m/s below which the track angle is treated as noise")
     p.add_argument("--rate", type=float, default=2.0, help="print rate (Hz)")

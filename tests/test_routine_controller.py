@@ -44,6 +44,20 @@ class Spy(Controller):
         return self.command
 
 
+class AlignSpy(Spy):
+    """A Spy that can be told how near to stop, as the aligning controllers can.
+
+    Kept distinct from the plain Spy on purpose: `standoff_m` is exactly what
+    RoutineController duck-types on to decide whether a state's stop distance
+    means anything, so a build where every controller had one would never
+    exercise the branch that refuses it.
+    """
+
+    def __init__(self, command=None, standoff_m=0.0):
+        super().__init__(command)
+        self.standoff_m = standoff_m
+
+
 class FakeMech:
     def __init__(self):
         self.stopped = 0
@@ -66,7 +80,10 @@ class FakeMech:
 
 
 def make(states, mechanisms=None, cfg=None, **routine_kw):
-    spies = {"object_align": Spy(), "waypoint": Spy(), "shooter_align": Spy()}
+    # waypoint stays a plain Spy: it has no standoff, which is what makes
+    # "stop within N m" meaningless there and worth refusing.
+    spies = {"object_align": AlignSpy(), "waypoint": Spy(),
+             "shooter_align": AlignSpy()}
     controllers = dict(spies)
     cfg = cfg or RoutineConfig()
     rc = RoutineController(controllers, mechanisms or {}, cfg)
@@ -412,6 +429,122 @@ def test_a_state_with_no_target_restores_rather_than_clearing():
     rc.update(0.02)
     rc.update(0.02)
     assert vision.target_label == "cone"
+
+
+# --- how near an aligning state gets ----------------------------------------
+#
+# Same borrow-and-hand-back claim as the target above, one field over. The
+# failure this guards against is quieter than a wrong target and worse: a
+# routine that left the standoff rewritten makes the NEXT alignment — manual,
+# spoken, or another routine — stop somewhere nobody chose.
+
+def test_an_aligning_state_sets_the_delegates_stop_distance():
+    rc, spies = make([
+        {"id": "aim", "drive": {"mode": "object_align", "stop_within_m": 1.5},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    rc.on_activate()
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 1.5
+
+
+def test_the_operators_own_stop_distance_comes_back():
+    rc, spies = make([
+        {"id": "aim", "drive": {"mode": "object_align", "stop_within_m": 1.5},
+         "transitions": [{"when": "event", "name": "go", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    spies["object_align"].standoff_m = 3.0  # what Settings was left on
+    rc.on_activate()
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 1.5
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 3.0
+
+
+def test_the_stop_distance_comes_back_on_an_estop_too():
+    """Every exit path, as with the target."""
+    rc, spies = make([
+        {"id": "aim", "drive": {"mode": "object_align", "stop_within_m": 1.5},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    spies["object_align"].standoff_m = 3.0
+    rc.on_activate()
+    rc.update(0.02)
+    rc.on_estop()
+    assert spies["object_align"].standoff_m == 3.0
+
+
+def test_consecutive_states_may_stop_at_different_distances():
+    """And what is restored at the end is the operator's value, not the previous
+    state's — the bug is treating each state's predecessor as the thing to
+    put back."""
+    rc, spies = make([
+        {"id": "near", "drive": {"mode": "object_align", "stop_within_m": 1.0},
+         "transitions": [{"when": "event", "name": "go", "to": "far"}]},
+        {"id": "far", "drive": {"mode": "object_align", "stop_within_m": 4.0},
+         "transitions": [{"when": "event", "name": "go", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    spies["object_align"].standoff_m = 3.0
+    rc.on_activate()
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 1.0
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 4.0
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 3.0
+
+
+def test_each_aligning_controller_gets_its_own_distance_back():
+    """object_align and shooter_align are separate instances with separate
+    standoffs. Handing one back onto the other would leave the shooter stopping
+    where an approach state was told to."""
+    rc, spies = make([
+        {"id": "find", "drive": {"mode": "object_align", "stop_within_m": 1.0},
+         "transitions": [{"when": "event", "name": "go", "to": "shoot"}]},
+        {"id": "shoot", "drive": {"mode": "shooter_align", "stop_within_m": 5.0},
+         "transitions": [{"when": "event", "name": "go", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    spies["object_align"].standoff_m = 2.0
+    spies["shooter_align"].standoff_m = 8.0
+    rc.on_activate()
+    rc.update(0.02)
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)
+    rc.on_message({"type": "routine_event", "name": "go"})
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 2.0
+    assert spies["shooter_align"].standoff_m == 8.0
+
+
+def test_a_state_without_a_stop_distance_leaves_the_standoff_alone():
+    """Omitted means "the controller's own", which is what every routine written
+    before the field existed means."""
+    rc, spies = make([
+        {"id": "aim", "drive": {"mode": "object_align"},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    spies["object_align"].standoff_m = 3.0
+    rc.on_activate()
+    rc.update(0.02)
+    assert spies["object_align"].standoff_m == 3.0
+
+
+def test_the_ignored_distance_warning_is_not_printed_every_tick(capsys):
+    """_sync_delegate runs twice a tick at 50 Hz. A log line per call would bury
+    the journal — and this one only reports something the operator cannot fix
+    mid-run anyway."""
+    rc, spies = make([
+        {"id": "aim", "drive": {"mode": "object_align"},
+         "transitions": [{"when": "never", "to": "done"}]},
+        {"id": "done", "terminal": True}])
+    del spies["object_align"].standoff_m  # a build whose controller has none
+    rc.on_activate()
+    for _ in range(20):
+        rc.update(0.02)
+    assert capsys.readouterr().out.count("stop distance") == 0
 
 
 def test_the_target_is_set_before_the_delegate_is_activated():

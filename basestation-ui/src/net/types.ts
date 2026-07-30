@@ -235,8 +235,20 @@ export interface RoutineStateSpec {
    *  this state is current — the answer to "align to WHAT". The robot borrows
    *  the detector's target for the state and puts the operator's own back when
    *  it is left (robot/control/routine_controller.py), so an empty value means
-   *  "whatever is already selected" rather than "anything". */
-  drive?: { mode: string; throttle?: number; steer?: number; target?: string };
+   *  "whatever is already selected" rather than "anything".
+   *
+   *  `stop_within_m` is the answer to "how CLOSE" — metres, borrowed and handed
+   *  back the same way. The robot estimates the distance from the bounding box
+   *  height (robot/control/rangefinder.py), so it is only as good as that
+   *  calibration; an uncalibrated build ignores it and stops at its own
+   *  standoff. Omitted means "leave the controller's standoff alone". */
+  drive?: {
+    mode: string;
+    throttle?: number;
+    steer?: number;
+    target?: string;
+    stop_within_m?: number;
+  };
   timeout?: number; // omitted = inherit routines.state_timeout_default
   terminal?: boolean;
   on_enter?: ActionSpec[];

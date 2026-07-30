@@ -58,6 +58,16 @@ class RoutineController(Controller):
         # label to put back when we are done borrowing it. See _apply_target.
         self._vision: Optional[Any] = None
         self._target_restore: Optional[str] = None
+        # The aligning delegate's own standoff, put back when we stop borrowing
+        # it. Keyed by controller because object_align and shooter_align are
+        # separate instances with separate standoffs, and a routine that hands
+        # one back onto the other would leave a shooter stopping where an
+        # approach state was told to.
+        self._standoff_restore: Dict[str, float] = {}
+        # Which state's stop distance is currently applied. `_sync_delegate` runs
+        # twice per tick, so without this the "I can't do that" log line would be
+        # printed a hundred times a second.
+        self._standoff_state: str = ""
         self._ctx = RoutineContext(controllers=self.controllers,
                                    mechanisms=self.mechanisms,
                                    allow_arm=lambda: self.cfg.allow_arm)
@@ -199,6 +209,7 @@ class RoutineController(Controller):
         # stopped, timed out, e-stopped, or the mode switched out from under it.
         # This is the only place that is guaranteed to run for all of them.
         self._restore_target()
+        self._restore_standoffs()
         # Mechanisms are stopped whatever the reason. A routine that ends with
         # an intake still spinning is a routine that ended unsafely; Robot's
         # e-stop hook covers the latch case, and this covers all the others.
@@ -220,6 +231,7 @@ class RoutineController(Controller):
         # the first fraction of a second of every aiming state hunts the wrong
         # object — or locks onto it.
         self._apply_target(state.drive_target)
+        self._apply_standoff(state)
         wanted = (self.controllers.get(state.drive_controller)
                   if state.drive_source == "controller" else None)
         if wanted is self._delegate:
@@ -270,6 +282,63 @@ class RoutineController(Controller):
             self._vision.target_label = previous
             print("[routine] target back to "
                   + (repr(previous) if previous else "any label"))
+
+    def _apply_standoff(self, state: State) -> None:
+        """Set how near the aligning delegate drives, and remember what it was.
+
+        Borrowed exactly as the target is, and for the same reason: a routine
+        that left the operator's standoff rewritten would make the next manual
+        alignment stop somewhere nobody chose, with nothing on screen saying why.
+
+        The metres are converted to a box height by the delegate, against a
+        calibration that may not exist — an uncalibrated build ignores them and
+        stops at its own `standoff_size`. That is deliberately not an error here:
+        refusing to run the routine would ground a robot over a number that only
+        affects where it pauses, and the fallback is the behaviour the state
+        would have had without the field at all.
+        """
+        if state.id == self._standoff_state:
+            return  # already applied for this state; nothing changes per tick
+        name = state.drive_controller if state.drive_source == "controller" else ""
+        # Duck-typed on purpose: "can this be told to stop short of something"
+        # is a question about the controller's capability, not its class, and
+        # `Controller` deliberately does not declare alignment concepts.
+        delegate: Any = self.controllers.get(name)
+        wanted = state.drive_stop_within_m
+
+        # `standoff_m` is what makes a controller able to approach at all —
+        # waypoint and teleop have no notion of stopping short of something.
+        if delegate is None or not hasattr(delegate, "standoff_m"):
+            if wanted > 0.0:
+                print(f"[routine] state {state.id!r}: {name or 'this drive mode'} "
+                      f"has no stop distance to set; ignoring stop_within_m")
+            self._restore_standoffs()
+            self._standoff_state = state.id
+            return
+
+        if wanted <= 0.0:
+            self._restore_standoffs()
+            self._standoff_state = state.id
+            return
+
+        self._standoff_restore.setdefault(
+            name, float(getattr(delegate, "standoff_m", 0.0)))
+        if getattr(delegate, "standoff_m", 0.0) != wanted:
+            delegate.standoff_m = wanted
+            print(f"[routine] state {state.id!r}: stopping within {wanted:g} m")
+        self._standoff_state = state.id
+
+    def _restore_standoffs(self) -> None:
+        """Hand every borrowed standoff back. Safe to call when none was taken."""
+        self._standoff_state = ""
+        if not self._standoff_restore:
+            return
+        for name, previous in self._standoff_restore.items():
+            delegate: Any = self.controllers.get(name)
+            if delegate is not None:
+                delegate.standoff_m = previous
+        self._standoff_restore.clear()
+        print("[routine] stop distance back to the operator's own")
 
     def _command_for(self, state: State, dt: float) -> DriveCommand:
         if state.drive_source == "controller":

@@ -18,6 +18,19 @@ camera, and a different detector could be swapped in without touching this file.
     no size available      -> turn in place only; never advance blind (FOMO)
     otherwise              -> creep forward while the PID trims the heading
 
+--- How near is "arrived" ---
+Natively, in box-height units: stop once the box fills `standoff_size` of the
+frame. That is what the detector measures and what the arrival latch is tuned in,
+but it is not a distance anyone can pace out, so `standoff_m` says the same thing
+in metres and a `Rangefinder` converts it (once, on the way in — see
+`standoff_threshold`). A routine state sets that per state, which is how "close
+in on the bucket, then hang back from the goal" is one document.
+
+Metres are best-effort and never load-bearing: with no rangefinder, no
+calibration, or a model that reports no box height at all, the metre standoff is
+dropped and `standoff_size` decides. The fallback tightens nothing and loosens
+nothing — it is exactly where this controller stopped before distances existed.
+
 --- Why the PID advances on detection stamps, not control ticks ---
 The detector and the control loop run at unrelated rates, and `detection()` is a
 cached read — so the loop generally sees the SAME sample several ticks in a row
@@ -40,6 +53,7 @@ from .commands import DriveCommand
 from .controller import Controller
 from .detection import Detection
 from .pid import PID
+from .rangefinder import Rangefinder
 
 # detection_provider() -> latest Detection, or None if nothing is currently seen
 DetectionProvider = Callable[[], Optional[Detection]]
@@ -60,6 +74,8 @@ class ObjectAlignController(Controller):
         approach: bool = True,  # False => face the object but never advance
         standoff_size: float = 0.45,  # stop once bbox height fraction reaches this
         standoff_hysteresis: float = 0.05,  # must shrink by this to un-arrive
+        rangefinder: Optional[Rangefinder] = None,  # bbox height <-> metres
+        standoff_m: float = 0.0,  # stop this far off instead; 0 = use standoff_size
         search_speed: float = 0.25,  # 0 disables the search sweep
         search_after: float = 0.5,  # ride out dropouts this long before searching
         search_timeout: float = 10.0,  # give up (stop) after searching this long
@@ -74,6 +90,12 @@ class ObjectAlignController(Controller):
         self.approach = approach
         self.standoff_size = standoff_size
         self.standoff_hysteresis = standoff_hysteresis
+        # Range estimation is optional and stays optional: with no rangefinder,
+        # or an uncalibrated one, `standoff_m` cannot be honoured and everything
+        # falls back to standoff_size — the behaviour this controller had before
+        # distances existed. Arrival is never silently loosened.
+        self.rangefinder = rangefinder
+        self.standoff_m = standoff_m
         self.search_speed = search_speed
         self.search_after = search_after
         self.search_timeout = search_timeout
@@ -123,6 +145,35 @@ class ObjectAlignController(Controller):
     def last_detection(self) -> Optional[Detection]:
         """The sample the last update() acted on, or None if nothing was seen."""
         return self._last_detection
+
+    def distance_m(self) -> Optional[float]:
+        """Estimated metres to the current target, or None.
+
+        None covers all three ways this can be unknown and they are worth not
+        conflating: nothing is in view, the model reports no box height (FOMO),
+        or nobody has calibrated the rangefinder. All three mean "do not print a
+        number an operator would steer by".
+        """
+        if self._last_detection is None or self.rangefinder is None:
+            return None
+        return self.rangefinder.distance_m(self._last_detection.size)
+
+    def standoff_threshold(self) -> float:
+        """The box height arrival is judged against, in size units.
+
+        A metre standoff is converted HERE, once, rather than converting every
+        frame's size into metres to compare: the arrival latch and its hysteresis
+        were written and tuned in box-height units, and the two tests are
+        equivalent anyway — size rises monotonically as distance falls.
+
+        Falls back to `standoff_size` whenever the metres cannot be honoured, so
+        an uncalibrated build stops where it always did instead of not stopping.
+        """
+        if self.standoff_m > 0.0 and self.rangefinder is not None:
+            size = self.rangefinder.size_at(self.standoff_m)
+            if size is not None:
+                return size
+        return self.standoff_size
 
     def pid_traces(self) -> Dict[str, dict]:
         """The steering loop, for the tuning graphs.
@@ -186,15 +237,16 @@ class ObjectAlignController(Controller):
     def _check_arrived(self, size: float) -> bool:
         """Latch arrival, releasing only once the target genuinely shrinks.
 
-        Without the latch, `size` dithering around standoff_size makes the robot
+        Without the latch, `size` dithering around the threshold makes the robot
         lurch forward and stop at the detector's frame rate.
         """
+        threshold = self.standoff_threshold()
         if self._arrived:
             # Stay arrived until it's meaningfully smaller (it drove off / we
             # got bumped), not merely a hair under the threshold.
-            self._arrived = size > (self.standoff_size - self.standoff_hysteresis)
+            self._arrived = size > (threshold - self.standoff_hysteresis)
             return self._arrived
-        if size >= self.standoff_size:
+        if size >= threshold:
             self._arrived = True
         return self._arrived
 
