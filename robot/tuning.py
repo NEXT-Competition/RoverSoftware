@@ -231,6 +231,12 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("vision.min_confidence", 0, 1),
     _f("vision.max_fps", 0.5, 60),
     _f("vision.standoff_size", 0.05, 1),
+    # The bounding-box rangefinder's one calibration pair. Live, because getting
+    # it right means parking the rover at a measured distance and typing what the
+    # size readout says — a round trip that a restart per attempt would make
+    # nobody bother doing. 0 metres disables distance estimates entirely.
+    _f("vision.range_at_m", 0, 50),
+    _f("vision.range_size", 0, 1),
     _f("vision.hfov_deg", 10, 180),
     _f("vision.search_speed", 0, 1),
     _f("vision.target_timeout", 0.1, 10),

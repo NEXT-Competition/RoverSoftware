@@ -20,6 +20,7 @@ from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
+from .control.rangefinder import Rangefinder
 from .control.routine_controller import RoutineController
 from .control.shooter_align import ShooterAlignController
 from .control.teleop import TeleopController
@@ -109,6 +110,14 @@ class Robot:
         self._outbox: "collections.deque[Tuple[dict, bool]]" = collections.deque(
             maxlen=OUTBOX_MAX)
 
+        # Bounding box -> metres, so an aligning controller can be told to stop
+        # a distance away rather than at a box height. ONE of them, shared: it
+        # describes the camera and the target, not which loop is driving, and
+        # two copies would be two things to re-calibrate. Built even when
+        # controllers are injected, because _push_live_config re-calibrates it.
+        self.rangefinder = Rangefinder(config.vision.range_at_m,
+                                       config.vision.range_size)
+
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
         # sensor providers (camera target / GPS pose) are attached.
@@ -127,6 +136,7 @@ class Robot:
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
                     standoff_size=v.standoff_size,
+                    rangefinder=self.rangefinder,
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
@@ -140,6 +150,7 @@ class Robot:
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
                     standoff_size=v.standoff_size,
+                    rangefinder=self.rangefinder,
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
@@ -796,12 +807,16 @@ class Robot:
         only when a config frame arrives, never in the control loop.
         """
         cfg = self.cfg
-        # Wheel encoders. counts-per-rev is a calibration you get right by
-        # parking the rover, turning a wheel and typing what you counted, and
-        # the speed-matching mode is switched on, watched, and switched off
-        # again in the pit — neither is something to reboot for. Everything else
-        # the loop reads (mode, gains, limits) comes off the shared config
-        # object every tick, so this only has to reach what was cached.
+        # Re-measured from the dashboard without a restart, which is the whole
+        # point of a calibration you get right by parking the rover and reading
+        # a number: the next frame uses the value you just typed.
+        self.rangefinder.calibrate(cfg.vision.range_at_m, cfg.vision.range_size)
+        # Wheel encoders, for exactly the same reason: counts-per-rev is a
+        # number you get right by turning a wheel and typing what you counted,
+        # and the speed-matching mode is switched on, watched, and switched off
+        # again in the pit. Everything else the loop reads (mode, gains, limits)
+        # comes off the shared config object every tick, so this only has to
+        # reach what was cached.
         self.drive.recalibrate()
         for c in self.manager.controllers.values():
             if isinstance(c, TeleopController):
@@ -896,6 +911,15 @@ class Robot:
         # A summary, never boxes or frames: the radio is 57600 baud and shared.
         if self.detector is not None:
             t["vision"] = self.detector.telemetry()
+            # Estimated metres to the target, alongside the box height it was
+            # derived from. Both, deliberately: `size` is what the model actually
+            # measured and `dist` is a guess built on one calibration pair, so
+            # showing them together is what lets someone standing next to the
+            # rover with a tape measure see the guess drift — and collect the
+            # pairs a fitted model would need. ~8 bytes a frame.
+            distance = self.rangefinder.distance_m(t["vision"].get("size"))
+            if distance is not None:
+                t["vision"]["dist"] = round(distance, 2)
         # Shooter state (armed, shots, dwelling, cooldown). Only while the mode
         # is active — an operator needs to see the arm latch before it matters,
         # and it's dropped on exit anyway, so there's nothing to report elsewhere.

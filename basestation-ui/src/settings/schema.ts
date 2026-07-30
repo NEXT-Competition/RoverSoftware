@@ -372,7 +372,14 @@ export const ROBOT_GROUPS: Group[] = [
         help: "Inference costs a core; cap it.",
       }),
       f("vision.standoff_size", "Standoff size", 0.05, 1, 0.01, {
-        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry.",
+        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry. A routine state that names a stop distance overrides this while it runs.",
+      }),
+      f("vision.range_at_m", "Range: measured at", 0, 50, 0.1, {
+        unit: "m",
+        help: "Distance calibration, part one. Park the rover a tape-measured distance from the target and put that distance here. 0 disables distance estimates — routines that name a stop distance then fall back to Standoff size.",
+      }),
+      f("vision.range_size", "Range: box size there", 0, 1, 0.01, {
+        help: "Part two: the box height telemetry showed at that distance. These two numbers are the whole range model (distance × size is constant), so both are guesses until you measure them — the shipped pair is a placeholder that assumes 0.45 at 1 m.",
       }),
       f("vision.hfov_deg", "Horizontal FOV", 10, 180, 1, {
         unit: "°",

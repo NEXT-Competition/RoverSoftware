@@ -419,15 +419,35 @@ export function setDrive(id: string, mode: string): void {
   editCurrent((routine) => {
     const state = routine.states.find((s) => s.id === id);
     if (!state) return;
-    // The target is carried across a switch between the two aligning modes —
-    // "line up on the bucket" then "shoot the bucket" is one thought, and
-    // retyping the object because you changed which controller aims is busywork.
-    // It is dropped for any other mode, because the robot refuses a target
-    // there (robot/routine/schema.py) and a document that will not save is
-    // worse than a field that cleared.
-    const target = driveTakesTarget(mode) ? state.drive?.target : undefined;
+    // The target and the stop distance are carried across a switch between the
+    // two aligning modes — "line up on the bucket" then "shoot the bucket" is
+    // one thought, and retyping the object because you changed which controller
+    // aims is busywork. Both are dropped for any other mode, because the robot
+    // refuses them there (robot/routine/schema.py) and a document that will not
+    // save is worse than a field that cleared.
+    const keep = driveTakesTarget(mode);
+    const target = keep ? state.drive?.target : undefined;
+    const stopWithin = keep ? state.drive?.stop_within_m : undefined;
     state.drive = mode === "manual" ? { mode, throttle: 0, steer: 0 } : { mode };
     if (target) state.drive.target = target;
+    if (stopWithin) state.drive.stop_within_m = stopWithin;
+  });
+}
+
+/** How near an aligning state drives before it counts as arrived, in metres.
+ *  Blank removes the key rather than storing 0, so a state that does not say
+ *  leaves the controller's own standoff alone — and is byte-identical to a
+ *  routine written before the field existed. */
+export function setDriveStopWithin(id: string, metres: string): void {
+  editCurrent((routine) => {
+    const state = routine.states.find((s) => s.id === id);
+    if (!state?.drive) return;
+    const value = Number(metres);
+    if (metres.trim() && Number.isFinite(value) && value > 0) {
+      state.drive.stop_within_m = value;
+    } else {
+      delete state.drive.stop_within_m;
+    }
   });
 }
 
@@ -659,6 +679,22 @@ export const problems = computed<Problem[]>(() => {
           });
         }
       }
+    }
+  }
+
+  // Stop-distance bounds, mirroring MIN/MAX_STOP_WITHIN_M in
+  // robot/routine/schema.py. Mirrored rather than left to the robot because the
+  // robot REFUSES THE WHOLE DOCUMENT over one out-of-range number — it will not
+  // clamp a slipped decimal point into something it half-meant — so without
+  // this, a stray "15" typed as "150" reads as a save that silently never armed.
+  for (const state of routine.states) {
+    const metres = state.drive?.stop_within_m;
+    if (metres == null) continue;
+    if (!Number.isFinite(metres) || metres < 0.1 || metres > 50) {
+      found.push({
+        state: state.id,
+        message: `Stop distance of ${metres} m is outside 0.1–50 m.`,
+      });
     }
   }
   return found;

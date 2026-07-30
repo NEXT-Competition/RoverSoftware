@@ -522,12 +522,16 @@ export function RoutineCanvas(
                 <text class="rc-id" x={30} y={23}>{state.id}</text>
                 <text class="rc-sub" x={30} y={41}>
                   {mode === "stop" || mode === "hold" ? mode : mode.replace(/_/g, " ")}
-                  {/* What it aims at, in place of the action count when it has
-                      one. On a graph, "align · bucket" is the difference between
-                      reading what a routine does and having to open every box
-                      that aims to find out. */}
-                  {state.drive?.target
-                    ? ` · ${state.drive.target}`
+                  {/* What it aims at and how near it gets, in place of the
+                      action count when it has them. On a graph, "align · bucket
+                      · 1.5 m" is the difference between reading what a routine
+                      does and having to open every box that aims to find out. */}
+                  {state.drive?.target || state.drive?.stop_within_m
+                    ? `${state.drive.target ? ` · ${state.drive.target}` : ""}${
+                      state.drive.stop_within_m
+                        ? ` · ${state.drive.stop_within_m} m`
+                        : ""
+                    }`
                     : actions > 0
                     ? ` · ${actions} action${actions === 1 ? "" : "s"}`
                     : ""}
