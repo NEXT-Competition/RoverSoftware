@@ -380,6 +380,23 @@ class Robot:
                 self._wifi_command(msg)
             elif mtype == "jog":
                 self._jog(msg)
+            # Which routine is chosen reaches past the active controller, for
+            # the same reason config does: picking what to run next is not
+            # something the thing currently driving should get a vote on.
+            #
+            # It has to be here rather than in ControlManager, which forwards
+            # to the active controller only. Selecting a routine while the
+            # rover was in teleop therefore handed `select_routine` to
+            # TeleopController, which drops what it doesn't recognise — and the
+            # `mode: routine` that follows a moment later then started
+            # whichever routine had been selected BEFORE. The operator pressed
+            # one routine and watched a different one drive away. Sending the
+            # mode first only shortens that to a burst, which is no better when
+            # the burst is a motor.
+            elif mtype in ("select_routine", "routine_cmd", "routine_event"):
+                routine = self.manager.controllers.get("routine")
+                if routine is not None:
+                    routine.on_message(msg)
             else:
                 self.manager.handle_message(msg)
 
