@@ -477,3 +477,56 @@ def test_levels_distinguishes_a_still_wheel_from_a_dead_encoder(gpio):
     turn(gpio, [(1, 1)] * 5)          # edges fire, nothing actually changes
     assert e.ticks == 0
     assert e.levels() == (1, 1)       # ...and here is why
+
+
+# --- losing edges: the reading that is wrong rather than missing -------------
+
+def test_a_window_that_loses_too_many_edges_reports_no_speed(gpio):
+    """Loss reads as a slow wheel, and it grows with speed.
+
+    So the faster track under-reports more, and `match` mode would see it as the
+    slower one and speed it up further — positive feedback in the only component
+    that can add throttle nobody asked for. None instead, and the loop opens.
+    """
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    turn(gpio, FORWARD)              # 4 clean counts
+    turn(gpio, [(1, 1), (0, 0)] * 3)  # 6 diagonal jumps: undecodable
+    e.sample(0.5)
+    assert e.missed >= 5
+    assert e.rpm() is None
+
+
+def test_a_little_loss_is_tolerated(gpio):
+    """A stray miss is noise, not an overrun. Opening the loop for one would
+    make the feature useless on any real robot."""
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    turn(gpio, FORWARD * 8)   # 32 clean counts
+    turn(gpio, [(1, 1)])      # one diagonal: ~3% of the window
+    e.sample(0.5)
+    assert e.missed == 1
+    assert e.rpm() is not None
+    assert e.rpm() > 0
+
+
+def test_recovering_from_a_burst_of_loss_restores_the_speed(gpio):
+    """Per-window, not latched. Edge rate follows wheel speed, so a burst while
+    accelerating must not disable the sensor for the rest of the run."""
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    turn(gpio, [(1, 1), (0, 0)] * 4)
+    e.sample(0.5)
+    assert e.rpm() is None
+    turn(gpio, FORWARD * 4)   # a clean window
+    e.sample(1.0)
+    assert e.rpm() is not None
+
+
+def test_the_overrun_warning_is_printed_once_not_per_tick(gpio, capsys):
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    for tick in range(1, 5):
+        turn(gpio, [(1, 1), (0, 0)] * 3)
+        e.sample(tick * 0.5)
+    assert capsys.readouterr().out.count("losing edges") == 1

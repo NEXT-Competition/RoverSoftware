@@ -123,6 +123,23 @@ DEFAULT_WINDOW_S = 0.1
 # and a filter is dead time, which is the thing that makes a loop oscillate.
 DEFAULT_TAU_S = 0.05
 
+# The fraction of transitions we may fail to decode in one window before the
+# speed stops being a measurement at all.
+#
+# Every missed transition is a count NOT made, so loss always reads as a wheel
+# turning slower than it is — and loss grows with edge rate, so the FASTER wheel
+# under-reports more. That is the one failure this sensor can hand a control
+# loop that makes things actively worse: `match` mode would see the faster track
+# as the slower one and speed it up further. Positive feedback, in the only
+# component in the stack that can add throttle nobody asked for.
+#
+# So past this line `rpm()` goes back to None — "no measurement" — and the loop
+# opens exactly as it does for an unplugged encoder. 10% is chosen against what
+# the loop is FOR: it exists to correct a few percent of mismatch between two
+# tracks, so a reading with a 10% speed error cannot inform it, however
+# confident it looks.
+MAX_MISS_FRACTION = 0.1
+
 _SECONDS_PER_MINUTE = 60.0
 
 
@@ -298,8 +315,11 @@ class Encoder:
         self._lock = threading.Lock()
         self._rpm = 0.0
         self._last_ticks = 0
+        self._last_missed = 0
         self._last_at = 0.0
         self._started = False
+        self._degraded = False   # this window lost too many edges to trust
+        self._warned = False
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -422,8 +442,10 @@ class Encoder:
         self._missed = 0
         with self._lock:
             self._last_ticks = 0
+            self._last_missed = 0
             self._last_at = time.monotonic()
             self._rpm = 0.0
+            self._degraded = False
 
     # --- speed --------------------------------------------------------------
 
@@ -452,6 +474,22 @@ class Encoder:
             if elapsed < self.window or elapsed <= 0:
                 return
             ticks = self.ticks
+            # Health first: a speed computed from counts we know are incomplete
+            # is worse than no speed, because it is confidently wrong in a
+            # direction that scales with the error.
+            missed = self._missed
+            lost = missed - self._last_missed
+            decoded = abs(ticks - self._last_ticks)
+            self._last_missed = missed
+            seen = lost + decoded
+            self._degraded = seen > 0 and lost > MAX_MISS_FRACTION * seen
+            if self._degraded and not self._warned:
+                self._warned = True
+                print(f"[Encoder] {self.name}: losing edges "
+                      f"({lost} of {seen} transitions this window). The speed "
+                      f"is not trustworthy, so the trim loop stays open. Too "
+                      f"many counts per revolution for the Pi to service in "
+                      f"Python at this wheel speed.")
             revs = (ticks - self._last_ticks) / self.counts_per_rev
             raw = revs * _SECONDS_PER_MINUTE / elapsed
             self._last_ticks = ticks
@@ -466,17 +504,23 @@ class Encoder:
                 self._rpm = raw
 
     def rpm(self) -> Optional[float]:
-        """Signed revolutions per minute of the wheel, or None if not running.
+        """Signed revolutions per minute of the wheel, or None if unmeasurable.
 
         None rather than 0.0 is load-bearing: a stopped wheel and an absent
         encoder are the same number and opposite situations, and a speed loop
         that cannot tell them apart will happily wind a dead channel to full
         throttle. See control/rpm_trim.py.
+
+        None also covers a third case that looks nothing like the other two: an
+        encoder that is wired perfectly and simply emits edges faster than we
+        can count them (see MAX_MISS_FRACTION). Its number is not noisy — it is
+        low, by a margin that grows with speed. Handing that to the trim loop is
+        worse than handing it nothing.
         """
         if not self._started:
             return None
         with self._lock:
-            return self._rpm
+            return None if self._degraded else self._rpm
 
     def telemetry(self) -> Optional[float]:
         """Rounded RPM for a radio frame, or None when there is nothing to say."""
