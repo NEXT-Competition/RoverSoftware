@@ -14,8 +14,8 @@
 # Set up an SSH key too (`ssh-copy-id pi@rover1.local`) or every recipe below
 # asks for the login password once per ssh/scp.
 
-host    := env_var_or_default("ROBOT_HOST", "raspberrypi.local")
-user    := env_var_or_default("ROBOT_USER", "Lucas")
+host    := env_var_or_default("ROBOT_HOST", "Northeast.local")
+user    := env_var_or_default("ROBOT_USER", "pi")
 version := "0.1.0"
 
 target   := user + "@" + host

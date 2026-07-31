@@ -75,6 +75,11 @@ class Shooter:
         self._pid_throttle = 0.0
         self._pid_trim = 0.0
         self._pid_previous_error = 0.0
+        # Has anything ever fed a real reading in? Until something does, update()
+        # supplies a modelled one (see _estimated_rpm). A single call to
+        # set_measured_rpm() flips this for good and the model is never used
+        # again — a real sensor always wins over the estimate.
+        self._pid_has_sensor = False
         self.stop()
 
     @property
@@ -108,8 +113,42 @@ class Shooter:
     def set_measured_rpm(self, measured_rpm: float) -> None:
         """Feed the latest sensor reading back into the PID control loop."""
         self._pid_measured_rpm = float(measured_rpm)
+        self._pid_has_sensor = True
         if self._pid_target_rpm > 0.0:
             self._pid_active = True
+
+    def _estimated_rpm(self) -> float:
+        """Modelled wheel speed, for a rover with no tachometer.
+
+        NOT a measurement: it is the assumption "the wheel reaches what we
+        commanded". That makes the error identically zero, so the trim term
+        never moves and the controller emits its pure feed-forward throttle —
+        which is the honest behaviour of an open loop, and is stable.
+
+        It deliberately does NOT invert the commanded throttle to synthesise a
+        speed. That version looks more like a measurement but is worse: the
+        model then tracks the command with a one-tick delay, and the derivative
+        term reacting to the deadband-zeroed error drives trim between 0 and its
+        clamp forever — a 5 Hz limit cycle of a few hundred rpm on the real
+        wheel, with nothing in the logs to explain it.
+
+        Either way the loop is blind to what the model cannot predict: battery
+        sag, ball drag, a wheel stalling against a jam. It exists so the
+        flywheel path is usable now and becomes genuinely closed-loop the moment
+        a sensor calls set_measured_rpm() instead — one real reading sets
+        _pid_has_sensor and this is never consulted again.
+        """
+        return self._pid_target_rpm
+
+    def spin(self, on: bool) -> None:
+        """Start or stop the flywheel at the configured target speed."""
+        self.set_target_rpm(float(getattr(self.cfg, "target_rpm", 0.0)) if on else 0.0)
+        if not on:
+            self.stop()
+
+    @property
+    def spinning(self) -> bool:
+        return self._pid_active
 
     def _pid_reset(self) -> None:
         self._pid_trim = 0.0
@@ -191,6 +230,8 @@ class Shooter:
         now = time.monotonic()
 
         if self._pid_active:
+            if not self._pid_has_sensor:
+                self._pid_measured_rpm = self._estimated_rpm()
             self._run_pid_control(now)
             return
 
@@ -208,9 +249,27 @@ class Shooter:
         else:  # retracting
             self._state = "rest"
 
+    def _idle_angle(self) -> float:
+        """Where this mechanism sits when it is doing nothing.
+
+        A servo launcher parks at its rest POSITION, which is what rest_angle
+        describes. A flywheel must instead sit at NEUTRAL, because neutral is
+        the pulse that ARMS its ESC: an ESC that has never been held at neutral
+        ignores everything sent to it afterwards. Parking a flywheel at
+        rest_angle (-30 by default, a servo geometry value that means nothing to
+        an ESC) leaves it unarmed forever, so the robot logs a perfectly healthy
+        "flywheel -> N rpm" while the wheel never moves and the button looks
+        dead. Only the drivetrain is armed explicitly at start-up
+        (Robot.start -> drive.arm), so for the shooter this idle value IS the
+        arming signal.
+        """
+        if float(getattr(self.cfg, "target_rpm", 0.0)) > 0.0:
+            return self._NEUTRAL_ANGLE
+        return self.cfg.rest_angle
+
     def stop(self) -> None:
         """Return to rest immediately (shutdown, disarm, e-stop)."""
-        self.servo.angle(self.cfg.rest_angle)
+        self.servo.angle(self._idle_angle())
         self._state = "rest"
         self._until = 0.0
         self._pid_active = False

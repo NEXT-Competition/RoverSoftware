@@ -380,6 +380,10 @@ class Robot:
                 self._wifi_command(msg)
             elif mtype == "jog":
                 self._jog(msg)
+            elif mtype in ("intake", "mech"):
+                self._set_mechanism(msg)
+            elif mtype == "shooter_spin":
+                self._toggle_shooter(msg)
             else:
                 self.manager.handle_message(msg)
 
@@ -785,6 +789,94 @@ class Robot:
             if mech is not None:
                 mech.stop()
             self._jog_mech = ""
+
+    def _set_mechanism(self, msg: dict) -> None:
+        """Run or stop any powered mechanism by preset — intake, feeder,
+        agitator. Bound to a gamepad control, so unlike `_jog` it is usable
+        while driving.
+
+        `_jog` is deliberately bench-only — teleop, one actuator, its own expiry
+        — because it exists to check wiring. This is the opposite case: an
+        operator mid-match wants the intake running while the drivetrain moves,
+        so there is no mode gate. The e-stop still covers it: `_apply_estop`
+        stops every mechanism the instant it latches, and a latched e-stop
+        refuses to start one again.
+
+        Idempotent when told explicitly (`{"on": true}`), so a lost frame cannot
+        invert the mechanism; a bare message toggles. Run-while-held controls
+        always send the explicit form and keep re-sending it, which is what lets
+        a mechanism carry `auto_stop_seconds` as a dead-man switch: stop hearing
+        from the operator and it stops itself.
+        """
+        name = str(msg.get("mech") or "intake")
+        mech = self._registry.get(name)
+        if mech is None:
+            print(f"[Robot] mech refused: no mechanism named {name!r}")
+            return
+        if not hasattr(mech, "apply_preset"):
+            print(f"[Robot] mech refused: {name!r} is not a powered mechanism")
+            return
+
+        values = mech.status().get("values", {})
+        if "on" in msg:
+            want = bool(msg["on"])
+        else:
+            # Toggle, but against THIS preset rather than against "is anything
+            # running". Pressing the opposite direction of a mechanism that is
+            # already running should reverse it, not stop it — an operator who
+            # hits spit while the intake is pulling in means "spit", and making
+            # them press twice to get it is how a jam becomes a lost match.
+            target = mech.cfg.presets.get(str(msg.get("preset") or "in")) or {}
+            already = bool(target) and all(
+                abs(float(values.get(actuator, 0.0)) - float(value)) < 1e-6
+                for actuator, value in target.items())
+            want = not already
+        if want and self.manager.estop:
+            print(f"[Robot] {name} refused: e-stop is latched")
+            return
+
+        if want:
+            preset = str(msg.get("preset") or "in")
+            if not mech.apply_preset(preset):
+                print(f"[Robot] mech refused: {name!r} has no preset "
+                      f"{preset!r} (have: {sorted(mech.cfg.presets)})")
+                return
+            print(f"[Robot] {name} -> {preset}")
+        else:
+            mech.stop()
+            print(f"[Robot] {name} -> stop")
+
+    def _toggle_shooter(self, msg: dict) -> None:
+        """Spin the flywheel up or down, or pulse a servo launcher.
+
+        Which one happens is decided by `shooter.target_rpm`: above zero this is
+        a flywheel and the command toggles it between that speed and stopped;
+        at zero it is a servo launcher and this fires one shot. That keeps a
+        single gamepad button meaning "work the shooter" on either build.
+
+        Distinct from the `fire` message on purpose. That one belongs to
+        ShooterAlignController and carries its whole safety policy — arming,
+        dwell, alignment, magazine. This is the manual teleop equivalent and
+        claims none of that, so it is gated on the e-stop only. Firing rules for
+        autonomous shots are unchanged and still live in that controller.
+        """
+        shooter = self.shooter
+        if shooter is None:
+            print("[Robot] shooter_spin refused: no shooter on this robot "
+                  "(RS_SHOOTER_ENABLED=0)")
+            return
+        if self.manager.estop:
+            print("[Robot] shooter_spin refused: e-stop is latched")
+            return
+
+        if float(getattr(self.cfg.shooter, "target_rpm", 0.0)) <= 0.0:
+            shooter.fire()  # servo launcher: one shot, it owns its own cycle
+            return
+
+        want = bool(msg["on"]) if "on" in msg else not shooter.spinning
+        shooter.spin(want)
+        print(f"[Robot] shooter flywheel -> "
+              f"{f'{self.cfg.shooter.target_rpm:.0f} rpm' if want else 'stop'}")
 
     def _push_live_config(self) -> None:
         """Copy config onto the objects that cached it at construction.

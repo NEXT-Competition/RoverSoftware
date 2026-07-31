@@ -53,6 +53,13 @@ class ControllerMapping:
     axis_steer: int = 2  # right stick X
     axis_l2: int = 4  # L2 analog trigger -> reverse
     axis_r2: int = 5  # R2 analog trigger -> forward
+    # Arcade drive on a stick. UNBOUND keeps the R2-forward/L2-reverse trigger
+    # behaviour; >= 0 names a stick axis for throttle and takes the drivetrain
+    # off the triggers entirely, which frees them to be ordinary buttons.
+    axis_throttle: int = UNBOUND
+    # Sticks report UP as negative, so a stick throttle is inverted by default.
+    # Triggers are not, which is why this is separate from invert_steer.
+    invert_throttle: bool = True
     # Value an untouched trigger reports. SDL scales triggers to -1 (released)
     # .. +1 (fully pulled); 0.0 suits drivers that report a plain 0..1.
     trigger_rest: float = -1.0
@@ -62,6 +69,17 @@ class ControllerMapping:
     # long-wheelbase chassis that darts; lower throttle_gain as a trainer mode.
     steer_gain: float = 1.0
     throttle_gain: float = 1.0
+    # Input curve, applied after the dead zone and before the gain. 0 is the
+    # linear stick every build had before this existed; 1 is fully cubic.
+    #
+    # This is the knob for "too sensitive", and it is NOT the same as lowering
+    # the gain. Gain scales everything, so it costs top speed to buy fine
+    # control. Expo bends the middle of the travel down and leaves the endpoint
+    # alone: at 0.6, half stick gives 0.28 instead of 0.5, while full stick
+    # still gives 1.0. It also shrinks the step at the edge of the dead zone,
+    # which is the other thing that reads as twitchy.
+    steer_expo: float = 0.0
+    throttle_expo: float = 0.0
 
     # --- buttons (UNBOUND disables) ---
     btn_estop: int = 1  # circle
@@ -72,6 +90,24 @@ class ControllerMapping:
     btn_waypoint: int = UNBOUND
     btn_arm_shooter: int = UNBOUND
     btn_fire: int = UNBOUND
+    # Manual teleop controls for the mechanisms, distinct from btn_fire: that
+    # one is ShooterAlignController's armed/dwelled shot, these work while
+    # driving.
+    #
+    # The flywheel and both intake directions TOGGLE (see actions()): they run
+    # for long stretches and holding a button through a match is not a thing
+    # anyone wants. The feeder and the agitator RUN WHILE HELD (see holds() and
+    # hat_holds()), which is also what lets them carry a dead-man timeout —
+    # a toggled mechanism cannot, because nothing is refreshing it.
+    btn_shooter_spin: int = UNBOUND
+    btn_intake: int = UNBOUND
+    btn_intake_spit: int = UNBOUND
+    btn_feeder: int = UNBOUND
+    # Hat (DPAD) index driving the agitator: UP runs it, DOWN runs it backwards
+    # at the same speed. Hats are not buttons — one hat reports a direction pair
+    # — so these name the hat and the directions are fixed.
+    hat_agitator: int = UNBOUND
+    hat_agitator_rev: int = UNBOUND
 
     def actions(self):
         """(button index, action name) for every bound button.
@@ -88,8 +124,31 @@ class ControllerMapping:
             (self.btn_waypoint, "mode:waypoint"),
             (self.btn_arm_shooter, "arm_shooter"),
             (self.btn_fire, "fire"),
+            (self.btn_shooter_spin, "shooter_spin"),
+            (self.btn_intake, "intake"),
+            (self.btn_intake_spit, "intake_spit"),
         )
         return tuple((idx, name) for idx, name in pairs if idx is not None and idx >= 0)
+
+    def holds(self):
+        """(button index, mechanism action) for every RUN-WHILE-HELD button.
+
+        Separate from actions() because these need the release as well as the
+        press: app.py answers them with an explicit on/off rather than a toggle,
+        so a dropped frame cannot leave the mechanism inverted. The robot also
+        auto-stops them if the refresh stops arriving, which is what makes a
+        lost release frame safe rather than merely unlikely.
+        """
+        pairs = (
+            (self.btn_feeder, "feeder"),
+        )
+        return tuple((idx, name) for idx, name in pairs if idx is not None and idx >= 0)
+
+    def hat_holds(self):
+        """(hat index, direction, action) for run-while-held hat directions."""
+        pairs = ((self.hat_agitator, (0, 1), "agitator"),
+                 (self.hat_agitator_rev, (0, -1), "agitator_rev"))
+        return tuple((i, d, n) for i, d, n in pairs if i is not None and i >= 0)
 
 
 @dataclass
@@ -133,6 +192,16 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.btn_waypoint", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_arm_shooter", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_fire", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_shooter_spin", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_intake", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_intake_spit", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_feeder", "int", lo=UNBOUND, hi=31),
+    Param("controller.hat_agitator", "int", lo=UNBOUND, hi=3),
+    Param("controller.hat_agitator_rev", "int", lo=UNBOUND, hi=3),
+    Param("controller.axis_throttle", "int", lo=UNBOUND, hi=15),
+    Param("controller.invert_throttle", "bool"),
+    Param("controller.steer_expo", "float", lo=0, hi=1),
+    Param("controller.throttle_expo", "float", lo=0, hi=1),
 )
 
 BY_PATH: Dict[str, Param] = {p.path: p for p in PARAMS}

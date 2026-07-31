@@ -14,6 +14,8 @@ Message shapes (base station -> robot):
     {"type": "arm_shooter"}      # shooter_align: permit firing
     {"type": "disarm_shooter"}   # shooter_align: forbid firing, park the servo
     {"type": "fire"}             # shooter_align: manual shot, skips alignment
+    {"type": "intake", "on": true}        # run/stop a powered mechanism ("in")
+    {"type": "shooter_spin", "on": true}  # flywheel up/down, or one servo shot
     {"type": "get_config"}       # ask for every tunable parameter
     {"type": "set_config", "config": {"align.pid.kp": 0.6}, "save": true}
 
@@ -48,7 +50,6 @@ def encode(message: dict) -> bytes:
 
 def decode(line: bytes) -> Optional[dict]:
     line = line.strip()
-    print(line.decode("utf-8"))
     if not line:
         return None
     try:

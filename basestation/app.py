@@ -305,10 +305,49 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # A bindable button reaches the same pass-through the on-screen
             # controls use; the robot still owns every firing rule.
             dispatch(rid, {"type": name})
+        elif name in TOGGLE_MECHANISMS:
+            # Press to start, press again to stop. Sent WITHOUT "on" so the
+            # robot toggles from the state it is actually in — pressing the
+            # opposite direction while running switches direction rather than
+            # stopping. See Robot._set_mechanism.
+            mech, preset = TOGGLE_MECHANISMS[name]
+            dispatch(rid, {"type": "mech", "mech": mech, "preset": preset})
+        elif name == "shooter_spin":
+            # The one mechanism control that toggles, because a flywheel needs
+            # seconds to reach speed. Sent bare so the robot toggles from the
+            # state it is actually in: the base station does not track mechanism
+            # state, and a shadow copy would go stale the first time an e-stop
+            # stopped the wheel from underneath us.
+            dispatch(rid, {"type": name})
+
+    # Press-to-toggle mechanism controls, addressed by preset.
+    TOGGLE_MECHANISMS = {
+        "intake": ("intake", "in"),
+        "intake_spit": ("intake", "out"),
+    }
+
+    # Which mechanism and preset each run-while-held control drives. Held
+    # controls are addressed explicitly (on/off) rather than toggled, so a lost
+    # frame cannot invert them; the robot additionally auto-stops any of these
+    # that stops being refreshed.
+    HELD_MECHANISMS = {
+        "feeder": ("feeder", "run"),
+        "agitator": ("agitator", "run"),
+        "agitator_rev": ("agitator", "reverse"),
+    }
+
+    def on_hold(name: str, on: bool) -> None:
+        target = HELD_MECHANISMS.get(name)
+        if target is None:
+            return
+        mech, preset = target
+        dispatch(fleet.selected, {"type": "mech", "mech": mech,
+                                  "preset": preset, "on": bool(on)})
 
     if controller is not None:
         controller.on_drive = on_drive
         controller.on_action = on_action
+        controller.on_hold = on_hold
         controller.set_mapping(settings.mapping())
 
     # ---- settings changes -> the things that cached them ----

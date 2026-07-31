@@ -34,8 +34,11 @@ class MotorConfig:
     # Endpoints/clamps. The usable swing is SYMMETRIC about neutral: the side
     # closer to neutral sets the throw (see the module docstring), so with
     # neutral=5 and these endpoints the effective range is -10..+20 (+/-15).
-    max_angle: float = 10.0  # Full-forward endpoint (upper clamp)
-    min_angle: float = -10.0  # Full-reverse endpoint (lower clamp)
+    # Endpoints are offset 40 either side of neutral, so the symmetric throw
+    # below works out to a full 40 degrees each way (the old 10/-10 pair gave
+    # min(10-5, 5+10) = 5 degrees, which drove the rover at a crawl).
+    max_angle: float = 35.0  # Full-forward endpoint (upper clamp)
+    min_angle: float = -25.0  # Full-reverse endpoint (lower clamp)
     deadband: float = 0.03  # |throttle| below this => treat as neutral
     max_forward: float = 1.0  # Safety cap on forward throttle, [0..1]
     max_reverse: float = 1.0  # Safety cap on reverse throttle, [0..1]
@@ -62,7 +65,7 @@ def _default_drive_actuators() -> "Dict[str, MotorConfig]":
     # motor1 -> channel 0 (left), motor2 -> channel 1 (right, mounted mirrored)
     return {
         "left": MotorConfig(channel=0, inverted=False, name="left", label="Left"),
-        "right": MotorConfig(channel=1, inverted=True, name="right", label="Right"),
+        "right": MotorConfig(channel=1, inverted=False, name="right", label="Right"),
     }
 
 
@@ -145,7 +148,7 @@ class CommsConfig:
     # still falls back to the radio, so this is safe to leave configured.
     # Realtime traffic (drive, telemetry, mode, e-stop) NEVER moves here: the
     # radio is what has the range.
-    base_host: str = ""
+    base_host: str = "lucas-Latitude-7490.local"  # where the base station receives TCP
     base_port: int = 5006
 
 
@@ -350,6 +353,20 @@ class ShooterConfig:
     # tools/servo_sweep.py, then add a little margin.
     fire_seconds: float = 1.0
     retract_seconds: float = 0.1  # settle at rest before another shot may start
+
+    # --- flywheel launcher (closed-loop RPM path in drive/shooter.py) ---
+    # 0 = this is a servo launcher: {"type":"shooter_spin"} does a pulse shot and
+    # the RPM controller never runs. Above 0 = this is a flywheel: the same
+    # command toggles the wheel between this speed and stopped, and the pulse
+    # state machine is not used.
+    #
+    # There is no tachometer on this rover, so the loop is fed a MODELLED rpm
+    # (see Shooter._estimated_rpm) rather than a measured one. It therefore
+    # behaves as feed-forward: it holds the commanded speed, but it cannot see
+    # or correct for battery sag, ball drag or a stalling wheel. Wire a real
+    # sensor to set_measured_rpm() and it becomes genuinely closed-loop with no
+    # other change.
+    target_rpm: float = 0.0
 
     # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
     # Hold the alignment this long before firing. This is the single most

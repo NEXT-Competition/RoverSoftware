@@ -211,6 +211,7 @@ def main():
     cfg.shooter.fire_angle = float(os.environ.get("RS_SHOOTER_FIRE", cfg.shooter.fire_angle))
     cfg.shooter.fire_seconds = float(os.environ.get("RS_SHOOTER_FIRE_S", cfg.shooter.fire_seconds))
     cfg.shooter.retract_seconds = float(os.environ.get("RS_SHOOTER_RETRACT_S", cfg.shooter.retract_seconds))
+    cfg.shooter.target_rpm = float(os.environ.get("RS_SHOOTER_TARGET_RPM", cfg.shooter.target_rpm))
     cfg.shooter.dwell = float(os.environ.get("RS_SHOOTER_DWELL", cfg.shooter.dwell))
     cfg.shooter.cooldown = float(os.environ.get("RS_SHOOTER_COOLDOWN", cfg.shooter.cooldown))
     cfg.shooter.max_shots = int(os.environ.get("RS_SHOOTER_MAX_SHOTS", cfg.shooter.max_shots))

@@ -52,9 +52,28 @@ BTN_ALIGN = 5       # R1
 # .. +1 (fully pulled); set to 0.0 for drivers that report a plain 0..1.
 TRIGGER_REST = -1.0
 
+# How often a held mechanism control re-announces itself while it stays held.
+# Paired with the robot's auto_stop_seconds: the robot stops a held mechanism
+# that stops hearing this, so the refresh must be comfortably faster than that
+# timeout, and slow enough that it costs the radio almost nothing next to drive
+# frames at drive_hz.
+HOLD_REFRESH_S = 0.25
+
 
 def _dz(v, dz=0.08):
     return 0.0 if abs(v) < dz else v
+
+
+def _expo(v: float, e: float) -> float:
+    """Bend an axis toward a cubic response, keeping the endpoints.
+
+    out = (1-e)*v + e*v^3. Odd in v, so the sign is preserved and -1/0/+1 are
+    fixed points: the curve only changes how much of the travel it takes to
+    reach a given output, never the range that is reachable.
+    """
+    if e <= 0.0:
+        return v
+    return (1.0 - e) * v + e * v * v * v
 
 
 def _clamp1(v):
@@ -110,11 +129,14 @@ class ControllerReader:
         self.hz = hz
         self.on_drive = None    # (throttle, steer) -> None
         self.on_action = None   # (name: str) -> None
+        self.on_hold = None     # (name: str, on: bool) -> None
         self.connected = False
         self.name = None
         self._map = mapping or ControllerMapping()
         self._js = None
         self._prev = {}
+        self._holding = {}        # action name -> currently held
+        self._hold_refresh = {}   # action name -> last time we re-announced it
         self._l2 = Trigger(self._map.trigger_rest)
         self._r2 = Trigger(self._map.trigger_rest)
         self._thread = None
@@ -169,6 +191,45 @@ class ControllerReader:
         self._prev[idx] = cur
         return bool(cur and not was)
 
+    def _held(self, idx: int) -> bool:
+        """Current state of a button, without consuming an edge."""
+        if self._js is None or idx < 0 or idx >= self._js.get_numbuttons():
+            return False
+        return bool(self._js.get_button(idx))
+
+    def _hat_held(self, idx: int, direction) -> bool:
+        if self._js is None or idx < 0 or idx >= self._js.get_numhats():
+            return False
+        return tuple(self._js.get_hat(idx)) == tuple(direction)
+
+    def _pump_holds(self, held: dict) -> None:
+        """Turn a held/not-held map into on/off callbacks for the robot.
+
+        Sends on the press and on the release, and REPEATS the "on" a few times
+        a second while the control stays held. The repeat is the point: the
+        robot auto-stops a held mechanism that stops hearing from us, so a
+        release frame lost on the radio costs a fraction of a second of extra
+        running rather than a feeder that never stops. Rate-limited well below
+        the poll rate because this shares airtime with drive frames.
+        """
+        now = time.monotonic()
+        for name, on in held.items():
+            was = self._holding.get(name, False)
+            if on and not was:
+                self._holding[name] = True
+                self._hold_refresh[name] = now
+                if self.on_hold:
+                    self.on_hold(name, True)
+            elif on and was:
+                if now - self._hold_refresh.get(name, 0.0) >= HOLD_REFRESH_S:
+                    self._hold_refresh[name] = now
+                    if self.on_hold:
+                        self.on_hold(name, True)
+            elif was and not on:
+                self._holding[name] = False
+                if self.on_hold:
+                    self.on_hold(name, False)
+
     def _axis(self, idx: int, naxes: int) -> float:
         return self._js.get_axis(idx) if (0 <= idx < naxes) else 0.0
 
@@ -196,11 +257,24 @@ class ControllerReader:
                 m = self._map  # one read: the mapping can be swapped mid-tick
                 naxes = self._js.get_numaxes()
                 self._publish(naxes)
-                r2 = self._r2.value(self._axis(m.axis_r2, naxes))
-                l2 = self._l2.value(self._axis(m.axis_l2, naxes))
-                # R2 forward, L2 reverse, both = cancel.
-                throttle = _dz(r2 - l2, m.deadzone) * m.throttle_gain
-                steer = _dz(self._axis(m.axis_steer, naxes), m.deadzone) * m.steer_gain
+                if m.axis_throttle is not None and m.axis_throttle >= 0:
+                    # Arcade drive on one stick. The mixing itself happens on
+                    # the robot (DriveCommand.arcade), same as it does for the
+                    # trigger path — this only decides where throttle comes
+                    # from, so both layouts speak the identical wire protocol.
+                    raw = self._axis(m.axis_throttle, naxes)
+                    if m.invert_throttle:
+                        raw = -raw
+                    throttle = _expo(_dz(raw, m.deadzone),
+                                     m.throttle_expo) * m.throttle_gain
+                else:
+                    r2 = self._r2.value(self._axis(m.axis_r2, naxes))
+                    l2 = self._l2.value(self._axis(m.axis_l2, naxes))
+                    # R2 forward, L2 reverse, both = cancel.
+                    throttle = _expo(_dz(r2 - l2, m.deadzone),
+                                     m.throttle_expo) * m.throttle_gain
+                steer = _expo(_dz(self._axis(m.axis_steer, naxes), m.deadzone),
+                              m.steer_expo) * m.steer_gain
                 if m.invert_steer:
                     steer = -steer
                 if self.on_drive:
@@ -208,6 +282,11 @@ class ControllerReader:
                 for idx, name in m.actions():
                     if self._edge(idx) and self.on_action:
                         self.on_action(name)
+                # Run-while-held controls, buttons and hat directions alike.
+                held = {name: self._held(idx) for idx, name in m.holds()}
+                for hat, direction, name in m.hat_holds():
+                    held[name] = self._hat_held(hat, direction)
+                self._pump_holds(held)
             except Exception as e:
                 print(f"[controller] error: {e}")
                 self._js = None
