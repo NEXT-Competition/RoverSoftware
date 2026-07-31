@@ -10,6 +10,8 @@ claimed — the debounce question in particular, which no amount of decoder
 testing would catch because the dropped edges never reach the decoder.
 """
 
+import sys
+
 import pytest
 
 from robot.config import MotorConfig
@@ -409,3 +411,69 @@ def test_an_encoder_starts_and_counts_against_the_real_backend(hat):
         hat.GPIO.levels[17], hat.GPIO.levels[27] = a, b
         fire[17](17)
     assert e.ticks == 4
+
+
+def test_a_failed_edge_detect_names_the_package_that_causes_it(hat, monkeypatch):
+    """The stock RPi.GPIO sets direction fine and cannot arm an interrupt.
+
+    Its message is a bare "Failed to add edge detection", which reads as a pin
+    conflict; the real cause is a 2019 library doing edge detection through a
+    sysfs interface the kernel renumbered. Diagnosing that from the message
+    alone took three round trips on real hardware once already.
+    """
+    monkeypatch.delitem(sys.modules, "lgpio", raising=False)
+
+    def explode(*a, **kw):
+        raise RuntimeError("Failed to add edge detection")
+
+    monkeypatch.setattr(hat.GPIO, "add_event_detect", explode)
+    e = Encoder(pin_a=17, pin_b=27, counts_per_rev=4.0)
+    assert e.start() is False
+
+
+def test_the_package_hint_is_quiet_when_already_on_the_shim(monkeypatch):
+    """rpi-lgpio is in: a claim failure now means a genuine contest for the
+    pins, and sending someone package-hunting would be a wild goose chase."""
+    monkeypatch.setitem(sys.modules, "lgpio", object())
+    assert enc_mod._edge_detection_hint() == ""
+
+
+def test_the_package_hint_fires_on_the_stock_library(monkeypatch):
+    monkeypatch.delitem(sys.modules, "lgpio", raising=False)
+    hint = enc_mod._edge_detection_hint()
+    assert "rpi-lgpio" in hint
+    assert "apt remove" in hint
+
+
+# --- levels(): the question the counter cannot answer ------------------------
+
+def test_levels_reports_the_pins_as_they_are_now(gpio):
+    e = make(gpio)
+    gpio.levels[17], gpio.levels[27] = 1, 0
+    assert e.levels() == (1, 0)
+    gpio.levels[17], gpio.levels[27] = 0, 1
+    assert e.levels() == (0, 1)
+
+
+def test_levels_is_none_when_nothing_is_running(gpio):
+    """Same contract as rpm(): None is "no measurement", not a level."""
+    e = Encoder(pin_a=17, pin_b=27, counts_per_rev=4.0)
+    assert e.levels() is None
+    e = make(gpio)
+    assert e.levels() is not None
+    e.stop()
+    assert e.levels() is None
+
+
+def test_levels_distinguishes_a_still_wheel_from_a_dead_encoder(gpio):
+    """The reason this exists at all.
+
+    An unpowered encoder and a stationary one both hold the count at zero. Only
+    the levels separate them: pulled up and never moving is a channel that is
+    not driving, which no amount of staring at a count will tell you.
+    """
+    e = make(gpio)
+    gpio.levels[17], gpio.levels[27] = 1, 1
+    turn(gpio, [(1, 1)] * 5)          # edges fire, nothing actually changes
+    assert e.ticks == 0
+    assert e.levels() == (1, 1)       # ...and here is why

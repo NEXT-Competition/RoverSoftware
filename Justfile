@@ -84,6 +84,25 @@ bootstrap: adafruit uart
     ssh -t {{target}} "curl -sSL https://raw.githubusercontent.com/sunfounder/fusion-hat/v1/install.sh | sudo bash"
     @echo "==> Fusion HAT + Adafruit drivers installed and UART enabled on {{host}}. Remove any dtparam=i2c_arm_baudrate line from config.txt, then: just reboot"
 
+# ONCE per robot, and only if you are fitting wheel encoders.
+#
+# fusion_hat reads digital pins through RPi.GPIO, and the stock RPi.GPIO (0.7.1,
+# last released 2019) cannot arm GPIO interrupts on a current Raspberry Pi OS
+# kernel: it still does edge detection through /sys/class/gpio, which the kernel
+# has since renumbered. Setting pin DIRECTION goes through /dev/gpiomem and works
+# fine, so the motors are perfectly happy and only the encoders fail — with a
+# bare "Failed to add edge detection" that reads like a pin conflict.
+#
+# rpi-lgpio is the drop-in replacement: same API, backed by lgpio and the GPIO
+# character device. Deliberately NOT part of `bootstrap`, because it replaces a
+# library system-wide and only encoders need it.
+#
+# Swap RPi.GPIO for rpi-lgpio so wheel encoders can arm their interrupts.
+encoder-gpio:
+    ssh -t {{target}} "sudo apt-get remove -y python3-rpi.gpio; sudo pip3 uninstall -y RPi.GPIO 2>/dev/null; sudo apt-get install -y python3-rpi-lgpio"
+    ssh {{target}} "python3 -c \"import sys, RPi.GPIO; print('lgpio-backed:', 'lgpio' in sys.modules)\""
+    @echo "==> want 'lgpio-backed: True' above. Then: python3 /opt/roversoftware/tools/encoder_monitor.py --pins A,B"
+
 # Free the header UART for the GPS: enable_uart=1 + dtoverlay=disable-bt in
 # config.txt, and the serial console off cmdline.txt. Needs a reboot afterwards.
 #

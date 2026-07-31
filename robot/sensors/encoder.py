@@ -29,7 +29,11 @@ and the accumulated drift never matters.
 
 --- which GPIO library, and why ---
 `fusion_hat.pin.Pin` — the same library that drives the motors, already on every
-robot, no extra package and no daemon.
+robot, no separate GPIO package and no daemon.
+
+It does need `rpi-lgpio` rather than the stock `RPi.GPIO` underneath — see
+`_edge_detection_hint` for what goes wrong otherwise, which is worth reading
+before you believe a "Failed to add edge detection".
 
 The pins are the HAT's DIGITAL pins, which are Pi GPIO lines broken out on the
 HAT header and numbered as BCM, so the number silkscreened on the board is the
@@ -57,8 +61,8 @@ returns None, and control/rpm_trim.py sees that and leaves the throttles exactly
 as it found them. Nothing here can stop a robot from driving. This is the same
 fallback the motor layer takes in drive/motor.py, for the same reason.
 
-On a Pi 5, `fusion_hat` needs `rpi.lgpio` rather than `RPi.GPIO`; that is a
-detail of installing the HAT library, and nothing here changes with the board.
+Nothing here changes with the board: Pi 4 and Pi 5 differ in which RPi.GPIO
+implementation works, not in anything this module does.
 
 --- counts_per_rev, and why you should measure it rather than compute it ---
 This decodes all four edges of each quadrature cycle (an "X4" decoder), so one
@@ -75,15 +79,16 @@ against an absolute RPM, actually cares.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from typing import Optional
 
 try:  # pragma: no cover - Pi-only; the HAT library isn't installable elsewhere
     # The module, not the class: we want `pin.GPIO` too, and taking it from here
-    # guarantees it is the very object fusion_hat itself is driving (on a Pi 5
-    # that is the rpi.lgpio shim, not RPi.GPIO) rather than a second import that
-    # might resolve differently.
+    # guarantees it is the very object fusion_hat itself is driving — which is
+    # usually the rpi-lgpio shim wearing RPi.GPIO's name — rather than a second
+    # import that might resolve differently.
     from fusion_hat import pin as fusion_pin
 except Exception:
     fusion_pin = None
@@ -145,6 +150,36 @@ class _Backend:
         pass
 
 
+def _edge_detection_hint() -> str:
+    """Why arming an interrupt fails on a stock Raspberry Pi OS install.
+
+    The RPi.GPIO under fusion_hat comes in two flavours, and only one of them
+    can do this job on a current kernel:
+
+        RPi.GPIO    the original, last released in 2019. Sets pin direction by
+                    mmapping /dev/gpiomem, but does edge detection through the
+                    old /sys/class/gpio interface — whose numbering moved out
+                    from under it when the kernel rebased gpiochip.
+        rpi-lgpio   a drop-in replacement of the same API on top of lgpio.
+                    Does both through the GPIO character device.
+
+    So on the original, `Pin(...)` succeeds and `add_event_detect` fails, which
+    reads as "something else has the pins" and is nothing of the kind. Worth
+    saying out loud at the moment it happens: the message the library gives up
+    is "Failed to add edge detection" and it names no cause at all.
+    """
+    if "lgpio" in sys.modules:
+        # Already on the shim, so this is a real claim failure — usually the
+        # robot service holding the pins. Do not send anyone package-hunting.
+        return ""
+    return ("\n  The stock RPi.GPIO cannot arm GPIO interrupts on a current "
+            "Raspberry Pi OS kernel.\n"
+            "  Replace it with the drop-in shim (they conflict, so the old one "
+            "comes off first):\n"
+            "      sudo apt remove -y python3-rpi.gpio\n"
+            "      sudo apt install -y python3-rpi-lgpio")
+
+
 class _FusionHatBackend(_Backend):
     """Fusion HAT digital pins, via `fusion_hat.pin`."""
 
@@ -170,8 +205,11 @@ class _FusionHatBackend(_Backend):
         # Deliberately NOT Pin.irq() / when_activated: both pass a bouncetime,
         # which tells RPi.GPIO to drop every edge within 20 ms of the last one.
         # A wheel encoder's entire output is edges closer together than that.
-        self._gpio.add_event_detect(pin, self._gpio.BOTH,
-                                    callback=lambda *_: on_edge())
+        try:
+            self._gpio.add_event_detect(pin, self._gpio.BOTH,
+                                        callback=lambda *_: on_edge())
+        except Exception as e:
+            raise RuntimeError(f"{e}{_edge_detection_hint()}") from e
         return True
 
     def read(self, pin: int) -> int:
@@ -360,6 +398,23 @@ class Encoder:
         standstill means a floating input or a missing pull-up.
         """
         return self._missed
+
+    def levels(self) -> Optional[tuple]:
+        """The (A, B) pin levels right now, or None if not running.
+
+        Bring-up only, and the one question the counter cannot answer: a count
+        stuck at zero looks identical whether the wheel is still, the encoder
+        is unpowered, or the pins are wrong. The decoder only ever sees states
+        it is asked to advance between, so it has nothing to say about a
+        channel that never moves. The raw levels do.
+        """
+        b = self._backend
+        if b is None or not self._started:
+            return None
+        try:
+            return (b.read(self.pin_a), b.read(self.pin_b))
+        except Exception:
+            return None
 
     def reset(self) -> None:
         """Zero the counter. For bring-up (turn the wheel once and read it)."""

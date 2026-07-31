@@ -81,6 +81,7 @@ neither package can depend on them. Both degrade rather than fail:
 | Missing | What happens | Fix |
 |---|---|---|
 | SunFounder `fusion_hat` | The motor layer falls back to a mock — the service starts, telemetry flows, nothing moves | `just bootstrap`, or SunFounder's install script |
+| `rpi-lgpio` (encoders only) | Motors and telemetry are fine; every encoder fails to start with `Failed to add edge detection`, because the stock `RPi.GPIO` cannot arm interrupts on a current kernel | `just encoder-gpio` |
 | `deno` | The Python bridge still runs on its internal port; the touch UI does not | `just bs_host=... bootstrap-deno` |
 
 ## If you would rather not add a repository

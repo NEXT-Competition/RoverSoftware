@@ -108,29 +108,36 @@ def main():
     enc = Encoder(pin_a=a, pin_b=b, counts_per_rev=args.cpr or 1.0,
                   invert=args.invert, name="encoder", window=args.window)
     if not enc.start():
-        # "Failed to add edge detection" is the message you will usually see
-        # above, and it names none of its causes. In order of likelihood:
-        print(f"\nCould not claim GPIO {a}/{b}. The usual causes, in order:")
-        print("  1. The robot service already holds these pins. It claims them "
-              "at start-up whenever\n     a layout or robot.env names them:")
-        print("       sudo systemctl stop roversoftware-robot")
-        print("  2. Another copy of this tool is still running.")
-        print("  3. The pins are spoken for by something else on the HAT — an "
-              "actuator's PWM\n     channel is a different bus, but a digital "
-              "pin can only have one owner.")
+        # The library's own message is "Failed to add edge detection", which
+        # names no cause. The backend appends the package hint above when it
+        # applies; what is left is a genuine contest for the pins.
+        print(f"\nIf the pins really are claimed by something else: the robot "
+              f"service takes\nGPIO {a}/{b} at start-up whenever a layout or "
+              f"robot.env names them.")
+        print("    sudo systemctl stop roversoftware-robot")
+        print("Otherwise check no second copy of this tool is still running.")
         return 1
 
     print(f"Reading GPIO {a} (A) / {b} (B). Ctrl-C to stop.")
     print("Turn the wheel one full revolution by hand and read `count`; that is "
           "the counts-per-rev to enter on the Hardware tab.\n")
     period = 1.0 / max(args.rate, 0.1)
+    # Every distinct (A, B) pair we have ever seen. A healthy quadrature encoder
+    # visits all four; how many are missing says exactly what is wrong, and a
+    # count stuck at zero says nothing at all.
+    seen = set()
     try:
         while True:
             enc.sample(monotonic())
+            state = enc.levels()
+            if state is not None:
+                seen.add(state)
             line = f"count {enc.ticks:+8d}"
             if args.cpr > 0:
                 rpm = enc.rpm() or 0.0
                 line += f"   {enc.ticks / args.cpr:+7.2f} rev   {rpm:+8.1f} rpm"
+            if state is not None:
+                line += f"   A{state[0]} B{state[1]}   states {len(seen)}/4"
             if enc.missed:
                 # Not a warning until it moves: a single miss at start-up is the
                 # decoder finding its footing. A number that CLIMBS is real.
@@ -139,7 +146,8 @@ def main():
             sleep(period)
     except KeyboardInterrupt:
         print(f"\n\nfinal count: {enc.ticks}")
-        if args.cpr <= 0:
+        _explain_states(seen, a, b)
+        if enc.ticks and args.cpr <= 0:
             print("If you turned the wheel exactly one revolution, that IS your "
                   "counts-per-rev.")
         if enc.missed:
@@ -149,6 +157,47 @@ def main():
     finally:
         enc.stop()
     return 0
+
+
+def _explain_states(seen: set, pin_a: int, pin_b: int) -> None:
+    """Turn "which of the four states did we see" into the actual fault.
+
+    A count that never moves is the least informative symptom in this whole
+    stack — still wheel, unpowered encoder, wrong pins and a dead channel all
+    look identical. The levels tell them apart, so say so rather than making
+    someone infer it.
+    """
+    if len(seen) >= 4:
+        return
+    moved = {
+        "a": len({s[0] for s in seen}) > 1,
+        "b": len({s[1] for s in seen}) > 1,
+    }
+    if not seen:
+        return
+    if not moved["a"] and not moved["b"]:
+        held = next(iter(seen))
+        print(f"\nNEITHER channel ever changed — both sat at A{held[0]} B{held[1]}.")
+        print("Nothing was counted because nothing arrived. In order:")
+        print("  1. The encoder has no power. A Hall-effect encoder is an active")
+        print("     device: its 4-pin connector is ground, supply, A and B, and")
+        print("     with the supply missing the outputs never drive. Both pins")
+        print("     reading 1 is exactly what our internal pull-ups do on their own.")
+        print("  2. Power it from 3.3 V, NOT 5 V. The encoder accepts either, but a")
+        print("     Pi GPIO is not 5 V tolerant and A/B would be driven at 5 V.")
+        print(f"  3. A and B are on pins other than GPIO {pin_a}/{pin_b}.")
+        print("  4. The gearbox is not back-driving, so the shaft never turned.")
+        return
+    if moved["a"] != moved["b"]:
+        dead, pin = ("B", pin_b) if moved["a"] else ("A", pin_a)
+        print(f"\nOnly one channel moved: {dead} (GPIO {pin}) never changed.")
+        print("One live channel and one dead one gives a count near zero, because")
+        print("without a phase relationship every transition looks like a missed")
+        print(f"one. Check that wire and its pin. States seen: {sorted(seen)}")
+        return
+    print(f"\nBoth channels moved but only {len(seen)} of 4 states appeared: "
+          f"{sorted(seen)}.")
+    print("Turn the wheel further — a full revolution visits all four many times.")
 
 
 if __name__ == "__main__":
