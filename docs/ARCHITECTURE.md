@@ -429,6 +429,24 @@ because a 20 ms debounce discards nearly every edge a wheel encoder produces.
 The import is optional, and without it every encoder is inert, `rpm()` returns
 `None`, and the drivetrain runs open-loop exactly as it always did.
 
+Where the decoding happens is a `_TickSource`, chosen per encoder at start-up.
+`_GpioSource` decodes in a Python callback per edge and caps out in the low
+hundreds of edges a second; `_KernelSource` reads finished ±1 steps from an
+input device created by the `rotary-encoder` device-tree overlay, which decodes
+in its own IRQ handler. Both produce the same X4 counts, so `counts_per_rev` and
+every gain tuned against it are unchanged by the switch. Selection is by pin
+number against the device tree (`find_kernel_encoder`), not by device name —
+two instances of one overlay share a name and event numbering moves across
+reboots. No overlay means the Python path, so nothing needs configuring to keep
+working.
+
+The Python path also tracks transitions it could not attribute (`missed`), and
+`rpm()` returns `None` once a window loses more than `MAX_MISS_FRACTION` of
+them. That matters because loss is not symmetric noise: every miss is a count
+not made, and loss grows with edge rate, so the *faster* wheel under-reports
+more and `match` mode would speed it up further. Failing open beats a confident
+wrong number.
+
 `RpmTrim` closes the loop, in the tank drivetrain only, **after** the slew
 limiter — the limiter shapes the operator's intent, the trim corrects what the
 hardware then did with it, and rate-limiting a correction would only add lag.

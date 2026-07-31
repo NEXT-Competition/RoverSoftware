@@ -79,6 +79,9 @@ against an absolute RPM, actually cares.
 
 from __future__ import annotations
 
+import os
+import select
+import struct
 import sys
 import threading
 import time
@@ -122,6 +125,23 @@ DEFAULT_WINDOW_S = 0.1
 # 0 disables it. Deliberately small: this measurement is inside a control loop,
 # and a filter is dead time, which is the thing that makes a loop oscillate.
 DEFAULT_TAU_S = 0.05
+
+# The fraction of transitions we may fail to decode in one window before the
+# speed stops being a measurement at all.
+#
+# Every missed transition is a count NOT made, so loss always reads as a wheel
+# turning slower than it is — and loss grows with edge rate, so the FASTER wheel
+# under-reports more. That is the one failure this sensor can hand a control
+# loop that makes things actively worse: `match` mode would see the faster track
+# as the slower one and speed it up further. Positive feedback, in the only
+# component in the stack that can add throttle nobody asked for.
+#
+# So past this line `rpm()` goes back to None — "no measurement" — and the loop
+# opens exactly as it does for an unplugged encoder. 10% is chosen against what
+# the loop is FOR: it exists to correct a few percent of mismatch between two
+# tracks, so a reading with a 10% speed error cannot inform it, however
+# confident it looks.
+MAX_MISS_FRACTION = 0.1
 
 _SECONDS_PER_MINUTE = 60.0
 
@@ -271,48 +291,80 @@ def close_backend() -> None:
         _backend_error = ""
 
 
-class Encoder:
-    """One quadrature encoder on two GPIO pins.
+# --- where the counts come from ---------------------------------------------
+#
+# Two sources, and the difference between them is *where quadrature decoding
+# happens*. That sounds like an implementation detail and is the single thing
+# that decides whether this feature works at all on a given motor.
+#
+#   _GpioSource     every edge wakes a Python callback, which reads both pins
+#                   and advances the transition table. Costs one interpreter
+#                   round trip per edge, so it tops out in the low hundreds of
+#                   edges a second.
+#   _KernelSource   Linux's `rotary-encoder` driver decodes in its own IRQ
+#                   handler and hands us finished ±1 steps through an input
+#                   device. We read them in batches. Thousands a second, and
+#                   the interpreter never sees an edge.
+#
+# A goBILDA 5203 puts out 1993.6 counts per revolution of the OUTPUT shaft, so
+# one wheel at its 84 rpm free speed is ~2800 edges a second and a pair is
+# ~5600. Measured on real hardware, the Python path decoded 157 of about 1994
+# transitions in a single hand-turned revolution — the rest were lost. There is
+# no tuning that recovers an order of magnitude; the decode has to move off the
+# interpreter, which is what the kernel driver is for.
+#
+# Both use the same pins and produce the same X4 counts, so `counts_per_rev` and
+# every gain tuned against it carry over unchanged.
 
-    Thread-safety: the edge callback runs on the GPIO library's own thread and
-    is the ONLY writer of the tick counter, so its `+=` needs no lock. `sample`
-    runs on the control loop and only reads, under the lock that also guards the
-    published speed.
-    """
 
-    def __init__(self, pin_a: int, pin_b: int, counts_per_rev: float,
-                 invert: bool = False, name: str = "",
-                 window: float = DEFAULT_WINDOW_S, tau: float = DEFAULT_TAU_S):
-        self.pin_a = int(pin_a)
-        self.pin_b = int(pin_b)
-        self.counts_per_rev = float(counts_per_rev)
-        self.invert = bool(invert)
-        self.name = name or f"gpio{pin_a}/{pin_b}"
-        self.window = float(window)
-        self.tau = float(tau)
+class _TickSource:
+    """A signed count of quarter-cycles, however it was arrived at."""
 
-        self._backend: Optional[_Backend] = None
-        self._ticks = 0          # written only by the edge callback
-        self._state = 0          # last (A << 1) | B seen
-        self._missed = 0         # transitions the decoder could not attribute
-        self._lock = threading.Lock()
-        self._rpm = 0.0
-        self._last_ticks = 0
-        self._last_at = 0.0
-        self._started = False
-
-    # --- lifecycle ----------------------------------------------------------
+    kind = "none"
 
     def start(self) -> bool:
-        """Claim the pins and begin counting. False if there is no GPIO backend.
+        return False
 
-        Idempotent, and safe to call on a build with no encoder wired: the pins
-        are simply not claimed and `ok()` stays False.
-        """
-        if self._started:
-            return True
-        if not self.configured():
-            return False
+    def stop(self) -> None:
+        pass
+
+    @property
+    def ticks(self) -> int:
+        return 0
+
+    @property
+    def missed(self) -> int:
+        return 0
+
+    def levels(self) -> Optional[tuple]:
+        return None
+
+    def reset(self) -> None:
+        pass
+
+    def describe(self) -> str:
+        return self.kind
+
+
+class _GpioSource(_TickSource):
+    """Decode in Python, one callback per edge.
+
+    Thread-safety: the edge callback runs on the GPIO library's own thread and
+    is the ONLY writer of the tick counter, so its `+=` needs no lock.
+    """
+
+    kind = "gpio"
+
+    def __init__(self, pin_a: int, pin_b: int, name: str):
+        self.pin_a = pin_a
+        self.pin_b = pin_b
+        self.name = name
+        self._backend: Optional[_Backend] = None
+        self._ticks = 0     # written only by the edge callback
+        self._state = 0     # last (A << 1) | B seen
+        self._missed = 0    # transitions the decoder could not attribute
+
+    def start(self) -> bool:
         b = backend()
         if b is None:
             return False
@@ -332,29 +384,7 @@ class Encoder:
                   f"{self.pin_a}/{self.pin_b}: {e}")
             return False
         self._backend = b
-        self._started = True
-        self._last_at = time.monotonic()
-        self._last_ticks = 0
-        print(f"[Encoder] {self.name}: A=GPIO{self.pin_a} B=GPIO{self.pin_b}, "
-              f"{self.counts_per_rev:.0f} counts/rev via {b.name}")
         return True
-
-    def stop(self) -> None:
-        """Stop publishing a speed. Pins are released with the shared backend."""
-        self._started = False
-        with self._lock:
-            self._rpm = 0.0
-
-    def configured(self) -> bool:
-        """True if this actuator was given a pair of pins to read."""
-        return (self.pin_a != NO_PIN and self.pin_b != NO_PIN
-                and self.counts_per_rev > 0)
-
-    def ok(self) -> bool:
-        """True when the pins are claimed and counts are actually arriving."""
-        return self._started
-
-    # --- counting -----------------------------------------------------------
 
     def _on_edge(self) -> None:
         """One edge on either channel. Runs on the GPIO library's thread.
@@ -385,8 +415,257 @@ class Encoder:
 
     @property
     def ticks(self) -> int:
+        return self._ticks
+
+    @property
+    def missed(self) -> int:
+        return self._missed
+
+    def levels(self) -> Optional[tuple]:
+        b = self._backend
+        if b is None:
+            return None
+        try:
+            return (b.read(self.pin_a), b.read(self.pin_b))
+        except Exception:
+            return None
+
+    def reset(self) -> None:
+        self._ticks = 0
+        self._missed = 0
+
+    def describe(self) -> str:
+        b = self._backend
+        return (f"A=GPIO{self.pin_a} B=GPIO{self.pin_b} via "
+                f"{b.name if b else '?'}, decoded in Python")
+
+
+class _KernelSource(_TickSource):
+    """Counts from Linux's `rotary-encoder` driver, via an input device.
+
+    The kernel does the interrupt handling and the quadrature decoding and
+    hands over finished steps; all we do is add them up. Set up with, per
+    encoder, in /boot/firmware/config.txt:
+
+        dtoverlay=rotary-encoder,pin_a=17,pin_b=27,relative_axis=1,steps-per-period=4
+
+    `steps-per-period=4` is quarter-period mode — all four edges of each cycle,
+    the same X4 count the Python decoder produces, so `counts_per_rev` means
+    the same number either way.
+
+    We read /dev/input/eventN directly rather than through python-evdev: the
+    record is five fixed-width fields, the robot gets no new dependency, and a
+    test can feed it bytes.
+    """
+
+    kind = "kernel"
+
+    # struct input_event { struct timeval time; __u16 type, code; __s32 value; }
+    # Native sizes deliberately: timeval's members are C longs, so this is 24
+    # bytes on a 64-bit userspace and 16 on a 32-bit one, matching the kernel
+    # either way. Hard-coding 24 would silently misparse every event on 32-bit.
+    _RECORD = struct.Struct("llHHi")
+    _EV_REL = 0x02
+
+    def __init__(self, path: str, name: str):
+        self.path = path
+        self.name = name
+        self._ticks = 0     # written only by the reader thread
+        self._fd = -1
+        self._thread: Optional[threading.Thread] = None
+        self._stopping = threading.Event()
+
+    def start(self) -> bool:
+        try:
+            self._fd = os.open(self.path, os.O_RDONLY)
+        except OSError as e:
+            print(f"[Encoder] {self.name}: cannot open {self.path}: {e}")
+            return False
+        self._stopping.clear()
+        self._thread = threading.Thread(target=self._read_loop, daemon=True,
+                                        name=f"encoder-{self.name}")
+        self._thread.start()
+        return True
+
+    def _read_loop(self) -> None:
+        size = self._RECORD.size
+        pending = b""
+        while not self._stopping.is_set():
+            try:
+                # Timed select rather than a blocking read, so stop() does not
+                # have to wait for a wheel to turn before the thread notices.
+                ready, _, _ = select.select([self._fd], [], [], 0.2)
+                if not ready:
+                    continue
+                chunk = os.read(self._fd, size * 64)
+            except (OSError, ValueError):
+                return          # fd closed under us by stop(); nothing to say
+            if not chunk:
+                return
+            pending += chunk
+            while len(pending) >= size:
+                record, pending = pending[:size], pending[size:]
+                _, _, kind, _code, value = self._RECORD.unpack(record)
+                if kind == self._EV_REL:
+                    self._ticks += value
+
+    def stop(self) -> None:
+        self._stopping.set()
+        thread, self._thread = self._thread, None
+        if thread is not None:
+            thread.join(timeout=1.0)
+        if self._fd >= 0:
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = -1
+
+    @property
+    def ticks(self) -> int:
+        return self._ticks
+
+    def reset(self) -> None:
+        self._ticks = 0
+
+    def describe(self) -> str:
+        return f"kernel rotary-encoder on {self.path}"
+
+
+_INPUT_CLASS = "/sys/class/input"
+
+
+def _device_tree_pins(event: str) -> list:
+    """The BCM pins an input device was configured with, from its DT node.
+
+    Matching on the pins rather than the device name because two instances of
+    the same overlay present the same name, and "which event device is the LEFT
+    wheel" has to survive a reboot renumbering them.
+
+    The `gpios` property is a flat big-endian u32 array of <phandle, pin, flags>
+    triples — one per GPIO — which is why this reads bytes rather than text.
+    """
+    path = os.path.join(_INPUT_CLASS, event, "device", "device", "of_node", "gpios")
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    cells = struct.unpack(f">{len(raw) // 4}I", raw[:len(raw) // 4 * 4])
+    return [cells[i + 1] for i in range(0, len(cells) - 2, 3)]
+
+
+def find_kernel_encoder(pin_a: int, pin_b: int) -> Optional[str]:
+    """The input device the rotary-encoder overlay made for these pins, if any.
+
+    Never raises, and returns None on any machine without the overlay — which
+    includes every dev laptop, and a robot whose config.txt has not been edited
+    yet. That is what makes the kernel path opt-in without a flag: add the
+    overlay and reboot, and the next start picks it up.
+    """
+    try:
+        events = sorted(e for e in os.listdir(_INPUT_CLASS) if e.startswith("event"))
+    except OSError:
+        return None
+    wanted = {int(pin_a), int(pin_b)}
+    for event in events:
+        try:
+            pins = _device_tree_pins(event)
+        except Exception:
+            continue        # not a device-tree device, or not one with gpios
+        if set(pins) == wanted:
+            return f"/dev/input/{event}"
+    return None
+
+
+class Encoder:
+    """One quadrature encoder on two of the Fusion HAT's digital pins.
+
+    Thread-safety: the tick source is the ONLY writer of its counter, and
+    `sample` runs on the control loop and only reads, under the lock that also
+    guards the published speed.
+    """
+
+    def __init__(self, pin_a: int, pin_b: int, counts_per_rev: float,
+                 invert: bool = False, name: str = "",
+                 window: float = DEFAULT_WINDOW_S, tau: float = DEFAULT_TAU_S,
+                 device: str = ""):
+        # An explicit input device pins the kernel path for a caller that
+        # already knows which one it wants — the tools, and the tests. Left
+        # empty, `start()` looks one up by pin number, which is what a robot
+        # does: the overlay is either in config.txt or it is not.
+        self.device = device
+        self.pin_a = int(pin_a)
+        self.pin_b = int(pin_b)
+        self.counts_per_rev = float(counts_per_rev)
+        self.invert = bool(invert)
+        self.name = name or f"gpio{pin_a}/{pin_b}"
+        self.window = float(window)
+        self.tau = float(tau)
+
+        self._source: _TickSource = _TickSource()
+        self._lock = threading.Lock()
+        self._rpm = 0.0
+        self._last_ticks = 0
+        self._last_missed = 0
+        self._last_at = 0.0
+        self._started = False
+        self._degraded = False   # this window lost too many edges to trust
+        self._warned = False
+
+    # --- lifecycle ----------------------------------------------------------
+
+    def start(self) -> bool:
+        """Claim the pins and begin counting. False if there is no GPIO backend.
+
+        Idempotent, and safe to call on a build with no encoder wired: the pins
+        are simply not claimed and `ok()` stays False.
+        """
+        if self._started:
+            return True
+        if not self.configured():
+            return False
+        # The kernel driver wins when it is there. Nothing to configure: a robot
+        # with the overlay in config.txt gets it, one without falls back to
+        # decoding in Python, and both count the same way.
+        device = self.device or find_kernel_encoder(self.pin_a, self.pin_b)
+        source: _TickSource = (
+            _KernelSource(device, self.name) if device
+            else _GpioSource(self.pin_a, self.pin_b, self.name))
+        if not source.start():
+            return False
+        self._source = source
+        self._started = True
+        self._last_at = time.monotonic()
+        self._last_ticks = 0
+        self._last_missed = 0
+        print(f"[Encoder] {self.name}: {source.describe()}, "
+              f"{self.counts_per_rev:.0f} counts/rev")
+        return True
+
+    def stop(self) -> None:
+        """Stop publishing a speed, and release whatever was producing counts.
+
+        GPIO pins go back with the shared backend at shutdown; a kernel input
+        device is closed here, because its reader thread is ours alone.
+        """
+        self._started = False
+        self._source.stop()
+        with self._lock:
+            self._rpm = 0.0
+
+    def configured(self) -> bool:
+        """True if this actuator was given a pair of pins to read."""
+        return (self.pin_a != NO_PIN and self.pin_b != NO_PIN
+                and self.counts_per_rev > 0)
+
+    def ok(self) -> bool:
+        """True when the pins are claimed and counts are actually arriving."""
+        return self._started
+
+    # --- counting -----------------------------------------------------------
+
+    @property
+    def ticks(self) -> int:
         """Net counts since start, signed. Direction follows `invert`."""
-        return -self._ticks if self.invert else self._ticks
+        return -self._source.ticks if self.invert else self._source.ticks
 
     @property
     def missed(self) -> int:
@@ -396,8 +675,13 @@ class Encoder:
         are arriving faster than the callback can service them (a very high
         count-per-rev disc, or a Pi busy with inference); one that climbs at a
         standstill means a floating input or a missing pull-up.
+
+        Always 0 on the kernel source, which does not report dropped steps —
+        so a clean count there is a claim about this code, not about the
+        driver. It is also the reason the kernel path exists: the number this
+        returns on a high-resolution encoder decoded in Python is not small.
         """
-        return self._missed
+        return self._source.missed
 
     def levels(self) -> Optional[tuple]:
         """The (A, B) pin levels right now, or None if not running.
@@ -408,22 +692,23 @@ class Encoder:
         it is asked to advance between, so it has nothing to say about a
         channel that never moves. The raw levels do.
         """
-        b = self._backend
-        if b is None or not self._started:
+        if not self._started:
             return None
-        try:
-            return (b.read(self.pin_a), b.read(self.pin_b))
-        except Exception:
-            return None
+        # None on the kernel source as well: the driver owns those pins and we
+        # cannot read them behind its back. Bring-up wiring checks want the
+        # Python path, which is a reason to wire and prove an encoder BEFORE
+        # adding the overlay rather than after.
+        return self._source.levels()
 
     def reset(self) -> None:
         """Zero the counter. For bring-up (turn the wheel once and read it)."""
-        self._ticks = 0
-        self._missed = 0
+        self._source.reset()
         with self._lock:
             self._last_ticks = 0
+            self._last_missed = 0
             self._last_at = time.monotonic()
             self._rpm = 0.0
+            self._degraded = False
 
     # --- speed --------------------------------------------------------------
 
@@ -452,6 +737,22 @@ class Encoder:
             if elapsed < self.window or elapsed <= 0:
                 return
             ticks = self.ticks
+            # Health first: a speed computed from counts we know are incomplete
+            # is worse than no speed, because it is confidently wrong in a
+            # direction that scales with the error.
+            missed = self.missed
+            lost = missed - self._last_missed
+            decoded = abs(ticks - self._last_ticks)
+            self._last_missed = missed
+            seen = lost + decoded
+            self._degraded = seen > 0 and lost > MAX_MISS_FRACTION * seen
+            if self._degraded and not self._warned:
+                self._warned = True
+                print(f"[Encoder] {self.name}: losing edges "
+                      f"({lost} of {seen} transitions this window). The speed "
+                      f"is not trustworthy, so the trim loop stays open. Too "
+                      f"many counts per revolution for the Pi to service in "
+                      f"Python at this wheel speed.")
             revs = (ticks - self._last_ticks) / self.counts_per_rev
             raw = revs * _SECONDS_PER_MINUTE / elapsed
             self._last_ticks = ticks
@@ -466,17 +767,23 @@ class Encoder:
                 self._rpm = raw
 
     def rpm(self) -> Optional[float]:
-        """Signed revolutions per minute of the wheel, or None if not running.
+        """Signed revolutions per minute of the wheel, or None if unmeasurable.
 
         None rather than 0.0 is load-bearing: a stopped wheel and an absent
         encoder are the same number and opposite situations, and a speed loop
         that cannot tell them apart will happily wind a dead channel to full
         throttle. See control/rpm_trim.py.
+
+        None also covers a third case that looks nothing like the other two: an
+        encoder that is wired perfectly and simply emits edges faster than we
+        can count them (see MAX_MISS_FRACTION). Its number is not noisy — it is
+        low, by a margin that grows with speed. Handing that to the trim loop is
+        worse than handing it nothing.
         """
         if not self._started:
             return None
         with self._lock:
-            return self._rpm
+            return None if self._degraded else self._rpm
 
     def telemetry(self) -> Optional[float]:
         """Rounded RPM for a radio frame, or None when there is nothing to say."""

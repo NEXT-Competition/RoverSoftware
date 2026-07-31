@@ -37,7 +37,8 @@ from time import monotonic, sleep
 # when run as `python tools/encoder_monitor.py`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from robot.sensors.encoder import Encoder, backend
+from robot.sensors.encoder import (Encoder, backend, find_kernel_encoder,
+                                   _INPUT_CLASS, _device_tree_pins)
 
 
 def _move_somewhere_writable() -> None:
@@ -90,7 +91,16 @@ def main():
     p.add_argument("--rate", type=float, default=5.0, help="print rate (Hz)")
     p.add_argument("--window", type=float, default=0.1,
                    help="speed measurement window in seconds (see the settings page)")
+    p.add_argument("--list", action="store_true",
+                   help="list the kernel rotary-encoder devices and exit")
+    p.add_argument("--gpio", action="store_true",
+                   help="decode in Python even if a kernel overlay exists — the "
+                        "only way to see raw A/B levels, so it is how you prove "
+                        "wiring")
     args = p.parse_args()
+
+    if args.list:
+        return _list_kernel_devices()
 
     _move_somewhere_writable()
 
@@ -105,8 +115,10 @@ def main():
     # cpr defaults to 1 so `count` is still meaningful before it is measured —
     # RPM is then in "counts per minute", which is why it is only printed when a
     # real value was supplied.
+    device = "" if args.gpio else (find_kernel_encoder(a, b) or "")
     enc = Encoder(pin_a=a, pin_b=b, counts_per_rev=args.cpr or 1.0,
-                  invert=args.invert, name="encoder", window=args.window)
+                  invert=args.invert, name="encoder", window=args.window,
+                  device=device)
     if not enc.start():
         # The library's own message is "Failed to add edge detection", which
         # names no cause. The backend appends the package hint above when it
@@ -119,6 +131,10 @@ def main():
         return 1
 
     print(f"Reading GPIO {a} (A) / {b} (B). Ctrl-C to stop.")
+    if not device and not args.gpio:
+        print("No kernel overlay for these pins, so decoding in Python. That is "
+              "fine below\n~500 edges/s; above it, counts are LOST. See "
+              "`just encoder-overlay`.")
     print("Turn the wheel one full revolution by hand and read `count`; that is "
           "the counts-per-rev to enter on the Hardware tab.\n")
     period = 1.0 / max(args.rate, 0.1)
@@ -199,6 +215,44 @@ def _explain_states(seen: set, pin_a: int, pin_b: int) -> None:
           f"{sorted(seen)}.")
     print("Turn the wheel further — a full revolution visits all four many times.")
 
+
+
+def _list_kernel_devices() -> int:
+    """Every input device the rotary-encoder overlay made, and its pins.
+
+    The one command that answers "did my config.txt edit actually take?" — the
+    overlay is read by the firmware at boot, so a typo there is silent until
+    something goes looking for the device that never appeared.
+    """
+    try:
+        events = sorted(e for e in os.listdir(_INPUT_CLASS) if e.startswith("event"))
+    except OSError:
+        print(f"No {_INPUT_CLASS} — this is not a Linux machine with input devices.")
+        return 1
+
+    found = []
+    for event in events:
+        try:
+            pins = _device_tree_pins(event)
+        except Exception:
+            continue                     # not a device-tree device with gpios
+        if len(pins) >= 2:
+            found.append((event, pins))
+
+    if not found:
+        print("No kernel rotary-encoder devices found.")
+        print("\nAdd one per encoder to config.txt and reboot:")
+        print("    dtoverlay=rotary-encoder,pin_a=17,pin_b=27,"
+              "relative_axis=1,steps-per-period=4")
+        print("or:  just encoder-overlay 17 27  &&  just reboot")
+        return 1
+
+    print("Kernel rotary-encoder devices:\n")
+    for event, pins in found:
+        print(f"    /dev/input/{event:<10} A=GPIO{pins[0]}  B=GPIO{pins[1]}")
+    print("\nPut those pin numbers on the matching actuator's Hardware card; the "
+          "robot\nfinds the device by pin, so the event numbers need not be stable.")
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

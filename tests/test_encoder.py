@@ -10,7 +10,9 @@ claimed — the debounce question in particular, which no amount of decoder
 testing would catch because the dropped edges never reach the decoder.
 """
 
+import os
 import sys
+from time import sleep
 
 import pytest
 
@@ -477,3 +479,274 @@ def test_levels_distinguishes_a_still_wheel_from_a_dead_encoder(gpio):
     turn(gpio, [(1, 1)] * 5)          # edges fire, nothing actually changes
     assert e.ticks == 0
     assert e.levels() == (1, 1)       # ...and here is why
+
+
+# --- losing edges: the reading that is wrong rather than missing -------------
+
+def test_a_window_that_loses_too_many_edges_reports_no_speed(gpio):
+    """Loss reads as a slow wheel, and it grows with speed.
+
+    So the faster track under-reports more, and `match` mode would see it as the
+    slower one and speed it up further — positive feedback in the only component
+    that can add throttle nobody asked for. None instead, and the loop opens.
+    """
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    turn(gpio, FORWARD)              # 4 clean counts
+    turn(gpio, [(1, 1), (0, 0)] * 3)  # 6 diagonal jumps: undecodable
+    e.sample(0.5)
+    assert e.missed >= 5
+    assert e.rpm() is None
+
+
+def test_a_little_loss_is_tolerated(gpio):
+    """A stray miss is noise, not an overrun. Opening the loop for one would
+    make the feature useless on any real robot."""
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    turn(gpio, FORWARD * 8)   # 32 clean counts
+    turn(gpio, [(1, 1)])      # one diagonal: ~3% of the window
+    e.sample(0.5)
+    assert e.missed == 1
+    assert e.rpm() is not None
+    assert e.rpm() > 0
+
+
+def test_recovering_from_a_burst_of_loss_restores_the_speed(gpio):
+    """Per-window, not latched. Edge rate follows wheel speed, so a burst while
+    accelerating must not disable the sensor for the rest of the run."""
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    turn(gpio, [(1, 1), (0, 0)] * 4)
+    e.sample(0.5)
+    assert e.rpm() is None
+    turn(gpio, FORWARD * 4)   # a clean window
+    e.sample(1.0)
+    assert e.rpm() is not None
+
+
+def test_the_overrun_warning_is_printed_once_not_per_tick(gpio, capsys):
+    e = make(gpio, cpr=4.0, tau=0.0)
+    e.sample(0.0)
+    for tick in range(1, 5):
+        turn(gpio, [(1, 1), (0, 0)] * 3)
+        e.sample(tick * 0.5)
+    assert capsys.readouterr().out.count("losing edges") == 1
+
+
+# --- the kernel rotary-encoder source ----------------------------------------
+
+def _event(kind, code, value):
+    """One struct input_event, laid out the way the kernel writes it."""
+    return enc_mod._KernelSource._RECORD.pack(0, 0, kind, code, value)
+
+
+EV_REL, EV_SYN, EV_KEY, REL_X = 0x02, 0x00, 0x01, 0x00
+
+
+@pytest.fixture
+def evdev(tmp_path):
+    """A real FIFO standing in for /dev/input/eventN.
+
+    A pipe rather than a stubbed file object, so the select() loop, the reader
+    thread and the partial-record buffering are all genuinely exercised — those
+    are the parts that would break against a real device.
+    """
+    path = tmp_path / "event0"
+    os.mkfifo(path)
+    # O_RDWR so the FIFO has a writer from the outset and open() does not block
+    # waiting for one; the source opens its own read side separately.
+    keep_open = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    yield str(path), keep_open
+    os.close(keep_open)
+
+
+def _feed(fd, payload, source, expect):
+    """Write events and wait for the reader thread to account for them."""
+    os.write(fd, payload)
+    for _ in range(200):
+        if source.ticks == expect:
+            return
+        sleep(0.01)
+
+
+def test_kernel_steps_accumulate_into_ticks(evdev):
+    path, writer = evdev
+    src = enc_mod._KernelSource(path, "left")
+    assert src.start() is True
+    try:
+        _feed(writer, _event(EV_REL, REL_X, 1) * 5, src, 5)
+        assert src.ticks == 5
+        _feed(writer, _event(EV_REL, REL_X, -1) * 2, src, 3)
+        assert src.ticks == 3
+    finally:
+        src.stop()
+
+
+def test_kernel_ignores_events_that_are_not_movement(evdev):
+    """Only EV_REL is a step. Everything else on the device must be dropped.
+
+    The non-movement events here carry NON-ZERO values on purpose: an EV_SYN
+    always has value 0, so a decoder that summed every event indiscriminately
+    would still pass a test built only from those. It has to hurt to be a test.
+    """
+    path, writer = evdev
+    src = enc_mod._KernelSource(path, "left")
+    assert src.start() is True
+    try:
+        payload = (_event(EV_REL, REL_X, 1)
+                   + _event(EV_KEY, 0x100, 1)     # a button, value 1
+                   + _event(EV_SYN, 0, 0)) * 4
+        _feed(writer, payload, src, 4)
+        sleep(0.05)                                # let any stragglers land
+        assert src.ticks == 4                      # not 8
+    finally:
+        src.stop()
+
+
+def test_kernel_reassembles_a_record_split_across_reads(evdev):
+    """A read can land mid-record; half an event must not become a count."""
+    path, writer = evdev
+    src = enc_mod._KernelSource(path, "left")
+    assert src.start() is True
+    try:
+        whole = _event(EV_REL, REL_X, 1)
+        os.write(writer, whole[:5])
+        sleep(0.05)
+        assert src.ticks == 0        # nothing counted from a partial record
+        _feed(writer, whole[5:], src, 1)
+        assert src.ticks == 1
+    finally:
+        src.stop()
+
+
+def test_kernel_source_reports_no_missed_transitions(evdev):
+    """It cannot lose an edge in Python because it never sees one, so the
+    miss-rate gate stays out of the way and rpm() keeps reporting."""
+    path, writer = evdev
+    src = enc_mod._KernelSource(path, "left")
+    assert src.start() is True
+    try:
+        _feed(writer, _event(EV_REL, REL_X, 1) * 3, src, 3)
+        assert src.missed == 0
+        assert src.levels() is None   # the driver owns the pins, not us
+    finally:
+        src.stop()
+
+
+def test_stopping_the_kernel_source_ends_its_thread(evdev):
+    path, _ = evdev
+    src = enc_mod._KernelSource(path, "left")
+    assert src.start() is True
+    thread = src._thread
+    src.stop()
+    assert thread is not None and not thread.is_alive()
+
+
+def test_a_missing_input_device_is_refused_not_raised(tmp_path):
+    src = enc_mod._KernelSource(str(tmp_path / "nope"), "left")
+    assert src.start() is False
+
+
+def test_an_encoder_prefers_the_kernel_device_when_given_one(evdev, gpio):
+    """The overlay wins over decoding in Python — that is the whole point."""
+    path, writer = evdev
+    e = Encoder(pin_a=17, pin_b=27, counts_per_rev=4.0, tau=0.0, device=path)
+    assert e.start() is True
+    try:
+        assert isinstance(e._source, enc_mod._KernelSource)
+        assert gpio.callbacks == {}      # no GPIO pins were claimed at all
+        _feed(writer, _event(EV_REL, REL_X, 1) * 4, e._source, 4)
+        e.sample(0.0)
+        e.sample(0.5)
+        assert e.ticks == 4
+        assert e.rpm() is not None
+    finally:
+        e.stop()
+
+
+def test_invert_applies_to_kernel_counts_too(evdev, gpio):
+    """The overlay has no idea which way round the motor is mounted."""
+    path, writer = evdev
+    e = Encoder(pin_a=17, pin_b=27, counts_per_rev=4.0, invert=True, device=path)
+    assert e.start() is True
+    try:
+        _feed(writer, _event(EV_REL, REL_X, 1) * 3, e._source, 3)
+        assert e.ticks == -3
+    finally:
+        e.stop()
+
+
+def test_without_an_overlay_an_encoder_falls_back_to_decoding_in_python(gpio):
+    """Nothing regresses on a robot whose config.txt was never edited."""
+    e = make(gpio)
+    assert isinstance(e._source, enc_mod._GpioSource)
+    turn(gpio, FORWARD)
+    assert e.ticks == 4
+
+
+# --- finding the overlay's input device --------------------------------------
+
+def _fake_input_tree(root, entries):
+    """Build a /sys/class/input lookalike. entries: {event name: [pins] or None}"""
+    for event, pins in entries.items():
+        node = root / event / "device" / "device" / "of_node"
+        node.mkdir(parents=True)
+        if pins is None:
+            continue
+        cells = []
+        for pin in pins:
+            cells += [0x01, pin, 0]      # <&gpio PIN FLAGS>
+        (node / "gpios").write_bytes(
+            b"".join(c.to_bytes(4, "big") for c in cells))
+
+
+def test_the_device_is_matched_by_pin_number_not_by_name(tmp_path, monkeypatch):
+    """Two instances of one overlay present the same name, and the event
+    numbering can change across reboots. The pins are the stable identity."""
+    _fake_input_tree(tmp_path, {"event0": [22, 23], "event1": [17, 27]})
+    monkeypatch.setattr(enc_mod, "_INPUT_CLASS", str(tmp_path))
+    assert enc_mod.find_kernel_encoder(17, 27) == "/dev/input/event1"
+    assert enc_mod.find_kernel_encoder(22, 23) == "/dev/input/event0"
+
+
+def test_pins_in_the_other_order_still_match(tmp_path, monkeypatch):
+    """Swapped A/B is a direction, which is `encoder_invert`, not a mismatch."""
+    _fake_input_tree(tmp_path, {"event0": [27, 17]})
+    monkeypatch.setattr(enc_mod, "_INPUT_CLASS", str(tmp_path))
+    assert enc_mod.find_kernel_encoder(17, 27) == "/dev/input/event0"
+
+
+def test_unrelated_input_devices_are_skipped(tmp_path, monkeypatch):
+    """A keyboard has no `gpios` property; a gamepad is plugged into every
+    base station in this project."""
+    _fake_input_tree(tmp_path, {"event0": None, "event1": [17, 27]})
+    monkeypatch.setattr(enc_mod, "_INPUT_CLASS", str(tmp_path))
+    assert enc_mod.find_kernel_encoder(17, 27) == "/dev/input/event1"
+
+
+def test_a_device_sharing_one_pin_is_not_a_match(tmp_path, monkeypatch):
+    """BOTH pins have to agree.
+
+    Two encoders can legitimately share nothing but a typo, and a config.txt
+    with pin_a right and pin_b wrong is a normal way to arrive here. Matching
+    on the first pin alone would silently bind the left wheel to the right
+    wheel's counter, which reads as a robot whose tracks agree perfectly.
+    """
+    _fake_input_tree(tmp_path, {"event0": [17, 22], "event1": [17, 27]})
+    monkeypatch.setattr(enc_mod, "_INPUT_CLASS", str(tmp_path))
+    assert enc_mod.find_kernel_encoder(17, 27) == "/dev/input/event1"
+    assert enc_mod.find_kernel_encoder(17, 22) == "/dev/input/event0"
+    assert enc_mod.find_kernel_encoder(17, 23) is None
+
+
+def test_no_overlay_anywhere_returns_nothing(tmp_path, monkeypatch):
+    _fake_input_tree(tmp_path, {"event0": [22, 23]})
+    monkeypatch.setattr(enc_mod, "_INPUT_CLASS", str(tmp_path))
+    assert enc_mod.find_kernel_encoder(17, 27) is None
+
+
+def test_a_machine_with_no_input_class_at_all_is_fine(monkeypatch):
+    """Every dev laptop, and the CI box this runs on."""
+    monkeypatch.setattr(enc_mod, "_INPUT_CLASS", "/nonexistent/sys/class/input")
+    assert enc_mod.find_kernel_encoder(17, 27) is None
