@@ -313,11 +313,32 @@ export function PidGraph({ robotId, loop, unit }: {
   }));
 
   if (samples.length === 0) {
+    // The wheel-speed loop has preconditions the steering loops do not, and
+    // listing only the shared ones sends you to the Control loop switch, find
+    // it already on, and stop. Every gate, in the order they are checked.
     return (
       <p class="hint pid-empty">
-        No trace yet. Switch on <strong>Graph the loops</strong> under Control
-        loop, then put the robot in the mode that runs this one — a loop nobody
-        is running has nothing to say about how it behaves.
+        No trace yet.{" "}
+        {loop.startsWith("drive.trim")
+          ? (
+            <>
+              This loop reports only while it is actually correcting, which
+              needs all of: <strong>Graph the loops</strong> on under Control
+              loop; <strong>Mode</strong> above set to something other than{" "}
+              <em>off</em>; both wheels reporting a speed (the{" "}
+              <strong>wheels</strong> row on the driving view — blank means no
+              usable measurement, and the loop opens rather than act on one);
+              and the rover being driven, roughly straight if the mode is{" "}
+              <em>match</em>.
+            </>
+          )
+          : (
+            <>
+              Switch on <strong>Graph the loops</strong> under Control loop,
+              then put the robot in the mode that runs this one — a loop nobody
+              is running has nothing to say about how it behaves.
+            </>
+          )}
       </p>
     );
   }
