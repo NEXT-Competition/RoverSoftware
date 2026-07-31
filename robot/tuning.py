@@ -270,6 +270,23 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _b("shooter.enabled", live=False),
     _i("shooter.channel", 0, 15, live=False),
 
+    # --- ballistics (distance -> flywheel speed, for the `spin_up` action) ---
+    # All live: `Ballistics` reads the config object on every shot, so these are
+    # tuned the way they are actually found — take a shot, watch where it lands,
+    # nudge `transfer`, take another. A restart between shots would make that
+    # loop unusable.
+    _f("ballistics.launch_angle_deg", 5, 85),
+    _f("ballistics.launch_height_m", 0, 3),
+    _f("ballistics.target_height_m", 0, 5),
+    _f("ballistics.wheel_diameter_m", 0.01, 1),
+    # Under 1 by definition — the ball never leaves at the full surface speed of
+    # the wheel that threw it.
+    _f("ballistics.transfer", 0.05, 1),
+    # 0 = not measured, which switches the whole model off. Anything above it is
+    # a claim about a real wheel on a real ESC.
+    _f("ballistics.max_rpm", 0, 30000),
+    _f("ballistics.idle_power", 0, 1),
+
     # --- GPS ---
     _f("gps.fix_timeout", 0.5, 60),
     _f("gps.min_move_mps", 0, 5),

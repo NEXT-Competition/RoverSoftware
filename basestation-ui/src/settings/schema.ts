@@ -460,6 +460,45 @@ export const ROBOT_GROUPS: Group[] = [
     ],
   },
   {
+    title: "Shot solver",
+    blurb:
+      "How far to throw for how far away. A routine step that spins up a " +
+      "flywheel measures the range and reads these to work out the speed — " +
+      "which is why there is no power-per-distance table anywhere. Nothing is " +
+      "computed at all until the flywheel's top RPM is filled in.",
+    fields: [
+      f("ballistics.max_rpm", "Flywheel top RPM", 0, 30000, 100, {
+        unit: "rpm",
+        help:
+          "The wheel's speed at full throttle. 0 means unmeasured, which switches the solver off — the robot refuses to turn a guess into a launch.",
+      }),
+      f("ballistics.wheel_diameter_m", "Wheel diameter", 0.01, 1, 0.005, {
+        unit: "m",
+        help: "The surface speed is what throws the ball, so this is not cosmetic.",
+      }),
+      f("ballistics.transfer", "Transfer", 0.05, 1, 0.01, {
+        help:
+          "Fraction of the wheel's surface speed the ball actually leaves at — always under 1, because the contact slips and some energy goes into spin. The one number you find by shooting: if every shot lands long, lower it.",
+      }),
+      f("ballistics.launch_angle_deg", "Launch angle", 5, 85, 1, {
+        unit: "°",
+        help: "The fixed hood angle, from horizontal.",
+      }),
+      f("ballistics.launch_height_m", "Launch height", 0, 3, 0.01, {
+        unit: "m",
+        help: "Where the ball leaves the launcher, measured from the ground.",
+      }),
+      f("ballistics.target_height_m", "Target height", 0, 5, 0.01, {
+        unit: "m",
+        help: "The bucket's rim, not its base — also from the ground.",
+      }),
+      f("ballistics.idle_power", "Throttle floor", 0, 1, 0.01, {
+        help:
+          "Below this a brushless ESC may not turn at all, so a very short shot would leave the wheel stalled while the routine believed it was spinning.",
+      }),
+    ],
+  },
+  {
     title: "GPS",
     fields: [
       f("gps.fix_timeout", "Fix timeout", 0.5, 60, 0.5, {

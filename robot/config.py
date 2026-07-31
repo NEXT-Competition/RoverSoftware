@@ -511,6 +511,43 @@ class ShooterConfig:
 
 
 @dataclass
+class BallisticsConfig:
+    """Distance to a target -> the flywheel speed that reaches it.
+
+    Consumed by `control/ballistics.py` and, through it, by the `spin_up`
+    routine action. Separate from `ShooterConfig` because that describes the
+    SERVO launcher and its firing policy, while this describes a throw: the
+    geometry it leaves at and the wheel that throws it. A build can have one,
+    both, or neither.
+
+    Uncalibrated by default (`max_rpm` 0), and every conversion answers None
+    until it isn't. That is the same honest failure `VisionConfig.range_at_m`
+    makes: a robot that has never been measured must not turn a guess into a
+    launch.
+    """
+
+    # Where the ball leaves, and where it has to land. Both measured from the
+    # ground, so the pair works out the climb on its own — a launcher mounted
+    # high shooting into a low bucket is a negative rise and perfectly valid.
+    launch_angle_deg: float = 45.0  # fixed hood angle, from horizontal
+    launch_height_m: float = 0.30
+    target_height_m: float = 0.90  # the bucket's rim, not its base
+
+    # The flywheel. `transfer` is the fraction of the wheel's surface speed the
+    # ball actually leaves at — always under 1 because the contact slips and
+    # some of the energy goes into spin. It is the one number here that cannot
+    # be derived, only shot for: if every shot lands long, lower it.
+    wheel_diameter_m: float = 0.10
+    transfer: float = 0.5
+    # Flywheel RPM at full throttle. 0 means "nobody has measured this", which
+    # switches the whole model off rather than letting it invent a number.
+    max_rpm: float = 0.0
+    # Throttle floor. Below this a brushless ESC may not commutate at all, so a
+    # very short shot would ask for a wheel speed it silently gets zero of.
+    idle_power: float = 0.15
+
+
+@dataclass
 class MechanismConfig:
     """One named non-drivetrain subsystem: an intake, an arm, a second launcher.
 
@@ -646,6 +683,9 @@ class RobotConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     fpv: FPVConfig = field(default_factory=FPVConfig)
     shooter: ShooterConfig = field(default_factory=ShooterConfig)
+    # How hard to throw, given how far away the thing is. Off until measured;
+    # see BallisticsConfig.
+    ballistics: BallisticsConfig = field(default_factory=BallisticsConfig)
     align: AlignConfig = field(default_factory=AlignConfig)
     nav: NavConfig = field(default_factory=NavConfig)
     # Extra subsystems declared by the layout (intake, arm, a second launcher).

@@ -82,6 +82,15 @@ export const CONDITIONS: VerbSpec[] = [
     args: [],
   },
   { key: "arrived", group: "vision", label: "when at the standoff distance", chip: "at standoff", args: [] },
+  {
+    key: "in_range",
+    group: "vision",
+    label: "when the target is in shooting range",
+    chip: "in range",
+    help:
+      "Not a distance — it asks whether the launcher can actually reach the target from where it is, at the angle it is set to. Too far is out of range because the flywheel would have to spin faster than it can; too NEAR can be too, because a fixed launch angle cannot throw a short high arc. False whenever the range is unknown, so a shot gated on this holds fire rather than firing blind.",
+    args: [],
+  },
   { key: "route_done", group: "navigation", label: "when the route is finished", chip: "route done", args: [] },
   {
     key: "shots",
@@ -227,6 +236,27 @@ export const ACTIONS: VerbSpec[] = [
     help:
       "Hands a list of waypoints to the waypoint controller, so a state that drives with Waypoint route follows them. This is what makes a fully autonomous run possible from the graph alone — pair it with “when the route is finished”. Pick saved places in the order you want them driven.",
     args: [{ key: "places", label: "route", kind: "route" }],
+  },
+  {
+    key: "spin_up",
+    group: "mechanism",
+    label: "work out the shot and spin up the flywheel",
+    help:
+      "Measures how far away the target is, works out the launch speed that reaches it, and sets the flywheel to the throttle that gives it. Put it in a step that is still AIMING — it needs the camera on the target to measure the range. Nothing spins if the range is unknown or the shot is out of reach, so pair it with “when the target is in shooting range”. Needs the ballistics numbers in Settings, above all the flywheel's own top RPM.",
+    args: [
+      { key: "mech", label: "flywheel", kind: "mech" },
+      { key: "actuator", label: "motor (blank = all)", kind: "actuator" },
+      {
+        key: "distance_m",
+        label: "fixed distance (0 = measure it)",
+        kind: "number",
+        min: 0,
+        max: 50,
+        step: 0.1,
+        unit: "m",
+        fallback: 0,
+      },
+    ],
   },
   {
     key: "pulse",

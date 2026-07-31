@@ -142,9 +142,14 @@ def test_live_parameters_are_reachable_from_push_live_config():
     # the engine (which re-reads state_timeout_default on every tick a state is
     # inheriting it) and the arm action (which re-reads allow_arm on every
     # attempt, so turning the gate off stops a routine already running).
+    #
+    # `ballistics.` likewise: `Ballistics` holds the BallisticsConfig object and
+    # reads it on every shot, which is what makes "fire, watch where it lands,
+    # nudge `transfer`, fire again" a loop you can run without a restart between
+    # the shots.
     reads_config_directly = (
         "drive.", "shooter.", "vision.", "fpv.", "loop_hz", "telemetry_hz",
-        "mech.", "routines.",
+        "mech.", "routines.", "ballistics.",
     )
     # Same reason, named exactly rather than by prefix. `nav.pid_trace` is read
     # off cfg by _telemetry on every frame it builds, but the rest of `nav.` is

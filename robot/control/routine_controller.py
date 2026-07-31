@@ -80,6 +80,17 @@ class RoutineController(Controller):
     def set_estop_provider(self, provider) -> None:
         self._ctx.estop = provider
 
+    def set_ballistics(self, ballistics) -> None:
+        """The distance -> flywheel-speed model, for states that work out a shot.
+
+        The object itself, which holds the config object, which the settings
+        page writes into — so a launch angle changed between shots applies to
+        the next one. Optional in exactly the way vision is: a build with no
+        launcher never calls this, and the `spin_up` action says so in the log
+        instead of the routine failing to load.
+        """
+        self._ctx.ballistics = ballistics
+
     def set_vision_config(self, vision) -> None:
         """The detector's live config, so a state can say what to align to.
 

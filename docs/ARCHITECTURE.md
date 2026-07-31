@@ -607,6 +607,44 @@ exactly one thing commands the motors at any moment. They run `on_enter` (once),
 however the state is left, *including* a timeout, an abort or an e-stop. That is
 what makes `on_exit` the right place to disarm something.
 
+**One action computes rather than relays.** `spin_up` is the exception to "an
+action is a number the operator typed". It reads the range to the target off the
+aligning delegate, asks `control/ballistics.py` what launch speed reaches that
+far, converts it to a flywheel RPM and then to a throttle, and sets that on a
+power mechanism. The alternative — a `mech_power` with a hand-found value — is a
+routine that is correct at exactly one distance and quietly wrong at every other
+one, which on a field where the bucket moves is most of them.
+
+```jsonc
+{ "id": "spin_up",
+  // Still AIMING while it spins: the range comes from the delegate's own
+  // estimate, so a `stop` state has nothing to measure. The schema warns.
+  "drive": {"mode": "shooter_align", "target": "bucket", "stop_within_m": 3},
+  "on_enter": [{"do": "spin_up", "mech": "flywheel"}],
+  "transitions": [{"when": "all", "of": [{"when": "in_range"},
+                                         {"when": "elapsed", "seconds": 1.5}],
+                   "to": "shoot"},
+                  {"when": "elapsed", "seconds": 6, "to": "gave_up"}] }
+```
+
+The model is projectile motion at a **fixed** launch angle — `v² = g·d² /
+(2·cos²θ·(d·tanθ − Δh))` — then wheel surface speed through a `transfer` factor,
+the fraction of that speed the ball actually leaves at. It models no drag, no
+backspin lift and no spin-up curve (a flywheel on a `PowerMechanism` has no
+encoder; `sensors/encoder.py` is drivetrain only), so `transfer` is where the
+error is absorbed and the first shots on a new build are the calibration. All of
+it is `live=True` for that reason: fire, watch where it lands, nudge, fire again,
+with no restart in the loop.
+
+**It fails by not spinning.** No `ballistics.max_rpm` measured, no range, or a
+shot that would need the wheel to turn faster than it can, and the launcher is
+left exactly as it was with a line in the log saying which. Notably a shot beyond
+`max_rpm` is *not* clamped to full throttle: clamping would spin up, fire, and
+drop the ball short, which at the field is indistinguishable from a miss. The
+`in_range` condition asks the same question ahead of the shot — and it is false
+for a target that is too **near** as well as too far, because a fixed launch
+angle cannot throw a short, high arc into a rim above it.
+
 A document that fails validation is stored but never armed: the robot keeps
 running the last set that was good, which is the difference between a rejected
 edit and a rover that stops mid-field.
@@ -1518,6 +1556,10 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_SHOOTER_FIRE_S` / `RS_SHOOTER_RETRACT_S` | `0.35` / `0.35` | Hold at the fire angle, then settle before re-arming. |
 | `RS_SHOOTER_DWELL` / `RS_SHOOTER_COOLDOWN` | `0.5` / `2.0` | Hold the aim this long before firing; min seconds between shots. |
 | `RS_SHOOTER_REQUIRE_ARM` / `RS_SHOOTER_REQUIRE_ARRIVED` / `RS_SHOOTER_MAX_SHOTS` | `1` / `1` / `0` | Firing gates; magazine size (0 = unlimited). |
+| `RS_BALLISTICS_MAX_RPM` | `0` | Flywheel RPM at full throttle, for the `spin_up` routine action. **0 = unmeasured, which switches the shot solver off entirely** — the robot will not turn a guess into a launch. |
+| `RS_BALLISTICS_WHEEL_D` / `RS_BALLISTICS_TRANSFER` | `0.10` / `0.5` | Flywheel diameter in metres, and the fraction of its surface speed the ball leaves at (always < 1; the contact slips). `transfer` is the one number you find by shooting: if every shot lands long, lower it. |
+| `RS_BALLISTICS_ANGLE` / `RS_BALLISTICS_LAUNCH_H` / `RS_BALLISTICS_TARGET_H` | `45` / `0.30` / `0.90` | Fixed hood angle from horizontal; where the ball leaves and where it has to land, both measured from the ground. |
+| `RS_BALLISTICS_IDLE_POWER` | `0.15` | Throttle floor — below it a brushless ESC may not commutate at all, so a short shot would leave the wheel stalled. |
 | `RS_ENCODER_LEFT` / `RS_ENCODER_RIGHT` | *(blank)* | Quadrature encoder pins as `"A,B"` — the Fusion HAT's **digital** pins, numbered as BCM GPIO, not its PWM channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Read through `fusion_hat`; needs `rpi-lgpio` under it (`just encoder-gpio`). |
 | `RS_ENCODER_CPR` | `0` | Counts per revolution **of the wheel**, gearbox included. Measure it with `tools/encoder_monitor.py` — turn the wheel one full turn and read the count. |
 | `RS_ENCODER_LEFT_INVERT` / `RS_ENCODER_RIGHT_INVERT` | `0` / `0` | Flip so forward reads as a positive RPM. Separate from the motor's own `inverted`: that mirrors the motor, this mirrors the sensor. |

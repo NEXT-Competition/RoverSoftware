@@ -242,6 +242,317 @@
     }
   },
   {
+    "key": "collect",
+    "title": "Collect tennis balls",
+    "blurb": "Sweeps for a ball, drives at the nearest one, then creeps forward with the intake running to swallow it — and goes back for the next until it has three. “Nearest” is free: the detector already picks the biggest box, and for balls that are all the same size the biggest box is the closest one.",
+    "needs": "An intake — declare a power mechanism called “intake” in Layout with an “in” preset, or point the collect step at whatever yours is called. Also check the detector label matches your model's (“tennis ball” here), and set a stop distance the intake can actually reach over.",
+    "spec": {
+      "id": "collect_balls",
+      "name": "Collect tennis balls",
+      "start": "search",
+      "on_estop": "abort",
+      "states": [
+        {
+          "id": "search",
+          "x": 40,
+          "y": 120,
+          "drive": {
+            "mode": "object_align",
+            "target": "tennis ball"
+          },
+          "transitions": [
+            {
+              "when": "target_visible",
+              "to": "approach"
+            }
+          ]
+        },
+        {
+          "id": "approach",
+          "x": 300,
+          "y": 120,
+          "drive": {
+            "mode": "object_align",
+            "target": "tennis ball",
+            "stop_within_m": 0.4
+          },
+          "on_enter": [
+            {
+              "do": "mech_preset",
+              "mech": "intake",
+              "preset": "in"
+            }
+          ],
+          "transitions": [
+            {
+              "when": "arrived",
+              "to": "collect"
+            },
+            {
+              "when": "not",
+              "of": [
+                {
+                  "when": "target_visible"
+                }
+              ],
+              "for_seconds": 1.5,
+              "to": "search"
+            }
+          ]
+        },
+        {
+          "id": "collect",
+          "x": 560,
+          "y": 120,
+          "drive": {
+            "mode": "manual",
+            "throttle": 0.2,
+            "steer": 0
+          },
+          "on_enter": [
+            {
+              "do": "count",
+              "name": "balls",
+              "by": 1
+            }
+          ],
+          "on_exit": [
+            {
+              "do": "mech_stop",
+              "mech": "intake"
+            }
+          ],
+          "transitions": [
+            {
+              "when": "elapsed",
+              "seconds": 2.5,
+              "to": "check"
+            }
+          ]
+        },
+        {
+          "id": "check",
+          "x": 820,
+          "y": 120,
+          "drive": {
+            "mode": "stop"
+          },
+          "transitions": [
+            {
+              "when": "counter",
+              "name": "balls",
+              "at_least": 3,
+              "to": "done"
+            },
+            {
+              "when": "always",
+              "to": "search"
+            }
+          ]
+        },
+        {
+          "id": "done",
+          "x": 1080,
+          "y": 120,
+          "drive": {
+            "mode": "stop"
+          },
+          "terminal": true,
+          "transitions": []
+        }
+      ]
+    }
+  },
+  {
+    "key": "shoot_bucket",
+    "title": "Drive to a bucket, work out the shot, shoot",
+    "blurb": "GPS gets the rover roughly to the bucket, the camera does the last few metres, and then the robot works the shot out for itself: it measures the range, computes the launch speed that reaches it, and spins the flywheel to the matching throttle before firing. That is why there is no hand-tuned power anywhere in this graph — a fixed number is only correct at one distance.",
+    "needs": "A saved place for the bucket (pick it in the first step) and the bucket's detector label on the aiming steps. On the robot: a power mechanism called “flywheel”, something to feed balls into it (the shoot step fires the built-in “shooter”), and the ballistics numbers under Settings › Shot solver — above all the flywheel's top RPM, without which the robot refuses to compute a shot at all.",
+    "spec": {
+      "id": "shoot_bucket",
+      "name": "Drive to a bucket, work out the shot, shoot",
+      "start": "drive_to_bucket",
+      "on_estop": "abort",
+      "states": [
+        {
+          "id": "drive_to_bucket",
+          "x": 40,
+          "y": 120,
+          "drive": {
+            "mode": "waypoint"
+          },
+          "on_enter": [
+            {
+              "do": "set_route",
+              "waypoints": [],
+              "places": []
+            }
+          ],
+          "transitions": [
+            {
+              "when": "route_done",
+              "to": "find_bucket"
+            }
+          ]
+        },
+        {
+          "id": "find_bucket",
+          "x": 300,
+          "y": 120,
+          "drive": {
+            "mode": "shooter_align",
+            "target": "bucket"
+          },
+          "transitions": [
+            {
+              "when": "target_visible",
+              "to": "approach"
+            },
+            {
+              "when": "elapsed",
+              "seconds": 15,
+              "to": "gave_up"
+            }
+          ]
+        },
+        {
+          "id": "approach",
+          "x": 560,
+          "y": 120,
+          "drive": {
+            "mode": "shooter_align",
+            "target": "bucket",
+            "stop_within_m": 3
+          },
+          "transitions": [
+            {
+              "when": "all",
+              "of": [
+                {
+                  "when": "aligned"
+                },
+                {
+                  "when": "arrived"
+                }
+              ],
+              "for_seconds": 0.3,
+              "to": "spin_up"
+            },
+            {
+              "when": "not",
+              "of": [
+                {
+                  "when": "target_visible"
+                }
+              ],
+              "for_seconds": 5,
+              "to": "gave_up"
+            }
+          ]
+        },
+        {
+          "id": "spin_up",
+          "x": 820,
+          "y": 120,
+          "drive": {
+            "mode": "shooter_align",
+            "target": "bucket",
+            "stop_within_m": 3
+          },
+          "on_enter": [
+            {
+              "do": "spin_up",
+              "mech": "flywheel"
+            }
+          ],
+          "transitions": [
+            {
+              "when": "all",
+              "of": [
+                {
+                  "when": "in_range"
+                },
+                {
+                  "when": "elapsed",
+                  "seconds": 1.5
+                }
+              ],
+              "to": "shoot"
+            },
+            {
+              "when": "elapsed",
+              "seconds": 6,
+              "to": "gave_up"
+            }
+          ]
+        },
+        {
+          "id": "shoot",
+          "x": 1080,
+          "y": 60,
+          "drive": {
+            "mode": "stop"
+          },
+          "on_enter": [
+            {
+              "do": "fire",
+              "mech": "shooter"
+            }
+          ],
+          "on_exit": [
+            {
+              "do": "mech_stop",
+              "mech": "flywheel"
+            }
+          ],
+          "transitions": [
+            {
+              "when": "shots",
+              "mech": "shooter",
+              "at_least": 1,
+              "to": "done"
+            },
+            {
+              "when": "elapsed",
+              "seconds": 4,
+              "to": "done"
+            }
+          ]
+        },
+        {
+          "id": "done",
+          "x": 1340,
+          "y": 60,
+          "drive": {
+            "mode": "stop"
+          },
+          "terminal": true,
+          "transitions": []
+        },
+        {
+          "id": "gave_up",
+          "x": 1080,
+          "y": 200,
+          "drive": {
+            "mode": "stop"
+          },
+          "on_enter": [
+            {
+              "do": "mech_stop",
+              "mech": "flywheel"
+            },
+            {
+              "do": "log",
+              "message": "no shot on the bucket: not in view, or out of range"
+            }
+          ],
+          "terminal": true,
+          "transitions": []
+        }
+      ]
+    }
+  },
+  {
     "key": "laps",
     "title": "Repeat a step three times",
     "blurb": "The counter pattern. A step does its work, counts, and loops back until the count is reached — so “do this N times” is one box and a number, not the same box drawn N times.",

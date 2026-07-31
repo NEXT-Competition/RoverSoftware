@@ -20,6 +20,7 @@ from .control.controller import Controller
 from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
+from .control.ballistics import Ballistics
 from .control.rangefinder import Rangefinder
 from .control.routine_controller import RoutineController
 from .control.shooter_align import ShooterAlignController
@@ -129,6 +130,13 @@ class Robot:
         # controllers are injected, because _push_live_config re-calibrates it.
         self.rangefinder = Rangefinder(config.vision.range_at_m,
                                        config.vision.range_size)
+
+        # Metres -> flywheel speed, the other half of the same idea: the
+        # rangefinder says how far away the bucket is, this says how hard to
+        # throw to reach it. Holds the config OBJECT, so every knob on it is
+        # live and _push_live_config has nothing to copy. Built unconditionally
+        # and inert until measured — `max_rpm` of 0 makes every answer None.
+        self.ballistics = Ballistics(config.ballistics)
 
         # Default controller set. Autonomy controllers are registered here so
         # mode-switching works today; they hold the robot still until their
@@ -331,6 +339,11 @@ class Robot:
             # after it is set and is put back when the state is left.
             if config.vision.enabled:
                 self.routine_controller.set_vision_config(config.vision)
+            # Unconditional, unlike vision: an uncalibrated model already
+            # declines every shot on its own, and handing it over anyway is what
+            # lets `spin_up` explain WHY it isn't spinning ("no max_rpm") rather
+            # than the vaguer "this build has no ballistics config".
+            self.routine_controller.set_ballistics(self.ballistics)
         # Documents the base station has saved on this robot. A layout needs a
         # restart to take effect, so it is loaded in run_robot.py before the
         # hardware is built; routines are just data, so they load here.

@@ -29,6 +29,10 @@ class RoutineContext:
     controllers: Dict[str, Any] = field(default_factory=dict)
     mechanisms: Dict[str, Any] = field(default_factory=dict)
     pose: Optional[Callable[[], Optional[Tuple[float, float, Optional[float]]]]] = None
+    # Distance -> flywheel speed (control/ballistics.py), for the states that
+    # work out a shot. Optional: a build with no launcher has none, and the
+    # conditions and actions that want it say so rather than failing to load.
+    ballistics: Optional[Any] = None
     estop: Callable[[], bool] = lambda: False
     # Re-read on every arm attempt rather than captured, so turning the switch
     # off stops the routine that is already running — the only direction a
@@ -95,6 +99,31 @@ def _arrived(spec) -> Predicate:
     def check(ctx):
         align = ctx.align()
         return align is not None and bool(align.arrived())
+    return check
+
+
+def _in_range(spec) -> Predicate:
+    """True when the target is close enough to actually be hit.
+
+    Not a distance comparison — it asks the ballistics model whether a shot at
+    the measured range has a solution the flywheel can reach. That is a
+    different question from "nearer than 5 m", and it is the one that matters:
+    too far is out of range because the wheel would have to spin faster than it
+    can, and too NEAR can also be out of range, because a fixed launch angle
+    cannot throw a short, high arc into a bucket rim above it.
+
+    False whenever the answer isn't known — no launcher, no detection, no range
+    calibration, no measured `max_rpm`. A state that gates its shot on this
+    therefore holds fire on an unmeasured build rather than firing blind, which
+    is the direction this has to fail in.
+    """
+    def check(ctx):
+        if ctx.ballistics is None:
+            return False
+        align = ctx.align()
+        if align is None:
+            return False
+        return bool(ctx.ballistics.in_range(align.distance_m()))
     return check
 
 
@@ -210,6 +239,7 @@ BUILDERS: Dict[str, Tuple[Callable[[dict], Predicate], Tuple[str, ...]]] = {
     "target_visible": (_target_visible, ()),
     "aligned": (_aligned, ()),
     "arrived": (_arrived, ()),
+    "in_range": (_in_range, ()),
     "route_done": (_route_done, ()),
     "shots": (_shots, ("at_least",)),
     "mech_ready": (_mech_ready, ("mech",)),

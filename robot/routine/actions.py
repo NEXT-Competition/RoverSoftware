@@ -208,6 +208,75 @@ def _set_route(spec) -> Effect:
     return run
 
 
+def _num(spec: dict, key: str, default: float) -> float:
+    """A number out of a spec, or the default. Never raises: a routine mid-run
+    must not take the robot down over a typo in one field."""
+    try:
+        return float(spec.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _spin_up(spec) -> Effect:
+    """Work out the shot from how far away the target is, and spin the flywheel.
+
+    This is the one action that COMPUTES something rather than relaying a number
+    the operator typed. The alternative — a `mech_power` with a hand-found value
+    per distance — is a routine that is correct at exactly one range and quietly
+    wrong at every other, which on a field where the bucket moves is most of them.
+
+    The distance comes from the aligning controller's own range estimate, so a
+    state that spins up must be a state that is looking at the target (the schema
+    warns when it isn't). `distance_m` overrides it with a fixed number, which is
+    what you want on a bench with no camera pointed at anything.
+
+    NOTHING SPINS WHEN THE ANSWER ISN'T KNOWN. No launcher config, no range, or a
+    shot the wheel cannot reach all leave the mechanism exactly as it was and say
+    why. A flywheel that spun at some fallback power would throw a ball a
+    distance nobody chose, and "it fired but missed" is a much harder failure to
+    read at the field than "it never fired".
+    """
+    name = str(spec.get("mech", ""))
+    actuator = spec.get("actuator")
+    actuator = str(actuator) if actuator else None
+    # 0 (the default) means "measure it"; an explicit distance is the override.
+    fixed = _num(spec, "distance_m", 0.0)
+
+    def run(ctx: RoutineContext) -> None:
+        mech = _mech(ctx, name, "spin up")
+        if mech is None or not hasattr(mech, "set_power"):
+            if mech is not None:
+                print(f"[routine] cannot spin up {name!r}: not a power mechanism")
+            return
+        if ctx.ballistics is None:
+            print("[routine] cannot work out a shot: this build has no "
+                  "ballistics config")
+            return
+
+        distance = fixed
+        if distance <= 0.0:
+            align = ctx.align()
+            distance = (align.distance_m() or 0.0) if align is not None else 0.0
+        if distance <= 0.0:
+            print("[routine] cannot work out a shot: no range to the target "
+                  "(is the rangefinder calibrated, and is the target in view?)")
+            return
+
+        shot = ctx.ballistics.shot_for(distance)
+        if shot is None:
+            print(f"[routine] no shot at {distance:.2f} m: out of the "
+                  "launcher's range at this angle")
+            return
+        rpm, power = shot
+        # Always logged, and with all three numbers: this line is how anyone
+        # tunes `transfer` — it is the only place the range the robot BELIEVED
+        # sits next to the speed it chose and the throttle it sent.
+        print(f"[routine] shot at {distance:.2f} m: {rpm:.0f} rpm "
+              f"-> {power:.2f} throttle on {name!r}")
+        mech.set_power(power, actuator)
+    return run
+
+
 def _int(spec: dict, key: str, default: int) -> int:
     """A whole number out of a spec, or the default. Never raises: a routine
     mid-run must not take the robot down over a typo in one field."""
@@ -262,6 +331,10 @@ BUILDERS: Dict[str, Tuple[Callable[[dict], Effect], Tuple[str, ...]]] = {
     # than an error so the editor can show it inline instead of refusing to
     # save a graph that is still being drawn.
     "set_route": (_set_route, ()),
+    # `distance_m` is deliberately NOT required: measuring the range is the
+    # normal case and typing one is the bench override, so requiring it would
+    # make the common shape the one that needs an extra field.
+    "spin_up": (_spin_up, ("mech",)),
     "log": (_log, ("message",)),
     "count": (_count, ("name",)),
     "count_set": (_count_set, ("name", "to")),

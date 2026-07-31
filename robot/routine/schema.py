@@ -316,6 +316,20 @@ def _parse_actions(raw: Any, slot: str, state_id: str, allow_arm: bool,
                     f"state {state_id!r}: 'set_route' has no waypoints, so the "
                     "route is finished the moment it loads — pick the places "
                     "this route should visit")
+        if (verb == "spin_up" and not problems and warnings is not None
+                and not _num(spec, "distance_m", 0.0)
+                and delegate not in TARGETING_CONTROLLERS):
+            # Legal — the range could come from a state entered moments ago —
+            # but almost always the mistake of spinning up in a `stop` state
+            # after the camera has been let go of. There is then no detection to
+            # measure, so the action declines and the launcher never spins,
+            # which at the field reads as a shot that simply didn't happen.
+            warnings.append(
+                f"state {state_id!r}: 'spin_up' works out the shot from the "
+                f"range to the target, but this state drives with "
+                f"{delegate or 'no aligning controller'} — keep aiming with "
+                f"{' or '.join(TARGETING_CONTROLLERS)} while it spins up, or "
+                "give it a fixed distance")
         if (verb in _ONCE_PER_VISIT_ACTIONS and slot == "on_tick"
                 and warnings is not None):
             warnings.append(

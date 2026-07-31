@@ -238,6 +238,54 @@ def test_a_non_numeric_stop_distance_is_refused():
     assert not result.ok
 
 
+def test_spinning_up_away_from_the_camera_is_a_warning():
+    """`spin_up` works the shot out from the range to the target, so a state
+    that has let go of the camera has nothing to measure — the action declines
+    and the launcher never spins, which at the field reads as a shot that simply
+    didn't happen. Legal (the range could come from a state entered moments ago)
+    so it is a warning, but it is nearly always the mistake."""
+    result = parse(routine([
+        {"id": "spin", "drive": {"mode": "stop"},
+         "on_enter": [{"do": "spin_up", "mech": "flywheel"}],
+         "transitions": [{"when": "elapsed", "seconds": 1, "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    assert "spin_up" in " ".join(result.warnings)
+
+
+def test_spinning_up_while_still_aiming_is_silent():
+    result = parse(routine([
+        {"id": "spin", "drive": {"mode": "shooter_align"},
+         "on_enter": [{"do": "spin_up", "mech": "flywheel"}],
+         "transitions": [{"when": "elapsed", "seconds": 1, "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    assert not result.warnings
+
+
+def test_a_fixed_distance_needs_no_camera_and_so_warns_about_nothing():
+    """The bench shape: a known distance typed in, no target in view."""
+    result = parse(routine([
+        {"id": "spin", "drive": {"mode": "stop"},
+         "on_enter": [{"do": "spin_up", "mech": "flywheel", "distance_m": 4}],
+         "transitions": [{"when": "elapsed", "seconds": 1, "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+    assert not result.warnings
+
+
+def test_spinning_up_is_not_an_arming_action():
+    """A flywheel is not a trigger: it spins, and something else feeds it. So
+    `spin_up` is allowed on a stock robot exactly as `mech_power` is, and does
+    not need RS_ROUTINE_ALLOW_ARM the way `arm` does."""
+    result = parse(routine([
+        {"id": "spin", "drive": {"mode": "shooter_align"},
+         "on_enter": [{"do": "spin_up", "mech": "flywheel"}],
+         "transitions": [{"when": "elapsed", "seconds": 1, "to": "done"}]},
+        {"id": "done", "terminal": True}]))
+    assert result.ok, result.errors
+
+
 def test_an_unreachable_state_is_a_warning_not_an_error():
     result = parse(routine([
         {"id": "a", "terminal": True},

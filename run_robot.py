@@ -17,6 +17,7 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
         MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED,
+    RS_BALLISTICS_ANGLE/LAUNCH_H/TARGET_H/WHEEL_D/TRANSFER/MAX_RPM/IDLE_POWER,
     RS_ROUTINE_ALLOW_ARM/STATE_TIMEOUT,
     RS_ENCODER_LEFT/RIGHT ("A,B" BCM pins), RS_ENCODER_CPR,
     RS_ENCODER_LEFT_INVERT/RIGHT_INVERT, RS_TRIM_MODE, RS_TRIM_MAX_RPM
@@ -260,6 +261,18 @@ def main():
     cfg.shooter.max_shots = int(os.environ.get("RS_SHOOTER_MAX_SHOTS", cfg.shooter.max_shots))
     cfg.shooter.require_arm = os.environ.get("RS_SHOOTER_REQUIRE_ARM", "1").strip().lower() in ("1", "true", "yes", "on")
     cfg.shooter.require_arrived = os.environ.get("RS_SHOOTER_REQUIRE_ARRIVED", "1").strip().lower() in ("1", "true", "yes", "on")
+    # Ballistics: how hard to throw for a given distance, used by the `spin_up`
+    # routine action. Inert until RS_BALLISTICS_MAX_RPM is set to a wheel speed
+    # somebody actually measured — the model refuses to convert a guess into a
+    # launch, and that is the default state of every build.
+    b = cfg.ballistics
+    b.launch_angle_deg = float(os.environ.get("RS_BALLISTICS_ANGLE", b.launch_angle_deg))
+    b.launch_height_m = float(os.environ.get("RS_BALLISTICS_LAUNCH_H", b.launch_height_m))
+    b.target_height_m = float(os.environ.get("RS_BALLISTICS_TARGET_H", b.target_height_m))
+    b.wheel_diameter_m = float(os.environ.get("RS_BALLISTICS_WHEEL_D", b.wheel_diameter_m))
+    b.transfer = float(os.environ.get("RS_BALLISTICS_TRANSFER", b.transfer))
+    b.max_rpm = float(os.environ.get("RS_BALLISTICS_MAX_RPM", b.max_rpm))
+    b.idle_power = float(os.environ.get("RS_BALLISTICS_IDLE_POWER", b.idle_power))
     # Routine policy. Deliberately env-only and deliberately off by default:
     # allow_arm is the one thing a UI-authored program can do that makes
     # something physically launch, so turning it on should be a decision someone
