@@ -103,6 +103,36 @@ encoder-gpio:
     ssh {{target}} "python3 -c \"import sys, RPi.GPIO; print('lgpio-backed:', 'lgpio' in sys.modules)\""
     @echo "==> want 'lgpio-backed: True' above. Then: python3 /opt/roversoftware/tools/encoder_monitor.py --pins A,B"
 
+# ONCE per robot, per encoder. Hand the quadrature decoding to the KERNEL.
+#
+# Decoding in Python costs an interpreter round trip per edge, which caps out in
+# the low hundreds of edges a second. A goBILDA 5203 is 1993.6 counts per output
+# revolution — ~2800 edges/s per wheel at its free speed, ~5600 for a pair — so
+# most of them are simply lost, and a lost edge reads as a slower wheel. Linux's
+# rotary-encoder driver decodes in its own IRQ handler and hands over finished
+# steps; the interpreter never sees an edge.
+#
+# steps-per-period=4 is quarter-period mode: all four edges of each cycle, the
+# same X4 count the Python decoder produces, so counts_per_rev does not change.
+# Run once per encoder, then `just reboot`. The robot picks the overlay up on
+# its own — it looks for an input device matching the pins and prefers it.
+#
+#   just encoder-overlay 17 27
+#
+# Add the kernel rotary-encoder overlay for one encoder's pin pair.
+encoder-overlay a b:
+    ssh -t {{target}} "set -e; \
+      BOOT=/boot/firmware; [ -f \$BOOT/config.txt ] || BOOT=/boot; \
+      LINE='dtoverlay=rotary-encoder,pin_a={{a}},pin_b={{b}},relative_axis=1,steps-per-period=4'; \
+      grep -qxF \"\$LINE\" \$BOOT/config.txt && echo '==> already present' || \
+        echo \"\$LINE\" | sudo tee -a \$BOOT/config.txt; \
+      echo \"==> in \$BOOT/config.txt\""
+    @echo "==> now: just reboot   (the overlay is read by the firmware at boot)"
+
+# List the kernel encoder devices the overlays actually created, with their pins.
+encoder-devices:
+    ssh {{target}} "python3 /opt/roversoftware/tools/encoder_monitor.py --list"
+
 # Free the header UART for the GPS: enable_uart=1 + dtoverlay=disable-bt in
 # config.txt, and the serial console off cmdline.txt. Needs a reboot afterwards.
 #

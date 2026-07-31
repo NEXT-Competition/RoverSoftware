@@ -102,6 +102,54 @@ python tools/encoder_monitor.py --pins 17,27
 #    that number is Counts per rev on the actuator's card.
 ```
 
+### Hand the decoding to the kernel
+
+Decoding in Python costs an interpreter round trip per edge, which caps out
+around a few hundred edges a second. A high-resolution encoder blows straight
+past that: the goBILDA above is 1993.6 counts per output revolution, so one
+wheel at its 84 rpm free speed emits ~2800 edges a second and a pair ~5600.
+Measured on real hardware, a single hand-turned revolution decoded 157 of ~1994
+transitions — the rest were lost.
+
+Lost edges are worse than they sound. Every miss reads as a *slower* wheel, and
+loss grows with speed, so the faster track under-reports more — `match` mode
+would see it as the slower one and speed it up further. The robot detects this
+and opens the loop rather than acting on it (the `wheels` row goes blank), but
+that means no speed matching at all.
+
+The fix is to let Linux's `rotary-encoder` driver decode in its own interrupt
+handler. Once per encoder:
+
+```bash
+just encoder-overlay 17 27      # and again for the other wheel's pins
+just reboot
+just encoder-devices            # confirm they appeared
+```
+
+Or by hand in `/boot/firmware/config.txt`, one line per encoder:
+
+```
+dtoverlay=rotary-encoder,pin_a=17,pin_b=27,relative_axis=1,steps-per-period=4
+```
+
+`steps-per-period=4` is quarter-period mode — all four edges of each cycle, the
+same X4 count the Python decoder produces, so **`counts_per_rev` does not
+change** and neither do any gains tuned against it.
+
+Nothing else to configure. The robot looks for an input device matching each
+actuator's pins and prefers it, falling back to decoding in Python where there
+is no overlay. The start-up line in the journal says which one it got:
+
+```
+[Encoder] left: kernel rotary-encoder on /dev/input/event1, 1994 counts/rev
+[Encoder] left: A=GPIO17 B=GPIO27 via fusion_hat, decoded in Python, 1994 counts/rev
+```
+
+One trade: the kernel owns those pins, so the raw A/B levels and the
+`states n/4` display are no longer readable. **Prove the wiring first, then add
+the overlay** — or pass `--gpio` to the monitor to borrow the pins back
+temporarily.
+
 Enter the pins and that number in **Settings → Hardware → the motor → Encoder**,
 save, and restart the robot (pins are claimed at start-up, like PWM channels).
 The driving view then shows a `wheels` row. Set **Settings → Robot → Wheel speed
