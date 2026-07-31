@@ -443,3 +443,37 @@ def test_the_package_hint_fires_on_the_stock_library(monkeypatch):
     hint = enc_mod._edge_detection_hint()
     assert "rpi-lgpio" in hint
     assert "apt remove" in hint
+
+
+# --- levels(): the question the counter cannot answer ------------------------
+
+def test_levels_reports_the_pins_as_they_are_now(gpio):
+    e = make(gpio)
+    gpio.levels[17], gpio.levels[27] = 1, 0
+    assert e.levels() == (1, 0)
+    gpio.levels[17], gpio.levels[27] = 0, 1
+    assert e.levels() == (0, 1)
+
+
+def test_levels_is_none_when_nothing_is_running(gpio):
+    """Same contract as rpm(): None is "no measurement", not a level."""
+    e = Encoder(pin_a=17, pin_b=27, counts_per_rev=4.0)
+    assert e.levels() is None
+    e = make(gpio)
+    assert e.levels() is not None
+    e.stop()
+    assert e.levels() is None
+
+
+def test_levels_distinguishes_a_still_wheel_from_a_dead_encoder(gpio):
+    """The reason this exists at all.
+
+    An unpowered encoder and a stationary one both hold the count at zero. Only
+    the levels separate them: pulled up and never moving is a channel that is
+    not driving, which no amount of staring at a count will tell you.
+    """
+    e = make(gpio)
+    gpio.levels[17], gpio.levels[27] = 1, 1
+    turn(gpio, [(1, 1)] * 5)          # edges fire, nothing actually changes
+    assert e.ticks == 0
+    assert e.levels() == (1, 1)       # ...and here is why

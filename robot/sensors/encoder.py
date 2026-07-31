@@ -399,6 +399,23 @@ class Encoder:
         """
         return self._missed
 
+    def levels(self) -> Optional[tuple]:
+        """The (A, B) pin levels right now, or None if not running.
+
+        Bring-up only, and the one question the counter cannot answer: a count
+        stuck at zero looks identical whether the wheel is still, the encoder
+        is unpowered, or the pins are wrong. The decoder only ever sees states
+        it is asked to advance between, so it has nothing to say about a
+        channel that never moves. The raw levels do.
+        """
+        b = self._backend
+        if b is None or not self._started:
+            return None
+        try:
+            return (b.read(self.pin_a), b.read(self.pin_b))
+        except Exception:
+            return None
+
     def reset(self) -> None:
         """Zero the counter. For bring-up (turn the wheel once and read it)."""
         self._ticks = 0

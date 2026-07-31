@@ -47,10 +47,24 @@ lines broken out on the HAT header and numbered as BCM, so the number silkscreen
 on the board is the number to enter. Confusing the two produces an encoder that
 counts nothing, and it is the first mistake everybody makes here.
 
-Wire A and B to two free digital pins, ground to ground, and the encoder's supply
-to whatever it wants (many are 3.3 V; a 5 V encoder needs a level shifter,
-because a Pi GPIO is not 5 V tolerant). Internal pull-ups are enabled for you, so
-an open-collector encoder needs no resistors of its own.
+A quadrature encoder has four wires, and all four matter: ground, **supply**,
+A and B. A Hall-effect encoder is an active device — with no supply its outputs
+never drive, both pins sit at the internal pull-up, and the count stays at
+exactly 0 with no other symptom. That is the most common bring-up fault here.
+
+**Power it from 3.3 V.** Many encoders accept 3.3–5 V; take the lower one,
+because a Pi GPIO is *not* 5 V tolerant and A/B are wired straight to it. A 5 V
+encoder with no choice in the matter needs a level shifter.
+
+Internal pull-ups are enabled for you, so an open-collector output needs no
+resistors of its own.
+
+**Check the published resolution before you measure.** Some motors specify it
+exactly — a goBILDA 5203 Yellow Jacket, for instance, gives "1993.6 PPR at the
+Output Shaft", already counted the way this decoder counts (all four edges), and
+already including the gearbox. Enter it directly. Multiply only if there is
+further reduction between the output shaft and the wheel. Measuring is the
+fallback for a motor whose datasheet you do not trust, not a ritual.
 
 The pins are read through the same `fusion_hat` library that already drives
 the motors — no separate GPIO package and no daemon. One catch: `fusion_hat`
