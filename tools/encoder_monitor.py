@@ -30,6 +30,7 @@ laptop.
 import argparse
 import os
 import sys
+import tempfile
 from time import monotonic, sleep
 
 # Make the repo root (parent of tools/) importable so `import robot` works even
@@ -37,6 +38,30 @@ from time import monotonic, sleep
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from robot.sensors.encoder import Encoder, backend
+
+
+def _move_somewhere_writable() -> None:
+    """Get out of a read-only directory before claiming any pins.
+
+    On a Pi 5 the RPi.GPIO under fusion_hat is the lgpio shim, and lgpio puts
+    its edge-notification FIFO in the CURRENT WORKING DIRECTORY. It cannot
+    create one in a root-owned directory, and the failure surfaces much later
+    as a flat "Failed to add edge detection" from add_event_detect — with
+    nothing in it about directories. Setting the pin direction needs no such
+    file, so the pins look claimable right up until the moment they aren't.
+
+    The obvious reading of that message is that something else holds the pins,
+    which sends you hunting a conflict that does not exist. Since the natural
+    way to run this tool is `python3 encoder_monitor.py` from wherever it was
+    installed — /opt/roversoftware/tools, owned by root — that is the common
+    case, not the corner case. So move, rather than explain.
+    """
+    try:
+        if os.access(os.getcwd(), os.W_OK):
+            return
+    except OSError:
+        pass  # cwd deleted out from under us; the fallback handles it too
+    os.chdir(tempfile.mkdtemp(prefix="encoder-monitor-"))
 
 
 def _parse_pins(text: str) -> tuple:
@@ -67,6 +92,8 @@ def main():
                    help="speed measurement window in seconds (see the settings page)")
     args = p.parse_args()
 
+    _move_somewhere_writable()
+
     if backend() is None:
         # backend() has already printed what it could not open.
         print("\nThe encoder pins are read through the Fusion HAT library, the "
@@ -81,7 +108,16 @@ def main():
     enc = Encoder(pin_a=a, pin_b=b, counts_per_rev=args.cpr or 1.0,
                   invert=args.invert, name="encoder", window=args.window)
     if not enc.start():
-        print("[encoder] could not claim the pins — is something else using them?")
+        # "Failed to add edge detection" is the message you will usually see
+        # above, and it names none of its causes. In order of likelihood:
+        print(f"\nCould not claim GPIO {a}/{b}. The usual causes, in order:")
+        print("  1. The robot service already holds these pins. It claims them "
+              "at start-up whenever\n     a layout or robot.env names them:")
+        print("       sudo systemctl stop roversoftware-robot")
+        print("  2. Another copy of this tool is still running.")
+        print("  3. The pins are spoken for by something else on the HAT — an "
+              "actuator's PWM\n     channel is a different bus, but a digital "
+              "pin can only have one owner.")
         return 1
 
     print(f"Reading GPIO {a} (A) / {b} (B). Ctrl-C to stop.")
