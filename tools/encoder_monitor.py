@@ -108,16 +108,14 @@ def main():
     enc = Encoder(pin_a=a, pin_b=b, counts_per_rev=args.cpr or 1.0,
                   invert=args.invert, name="encoder", window=args.window)
     if not enc.start():
-        # "Failed to add edge detection" is the message you will usually see
-        # above, and it names none of its causes. In order of likelihood:
-        print(f"\nCould not claim GPIO {a}/{b}. The usual causes, in order:")
-        print("  1. The robot service already holds these pins. It claims them "
-              "at start-up whenever\n     a layout or robot.env names them:")
-        print("       sudo systemctl stop roversoftware-robot")
-        print("  2. Another copy of this tool is still running.")
-        print("  3. The pins are spoken for by something else on the HAT — an "
-              "actuator's PWM\n     channel is a different bus, but a digital "
-              "pin can only have one owner.")
+        # The library's own message is "Failed to add edge detection", which
+        # names no cause. The backend appends the package hint above when it
+        # applies; what is left is a genuine contest for the pins.
+        print(f"\nIf the pins really are claimed by something else: the robot "
+              f"service takes\nGPIO {a}/{b} at start-up whenever a layout or "
+              f"robot.env names them.")
+        print("    sudo systemctl stop roversoftware-robot")
+        print("Otherwise check no second copy of this tool is still running.")
         return 1
 
     print(f"Reading GPIO {a} (A) / {b} (B). Ctrl-C to stop.")

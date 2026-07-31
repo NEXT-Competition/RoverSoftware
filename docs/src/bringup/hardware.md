@@ -113,8 +113,10 @@ turn the wheel exactly one full turn by hand, and read the count.
 a mirrored track motor usually needs both.
 
 The pins are read through `fusion_hat`, the same library that drives the motors,
-so there is nothing extra to install: if the motors move, the encoders can be
-read — see [Wiring and calibration](../reference/wiring.md).
+so there is no separate GPIO package. It does need `rpi-lgpio` in place of the
+stock `RPi.GPIO`, which cannot arm interrupts on a current kernel — one command,
+`just encoder-gpio`, and [Wiring and calibration](../reference/wiring.md) has the
+why.
 
 ## 3 · Group the rest into mechanisms
 

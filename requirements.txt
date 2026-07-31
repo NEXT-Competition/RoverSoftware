@@ -18,7 +18,13 @@ pyserial>=3.5
 # Verify with tools/imu_selftest.py.
 #
 # Wheel encoders (robot/sensors/encoder.py) read the Fusion HAT's digital pins
-# through that same fusion_hat library — no extra package and no daemon. On a
+# through that same fusion_hat library — no separate GPIO package, no daemon.
+# fusion_hat reads pins via RPi.GPIO, and the STOCK RPi.GPIO (0.7.1, 2019) cannot
+# arm GPIO interrupts on a current Raspberry Pi OS kernel: it still uses
+# /sys/class/gpio, which the kernel renumbered. Direction works, interrupts do
+# not, so motors are fine and encoders fail with "Failed to add edge detection".
+#   sudo apt remove -y python3-rpi.gpio && sudo apt install -y python3-rpi-lgpio
+# (`just encoder-gpio` does exactly that.) On a
 # Pi 5, fusion_hat wants `rpi.lgpio` in place of `RPi.GPIO`; that is part of
 # installing the HAT library, not a separate thing to remember here. Without
 # fusion_hat the encoders stay inert and the drivetrain runs open-loop, which is

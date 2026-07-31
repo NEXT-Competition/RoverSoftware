@@ -52,9 +52,30 @@ to whatever it wants (many are 3.3 V; a 5 V encoder needs a level shifter,
 because a Pi GPIO is not 5 V tolerant). Internal pull-ups are enabled for you, so
 an open-collector encoder needs no resistors of its own.
 
-There is nothing to install: the pins are read through the same `fusion_hat`
-library that already drives the motors — no second GPIO package, no daemon. If
-the motors move, the encoders can be read.
+The pins are read through the same `fusion_hat` library that already drives
+the motors — no separate GPIO package and no daemon. One catch: `fusion_hat`
+reads pins through `RPi.GPIO`, and the **stock `RPi.GPIO` cannot arm GPIO
+interrupts on a current Raspberry Pi OS kernel**. It was last released in 2019
+and still does edge detection through `/sys/class/gpio`, whose numbering the
+kernel has since rebased. Setting pin direction works, so the motors are fine
+and an encoder fails with a bare `Failed to add edge detection` that looks for
+all the world like a pin conflict.
+
+Swap it for the drop-in replacement, once per robot (they conflict, so the old
+one comes off first):
+
+```bash
+just encoder-gpio
+# or by hand, on the Pi:
+sudo apt remove -y python3-rpi.gpio && sudo apt install -y python3-rpi-lgpio
+```
+
+`rpi-lgpio` presents the same API on top of lgpio and goes through the GPIO
+character device. Check which one you have with:
+
+```bash
+python3 -c "import sys, RPi.GPIO; print('lgpio-backed:', 'lgpio' in sys.modules)"
+```
 
 Then, **wheels off the ground and the drivetrain unpowered**:
 
