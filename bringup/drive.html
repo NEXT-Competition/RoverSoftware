@@ -218,6 +218,13 @@ replaces editing constants and restarting a service.</p>
 <p>Beyond driving, the mapped pad can e-stop, clear, switch mode, and arm or fire
 the launcher. All of it is remappable on the same page, and all of it goes
 through the same whitelist a spoken order does.</p>
+<p>Two things you write yourself go on buttons too, in slots further down that
+page: a <strong>routine</strong>, and a <strong>mechanism preset</strong> — the named states from
+<a href="hardware.html">Hardware</a>, so <code>intake → in</code> is a thumb rather than a trip to
+another tab. A preset latches until something else changes it, so a mechanism
+you drive both ways wants two buttons (<code>in</code> and <code>out</code>); give it an auto-stop in
+Hardware if it should also give up on its own. Presses are ignored while a
+routine is running, which owns the mechanisms until you switch back to teleop.</p>
 
                     </main>
 

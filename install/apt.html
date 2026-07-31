@@ -234,6 +234,7 @@ sudo apt-mark hold roversoftware-robot           # and stop it moving
 neither package can depend on them. Both degrade rather than fail:</p>
 <div class="table-wrapper"><table><thead><tr><th>Missing</th><th>What happens</th><th>Fix</th></tr></thead><tbody>
 <tr><td>SunFounder <code>fusion_hat</code></td><td>The motor layer falls back to a mock — the service starts, telemetry flows, nothing moves</td><td><code>just bootstrap</code>, or SunFounder's install script</td></tr>
+<tr><td><code>rpi-lgpio</code> (encoders only)</td><td>Motors and telemetry are fine; every encoder fails to start with <code>Failed to add edge detection</code>, because the stock <code>RPi.GPIO</code> cannot arm interrupts on a current kernel</td><td><code>just encoder-gpio</code></td></tr>
 <tr><td><code>deno</code></td><td>The Python bridge still runs on its internal port; the touch UI does not</td><td><code>just bs_host=... bootstrap-deno</code></td></tr>
 </tbody></table>
 </div>

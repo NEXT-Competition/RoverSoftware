@@ -270,9 +270,11 @@ turn the wheel exactly one full turn by hand, and read the count.</p>
 : Tick it if a wheel counts <em>down</em> when driving forward. Separate from
 <strong>Inverted</strong> above: that one mirrors the motor, this one mirrors the sensor, and
 a mirrored track motor usually needs both.</p>
-<p>The pins need <code>pigpio</code> (Pi 4 and older, plus <code>pigpiod</code>) or <code>lgpio</code> (Pi 5) on the
-robot. With neither installed the encoders stay inert and nothing else changes —
-see <a href="../reference/wiring.html">Wiring and calibration</a>.</p>
+<p>The pins are read through <code>fusion_hat</code>, the same library that drives the motors,
+so there is no separate GPIO package. It does need <code>rpi-lgpio</code> in place of the
+stock <code>RPi.GPIO</code>, which cannot arm interrupts on a current kernel — one command,
+<code>just encoder-gpio</code>, and <a href="../reference/wiring.html">Wiring and calibration</a> has the
+why.</p>
 <h2 id="3--group-the-rest-into-mechanisms"><a class="header" href="#3--group-the-rest-into-mechanisms">3 · Group the rest into mechanisms</a></h2>
 <p>Anything that is not drive is a <strong>mechanism</strong>: an intake, an arm, a launcher. A
 mechanism owns one or more actuators and comes in two kinds.</p>
@@ -300,9 +302,12 @@ back naming the state or field that was wrong.</p>
 <blockquote>
 <p><strong>A saved layout takes effect on the next start</strong></p>
 <p>Actuators are built by constructors; rebuilding them mid-loop with the
-drivetrain armed is how an ESC ends up holding an undefined pulse. Run
-<code>just restart</code>, <code>sudo systemctl restart roversoftware-robot</code>, or power-cycle
-the rover.</p>
+drivetrain armed is how an ESC ends up holding an undefined pulse. Press
+<strong>Restart robot</strong> at the top of this tab — it asks twice, then the rover
+parks its motors, drops off the fleet for a few seconds and comes back
+running the new layout. <code>just restart</code>, <code>sudo systemctl restart roversoftware-robot</code> and a power cycle all still work, and are what you need
+if the rover was started by hand rather than as a service: it refuses to stop
+when nothing would start it again.</p>
 </blockquote>
 <p>Before you trust any of it, calibrate the ESCs —
 <a href="../reference/wiring.html">Wiring and calibration</a> is the wheels-off-the-ground

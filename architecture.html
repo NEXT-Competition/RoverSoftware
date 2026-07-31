@@ -292,7 +292,7 @@ messages are addressed with a <code>to</code> field.</p>
     xbee_link.py              threaded transparent-mode XBee serial reader
     doc_transfer.py           split/reassemble a whole document across frames
   sensors/
-    encoder.py                quadrature wheel encoders → signed RPM (pigpio / lgpio)
+    encoder.py                quadrature wheel encoders → signed RPM (Fusion HAT pins)
     gps.py                    Adafruit GPS reader → (lat, lon, track angle)
     bno085.py                 BNO085 IMU → absolute heading + yaw rate
     pose.py                   GPS position + IMU-or-track-angle heading → pose()
@@ -558,10 +558,31 @@ straight line.</p>
 <code>Encoder</code> decodes all four edges of each cycle (X4) through a transition table,
 counting only moves it can attribute a direction to — a diagonal jump means two
 edges arrived unseen, and inventing a direction for it would bias the rate. Speed
-is counts over a <code>rpm_window</code>, optionally smoothed by <code>rpm_tau</code>. Both GPIO
-libraries are optional: pigpio (Pi 4 and older, needs <code>pigpiod</code>) then lgpio (Pi
-5); with neither, every encoder is inert, <code>rpm()</code> returns <code>None</code>, and the
-drivetrain runs open-loop exactly as it always did.</p>
+is counts over a <code>rpm_window</code>, optionally smoothed by <code>rpm_tau</code>. The pins are
+the Fusion HAT's digital pins, read through the same <code>fusion_hat</code> library that
+drives the motors — no separate GPIO package and no daemon, though it does need
+<code>rpi-lgpio</code> underneath rather than the stock <code>RPi.GPIO</code>, which still arms
+interrupts through the renumbered <code>/sys/class/gpio</code> and cannot. <code>Pin</code> does setup;
+edge callbacks are registered <em>without</em> the bouncetime <code>Pin.irq()</code> would impose,
+because a 20 ms debounce discards nearly every edge a wheel encoder produces.
+The import is optional, and without it every encoder is inert, <code>rpm()</code> returns
+<code>None</code>, and the drivetrain runs open-loop exactly as it always did.</p>
+<p>Where the decoding happens is a <code>_TickSource</code>, chosen per encoder at start-up.
+<code>_GpioSource</code> decodes in a Python callback per edge and caps out in the low
+hundreds of edges a second; <code>_KernelSource</code> reads finished ±1 steps from an
+input device created by the <code>rotary-encoder</code> device-tree overlay, which decodes
+in its own IRQ handler. Both produce the same X4 counts, so <code>counts_per_rev</code> and
+every gain tuned against it are unchanged by the switch. Selection is by pin
+number against the device tree (<code>find_kernel_encoder</code>), not by device name —
+two instances of one overlay share a name and event numbering moves across
+reboots. No overlay means the Python path, so nothing needs configuring to keep
+working.</p>
+<p>The Python path also tracks transitions it could not attribute (<code>missed</code>), and
+<code>rpm()</code> returns <code>None</code> once a window loses more than <code>MAX_MISS_FRACTION</code> of
+them. That matters because loss is not symmetric noise: every miss is a count
+not made, and loss grows with edge rate, so the <em>faster</em> wheel under-reports
+more and <code>match</code> mode would speed it up further. Failing open beats a confident
+wrong number.</p>
 <p><code>RpmTrim</code> closes the loop, in the tank drivetrain only, <strong>after</strong> the slew
 limiter — the limiter shapes the operator's intent, the trim corrects what the
 hardware then did with it, and rate-limiting a correction would only add lag.</p>
@@ -706,6 +727,38 @@ exactly one thing commands the motors at any moment. They run <code>on_enter</co
 <code>on_tick</code> (every tick, hence the write elision above) and <code>on_exit</code>, which fires
 however the state is left, <em>including</em> a timeout, an abort or an e-stop. That is
 what makes <code>on_exit</code> the right place to disarm something.</p>
+<p><strong>One action computes rather than relays.</strong> <code>spin_up</code> is the exception to "an
+action is a number the operator typed". It reads the range to the target off the
+aligning delegate, asks <code>control/ballistics.py</code> what launch speed reaches that
+far, converts it to a flywheel RPM and then to a throttle, and sets that on a
+power mechanism. The alternative — a <code>mech_power</code> with a hand-found value — is a
+routine that is correct at exactly one distance and quietly wrong at every other
+one, which on a field where the bucket moves is most of them.</p>
+<pre><code class="language-jsonc">{ "id": "spin_up",
+  // Still AIMING while it spins: the range comes from the delegate's own
+  // estimate, so a `stop` state has nothing to measure. The schema warns.
+  "drive": {"mode": "shooter_align", "target": "bucket", "stop_within_m": 3},
+  "on_enter": [{"do": "spin_up", "mech": "flywheel"}],
+  "transitions": [{"when": "all", "of": [{"when": "in_range"},
+                                         {"when": "elapsed", "seconds": 1.5}],
+                   "to": "shoot"},
+                  {"when": "elapsed", "seconds": 6, "to": "gave_up"}] }
+</code></pre>
+<p>The model is projectile motion at a <strong>fixed</strong> launch angle — <code>v² = g·d² / (2·cos²θ·(d·tanθ − Δh))</code> — then wheel surface speed through a <code>transfer</code> factor,
+the fraction of that speed the ball actually leaves at. It models no drag, no
+backspin lift and no spin-up curve (a flywheel on a <code>PowerMechanism</code> has no
+encoder; <code>sensors/encoder.py</code> is drivetrain only), so <code>transfer</code> is where the
+error is absorbed and the first shots on a new build are the calibration. All of
+it is <code>live=True</code> for that reason: fire, watch where it lands, nudge, fire again,
+with no restart in the loop.</p>
+<p><strong>It fails by not spinning.</strong> No <code>ballistics.max_rpm</code> measured, no range, or a
+shot that would need the wheel to turn faster than it can, and the launcher is
+left exactly as it was with a line in the log saying which. Notably a shot beyond
+<code>max_rpm</code> is <em>not</em> clamped to full throttle: clamping would spin up, fire, and
+drop the ball short, which at the field is indistinguishable from a miss. The
+<code>in_range</code> condition asks the same question ahead of the shot — and it is false
+for a target that is too <strong>near</strong> as well as too far, because a fixed launch
+angle cannot throw a short, high arc into a rim above it.</p>
 <p>A document that fails validation is stored but never armed: the robot keeps
 running the last set that was good, which is the difference between a rejected
 edit and a rover that stops mid-field.</p>
@@ -1260,6 +1313,70 @@ Sending the mode first would only have shortened the wrong run to a burst,
 which is no better when the burst is a motor. This fixed the on-screen and
 voice paths too — the pad was just the first thing to make it obvious.</p>
 </blockquote>
+<p><strong>Mechanism presets on buttons.</strong> The same slot shape, for the same reason, one
+layer along: a preset is a named whole-mechanism state (<code>intake -&gt; in</code>) declared
+in a <em>rover's layout</em>, and this process holds no copy of any layout. So
+<code>MECH_SLOTS</code> (4) slots each carry a <code>(btn_mech_N, mech_N, preset_N)</code> <strong>triple</strong>
+— both names, because "out" alone does not say what moves when two mechanisms
+each have a state by that name — and a filled slot emits
+<code>mech_preset:&lt;mech&gt;:&lt;preset&gt;</code>. Layout validation constrains both names to
+<code>[a-z][a-z0-9_]*</code>, so the colon cannot appear inside either half of the action
+name. Until now the only things that could ask for a preset were a routine and
+the Hardware tab's jog controls, neither of which is a thumb while somebody is
+driving.</p>
+<p><code>Robot._mech_preset</code> handles the frame beside <code>_jog</code> and past the active
+controller, for the reason config is handled there: this is the operator asking
+a mechanism for a state, not an instruction to whatever is currently driving. It
+is refused while the e-stop is latched — nothing may start a motor through the
+one button that exists to stop them — and refused in <code>routine</code> mode, where a
+routine is writing mechanisms, possibly every tick, so honouring a press would
+either be undone 20 ms later or fight a state machine for an actuator (switching
+to teleop is how an operator takes a rover back, and that already ends the
+routine). Every other mode is allowed: object-align and waypoint drive the
+<em>drivetrain</em>, and an operator lining up on a bucket still owns the intake.</p>
+<p>The binding <strong>latches</strong>, deliberately and with no expiry of its own.
+<code>ControllerReader</code> fires on the press edge, so there is no release to send, and
+a preset is a state rather than a nudge — which is why an intake wants two
+buttons, <code>in</code> and <code>out</code>. A build that wants a mechanism to give up on its own
+says so once in its layout (<code>auto_stop_seconds</code>), which every caller then gets,
+rather than a timeout that only button presses have. A preset does clear a
+pending <code>jog</code> on the same mechanism, or that jog's 0.4 s failsafe would stop a
+motor a button had just deliberately started.</p>
+<blockquote>
+<p><strong>Two actions on one button.</strong> <code>_edge</code> <em>records</em> a press as it tests it, so
+asking it twice about the same button within a tick answers False the second
+time. The reader used to call it once per <code>(index, action)</code> pair, which meant
+a button carrying two actions ran only whichever <code>actions()</code> listed first —
+and <code>actions()</code> order is an implementation detail of a dataclass, not a
+promise. Nobody noticed while every binding had its own button; the first
+mechanism preset bound onto the cross that already clears the e-stop cleared
+the e-stop and never touched the intake, with the settings page showing the
+button as bound to the preset. <code>_fire_actions</code> now samples every edge first
+and then dispatches, so sharing a button does what the mapping says it does.</p>
+</blockquote>
+<p><strong>Restarting a rover from the base station.</strong> A layout takes effect at start-up
+and nowhere else, so every hardware change used to end in an ssh session with a
+rover that was, by then, on a field or on blocks. <code>{"type": "restart"}</code> closes
+that loop: <code>Robot._request_restart</code> sets a flag and drops out of the control
+loop, whose <code>finally</code> already parks the motors, the mechanisms and the servos.</p>
+<p>It does <strong>not</strong> shell out to <code>systemctl</code>. A restart issued from inside the unit
+races its own SIGTERM against that cleanup, and the part that matters on a
+machine with wheels is that the machine is safe before the process ends. Coming
+back is the supervisor's job: <code>run()</code> returns <code>EXIT_RESTART</code> and <code>run_robot.py</code>
+exits with it. That status is non-zero <strong>on purpose</strong> — the shipped unit says
+<code>Restart=on-failure</code>, which would leave a process that exited 0 dead, and the
+rovers in the field are running whatever unit came with their <code>.deb</code> while
+<code>just sync</code> pushes only Python. A restart that needed a new unit file would be
+a restart that switched a rover off.</p>
+<p>The refusal is the other half. <code>INVOCATION_ID</code> is set by systemd for every unit
+it starts and by nothing else, so a robot started by hand on a bench knows that
+nothing would start it again and says so instead of going dark. The base station
+cannot know that in advance — which is also why the frame goes out over the
+<em>radio</em> rather than the WiFi bulk path the rest of configuration takes: a rover
+worth restarting is often one whose WiFi is part of what is wrong with it. The
+simulator models the whole thing (park, four seconds of silence, back in the
+start mode with no routine running), so the button is learnable without
+hardware.</p>
 <p>Analog triggers arm before they steer: SDL scales a trigger to -1 released /
 +1 pulled, but some drivers report a flat <code>0.0</code> for a trigger untouched since
 the joystick opened — which rescales to <em>half throttle</em>. <code>Trigger</code> therefore
@@ -1473,7 +1590,11 @@ Each maps to a CLI flag on the respective entry point.</p>
 <tr><td><code>RS_SHOOTER_FIRE_S</code> / <code>RS_SHOOTER_RETRACT_S</code></td><td><code>0.35</code> / <code>0.35</code></td><td>Hold at the fire angle, then settle before re-arming.</td></tr>
 <tr><td><code>RS_SHOOTER_DWELL</code> / <code>RS_SHOOTER_COOLDOWN</code></td><td><code>0.5</code> / <code>2.0</code></td><td>Hold the aim this long before firing; min seconds between shots.</td></tr>
 <tr><td><code>RS_SHOOTER_REQUIRE_ARM</code> / <code>RS_SHOOTER_REQUIRE_ARRIVED</code> / <code>RS_SHOOTER_MAX_SHOTS</code></td><td><code>1</code> / <code>1</code> / <code>0</code></td><td>Firing gates; magazine size (0 = unlimited).</td></tr>
-<tr><td><code>RS_ENCODER_LEFT</code> / <code>RS_ENCODER_RIGHT</code></td><td><em>(blank)</em></td><td>Quadrature encoder pins as <code>"A,B"</code> <strong>BCM GPIO</strong> — the Pi header, not Fusion HAT channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Needs <code>pigpio</code> (Pi ≤4, plus <code>pigpiod</code>) or <code>lgpio</code> (Pi 5).</td></tr>
+<tr><td><code>RS_BALLISTICS_MAX_RPM</code></td><td><code>0</code></td><td>Flywheel RPM at full throttle, for the <code>spin_up</code> routine action. <strong>0 = unmeasured, which switches the shot solver off entirely</strong> — the robot will not turn a guess into a launch.</td></tr>
+<tr><td><code>RS_BALLISTICS_WHEEL_D</code> / <code>RS_BALLISTICS_TRANSFER</code></td><td><code>0.10</code> / <code>0.5</code></td><td>Flywheel diameter in metres, and the fraction of its surface speed the ball leaves at (always &lt; 1; the contact slips). <code>transfer</code> is the one number you find by shooting: if every shot lands long, lower it.</td></tr>
+<tr><td><code>RS_BALLISTICS_ANGLE</code> / <code>RS_BALLISTICS_LAUNCH_H</code> / <code>RS_BALLISTICS_TARGET_H</code></td><td><code>45</code> / <code>0.30</code> / <code>0.90</code></td><td>Fixed hood angle from horizontal; where the ball leaves and where it has to land, both measured from the ground.</td></tr>
+<tr><td><code>RS_BALLISTICS_IDLE_POWER</code></td><td><code>0.15</code></td><td>Throttle floor — below it a brushless ESC may not commutate at all, so a short shot would leave the wheel stalled.</td></tr>
+<tr><td><code>RS_ENCODER_LEFT</code> / <code>RS_ENCODER_RIGHT</code></td><td><em>(blank)</em></td><td>Quadrature encoder pins as <code>"A,B"</code> — the Fusion HAT's <strong>digital</strong> pins, numbered as BCM GPIO, not its PWM channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Read through <code>fusion_hat</code>; needs <code>rpi-lgpio</code> under it (<code>just encoder-gpio</code>).</td></tr>
 <tr><td><code>RS_ENCODER_CPR</code></td><td><code>0</code></td><td>Counts per revolution <strong>of the wheel</strong>, gearbox included. Measure it with <code>tools/encoder_monitor.py</code> — turn the wheel one full turn and read the count.</td></tr>
 <tr><td><code>RS_ENCODER_LEFT_INVERT</code> / <code>RS_ENCODER_RIGHT_INVERT</code></td><td><code>0</code> / <code>0</code></td><td>Flip so forward reads as a positive RPM. Separate from the motor's own <code>inverted</code>: that mirrors the motor, this mirrors the sensor.</td></tr>
 <tr><td><code>RS_TRIM_MODE</code> / <code>RS_TRIM_MAX_RPM</code></td><td><code>off</code> / <code>200</code></td><td>Closed-loop wheel speed: <code>off</code> | <code>match</code> (hold the two sides to each other; no calibration) | <code>velocity</code> (hold each to <code>throttle × max_rpm</code>; measure that number). See <a href="#44-drive-layer">§4.4</a>.</td></tr>

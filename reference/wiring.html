@@ -215,18 +215,44 @@ it (or the base station) on the other end to confirm your sends are received.</p
 different rates, so the rover curves while the dashboard insists it is going
 straight. An encoder measures what the wheel actually did, and the robot can
 then hold the two sides together.</p>
-<p><strong>The pins are Pi GPIO, not HAT channels.</strong> <code>channel</code> above is a Fusion HAT PWM
-output; <code>encoder_a</code>/<code>encoder_b</code> are BCM numbers on the Pi's own header. Confusing
-the two produces an encoder that counts nothing, and it is the first mistake
-everybody makes here. Wire A and B to two free GPIOs, ground to ground, and the
-encoder's supply to whatever it wants (many are 3.3 V; a 5 V encoder needs a
-level shifter, because a Pi GPIO is not 5 V tolerant).</p>
-<p>Install the GPIO library your Pi needs — neither is a hard dependency, and
-without one the encoders stay inert and nothing else changes:</p>
-<pre><code class="language-bash"># Pi 4 and older
-pip install pigpio &amp;&amp; sudo systemctl enable --now pigpiod
-# Pi 5
-pip install lgpio
+<p><strong>The digital pins, not the PWM channels.</strong> The Fusion HAT has both, and they
+are different buses. <code>channel</code> above is a PWM output — where an ESC or a servo
+goes. <code>encoder_a</code>/<code>encoder_b</code> are the HAT's <strong>digital</strong> pins, which are Pi GPIO
+lines broken out on the HAT header and numbered as BCM, so the number silkscreened
+on the board is the number to enter. Confusing the two produces an encoder that
+counts nothing, and it is the first mistake everybody makes here.</p>
+<p>A quadrature encoder has four wires, and all four matter: ground, <strong>supply</strong>,
+A and B. A Hall-effect encoder is an active device — with no supply its outputs
+never drive, both pins sit at the internal pull-up, and the count stays at
+exactly 0 with no other symptom. That is the most common bring-up fault here.</p>
+<p><strong>Power it from 3.3 V.</strong> Many encoders accept 3.3–5 V; take the lower one,
+because a Pi GPIO is <em>not</em> 5 V tolerant and A/B are wired straight to it. A 5 V
+encoder with no choice in the matter needs a level shifter.</p>
+<p>Internal pull-ups are enabled for you, so an open-collector output needs no
+resistors of its own.</p>
+<p><strong>Check the published resolution before you measure.</strong> Some motors specify it
+exactly — a goBILDA 5203 Yellow Jacket, for instance, gives "1993.6 PPR at the
+Output Shaft", already counted the way this decoder counts (all four edges), and
+already including the gearbox. Enter it directly. Multiply only if there is
+further reduction between the output shaft and the wheel. Measuring is the
+fallback for a motor whose datasheet you do not trust, not a ritual.</p>
+<p>The pins are read through the same <code>fusion_hat</code> library that already drives
+the motors — no separate GPIO package and no daemon. One catch: <code>fusion_hat</code>
+reads pins through <code>RPi.GPIO</code>, and the <strong>stock <code>RPi.GPIO</code> cannot arm GPIO
+interrupts on a current Raspberry Pi OS kernel</strong>. It was last released in 2019
+and still does edge detection through <code>/sys/class/gpio</code>, whose numbering the
+kernel has since rebased. Setting pin direction works, so the motors are fine
+and an encoder fails with a bare <code>Failed to add edge detection</code> that looks for
+all the world like a pin conflict.</p>
+<p>Swap it for the drop-in replacement, once per robot (they conflict, so the old
+one comes off first):</p>
+<pre><code class="language-bash">just encoder-gpio
+# or by hand, on the Pi:
+sudo apt remove -y python3-rpi.gpio &amp;&amp; sudo apt install -y python3-rpi-lgpio
+</code></pre>
+<p><code>rpi-lgpio</code> presents the same API on top of lgpio and goes through the GPIO
+character device. Check which one you have with:</p>
+<pre><code class="language-bash">python3 -c "import sys, RPi.GPIO; print('lgpio-backed:', 'lgpio' in sys.modules)"
 </code></pre>
 <p>Then, <strong>wheels off the ground and the drivetrain unpowered</strong>:</p>
 <pre><code class="language-bash"># 4. prove the wiring, and MEASURE counts-per-rev
@@ -236,6 +262,40 @@ python tools/encoder_monitor.py --pins 17,27
 #    Then zero it, turn the wheel exactly one full turn, and read the count —
 #    that number is Counts per rev on the actuator's card.
 </code></pre>
+<h3 id="hand-the-decoding-to-the-kernel"><a class="header" href="#hand-the-decoding-to-the-kernel">Hand the decoding to the kernel</a></h3>
+<p>Decoding in Python costs an interpreter round trip per edge, which caps out
+around a few hundred edges a second. A high-resolution encoder blows straight
+past that: the goBILDA above is 1993.6 counts per output revolution, so one
+wheel at its 84 rpm free speed emits ~2800 edges a second and a pair ~5600.
+Measured on real hardware, a single hand-turned revolution decoded 157 of ~1994
+transitions — the rest were lost.</p>
+<p>Lost edges are worse than they sound. Every miss reads as a <em>slower</em> wheel, and
+loss grows with speed, so the faster track under-reports more — <code>match</code> mode
+would see it as the slower one and speed it up further. The robot detects this
+and opens the loop rather than acting on it (the <code>wheels</code> row goes blank), but
+that means no speed matching at all.</p>
+<p>The fix is to let Linux's <code>rotary-encoder</code> driver decode in its own interrupt
+handler. Once per encoder:</p>
+<pre><code class="language-bash">just encoder-overlay 17 27      # and again for the other wheel's pins
+just reboot
+just encoder-devices            # confirm they appeared
+</code></pre>
+<p>Or by hand in <code>/boot/firmware/config.txt</code>, one line per encoder:</p>
+<pre><code>dtoverlay=rotary-encoder,pin_a=17,pin_b=27,relative_axis=1,steps-per-period=4
+</code></pre>
+<p><code>steps-per-period=4</code> is quarter-period mode — all four edges of each cycle, the
+same X4 count the Python decoder produces, so <strong><code>counts_per_rev</code> does not
+change</strong> and neither do any gains tuned against it.</p>
+<p>Nothing else to configure. The robot looks for an input device matching each
+actuator's pins and prefers it, falling back to decoding in Python where there
+is no overlay. The start-up line in the journal says which one it got:</p>
+<pre><code>[Encoder] left: kernel rotary-encoder on /dev/input/event1, 1994 counts/rev
+[Encoder] left: A=GPIO17 B=GPIO27 via fusion_hat, decoded in Python, 1994 counts/rev
+</code></pre>
+<p>One trade: the kernel owns those pins, so the raw A/B levels and the
+<code>states n/4</code> display are no longer readable. <strong>Prove the wiring first, then add
+the overlay</strong> — or pass <code>--gpio</code> to the monitor to borrow the pins back
+temporarily.</p>
 <p>Enter the pins and that number in <strong>Settings → Hardware → the motor → Encoder</strong>,
 save, and restart the robot (pins are claimed at start-up, like PWM channels).
 The driving view then shows a <code>wheels</code> row. Set <strong>Settings → Robot → Wheel speed

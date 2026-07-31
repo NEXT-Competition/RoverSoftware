@@ -315,6 +315,7 @@ sudo apt-mark hold roversoftware-robot           # and stop it moving
 neither package can depend on them. Both degrade rather than fail:</p>
 <div class="table-wrapper"><table><thead><tr><th>Missing</th><th>What happens</th><th>Fix</th></tr></thead><tbody>
 <tr><td>SunFounder <code>fusion_hat</code></td><td>The motor layer falls back to a mock — the service starts, telemetry flows, nothing moves</td><td><code>just bootstrap</code>, or SunFounder's install script</td></tr>
+<tr><td><code>rpi-lgpio</code> (encoders only)</td><td>Motors and telemetry are fine; every encoder fails to start with <code>Failed to add edge detection</code>, because the stock <code>RPi.GPIO</code> cannot arm interrupts on a current kernel</td><td><code>just encoder-gpio</code></td></tr>
 <tr><td><code>deno</code></td><td>The Python bridge still runs on its internal port; the touch UI does not</td><td><code>just bs_host=... bootstrap-deno</code></td></tr>
 </tbody></table>
 </div>
@@ -569,6 +570,13 @@ replaces editing constants and restarting a service.</p>
 <p>Beyond driving, the mapped pad can e-stop, clear, switch mode, and arm or fire
 the launcher. All of it is remappable on the same page, and all of it goes
 through the same whitelist a spoken order does.</p>
+<p>Two things you write yourself go on buttons too, in slots further down that
+page: a <strong>routine</strong>, and a <strong>mechanism preset</strong> — the named states from
+<a href="bringup/hardware.html">Hardware</a>, so <code>intake → in</code> is a thumb rather than a trip to
+another tab. A preset latches until something else changes it, so a mechanism
+you drive both ways wants two buttons (<code>in</code> and <code>out</code>); give it an auto-stop in
+Hardware if it should also give up on its own. Presses are ignored while a
+routine is running, which owns the mechanisms until you switch back to teleop.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="4--save-places-then-send-a-route"><a class="header" href="#4--save-places-then-send-a-route">4 · Save places, then send a route</a></h1>
 <p><em>Name the field once; build a run out of it every match.</em></p>
 <p>A <strong>place</strong> is a named position on the field, saved on the base station and
@@ -698,9 +706,11 @@ turn the wheel exactly one full turn by hand, and read the count.</p>
 : Tick it if a wheel counts <em>down</em> when driving forward. Separate from
 <strong>Inverted</strong> above: that one mirrors the motor, this one mirrors the sensor, and
 a mirrored track motor usually needs both.</p>
-<p>The pins need <code>pigpio</code> (Pi 4 and older, plus <code>pigpiod</code>) or <code>lgpio</code> (Pi 5) on the
-robot. With neither installed the encoders stay inert and nothing else changes —
-see <a href="bringup/../reference/wiring.html">Wiring and calibration</a>.</p>
+<p>The pins are read through <code>fusion_hat</code>, the same library that drives the motors,
+so there is no separate GPIO package. It does need <code>rpi-lgpio</code> in place of the
+stock <code>RPi.GPIO</code>, which cannot arm interrupts on a current kernel — one command,
+<code>just encoder-gpio</code>, and <a href="bringup/../reference/wiring.html">Wiring and calibration</a> has the
+why.</p>
 <h2 id="3--group-the-rest-into-mechanisms"><a class="header" href="#3--group-the-rest-into-mechanisms">3 · Group the rest into mechanisms</a></h2>
 <p>Anything that is not drive is a <strong>mechanism</strong>: an intake, an arm, a launcher. A
 mechanism owns one or more actuators and comes in two kinds.</p>
@@ -728,9 +738,12 @@ back naming the state or field that was wrong.</p>
 <blockquote>
 <p><strong>A saved layout takes effect on the next start</strong></p>
 <p>Actuators are built by constructors; rebuilding them mid-loop with the
-drivetrain armed is how an ESC ends up holding an undefined pulse. Run
-<code>just restart</code>, <code>sudo systemctl restart roversoftware-robot</code>, or power-cycle
-the rover.</p>
+drivetrain armed is how an ESC ends up holding an undefined pulse. Press
+<strong>Restart robot</strong> at the top of this tab — it asks twice, then the rover
+parks its motors, drops off the fleet for a few seconds and comes back
+running the new layout. <code>just restart</code>, <code>sudo systemctl restart roversoftware-robot</code> and a power cycle all still work, and are what you need
+if the rover was started by hand rather than as a service: it refuses to stop
+when nothing would start it again.</p>
 </blockquote>
 <p>Before you trust any of it, calibrate the ESCs —
 <a href="bringup/../reference/wiring.html">Wiring and calibration</a> is the wheels-off-the-ground
@@ -1154,18 +1167,44 @@ it (or the base station) on the other end to confirm your sends are received.</p
 different rates, so the rover curves while the dashboard insists it is going
 straight. An encoder measures what the wheel actually did, and the robot can
 then hold the two sides together.</p>
-<p><strong>The pins are Pi GPIO, not HAT channels.</strong> <code>channel</code> above is a Fusion HAT PWM
-output; <code>encoder_a</code>/<code>encoder_b</code> are BCM numbers on the Pi's own header. Confusing
-the two produces an encoder that counts nothing, and it is the first mistake
-everybody makes here. Wire A and B to two free GPIOs, ground to ground, and the
-encoder's supply to whatever it wants (many are 3.3 V; a 5 V encoder needs a
-level shifter, because a Pi GPIO is not 5 V tolerant).</p>
-<p>Install the GPIO library your Pi needs — neither is a hard dependency, and
-without one the encoders stay inert and nothing else changes:</p>
-<pre><code class="language-bash"># Pi 4 and older
-pip install pigpio &amp;&amp; sudo systemctl enable --now pigpiod
-# Pi 5
-pip install lgpio
+<p><strong>The digital pins, not the PWM channels.</strong> The Fusion HAT has both, and they
+are different buses. <code>channel</code> above is a PWM output — where an ESC or a servo
+goes. <code>encoder_a</code>/<code>encoder_b</code> are the HAT's <strong>digital</strong> pins, which are Pi GPIO
+lines broken out on the HAT header and numbered as BCM, so the number silkscreened
+on the board is the number to enter. Confusing the two produces an encoder that
+counts nothing, and it is the first mistake everybody makes here.</p>
+<p>A quadrature encoder has four wires, and all four matter: ground, <strong>supply</strong>,
+A and B. A Hall-effect encoder is an active device — with no supply its outputs
+never drive, both pins sit at the internal pull-up, and the count stays at
+exactly 0 with no other symptom. That is the most common bring-up fault here.</p>
+<p><strong>Power it from 3.3 V.</strong> Many encoders accept 3.3–5 V; take the lower one,
+because a Pi GPIO is <em>not</em> 5 V tolerant and A/B are wired straight to it. A 5 V
+encoder with no choice in the matter needs a level shifter.</p>
+<p>Internal pull-ups are enabled for you, so an open-collector output needs no
+resistors of its own.</p>
+<p><strong>Check the published resolution before you measure.</strong> Some motors specify it
+exactly — a goBILDA 5203 Yellow Jacket, for instance, gives "1993.6 PPR at the
+Output Shaft", already counted the way this decoder counts (all four edges), and
+already including the gearbox. Enter it directly. Multiply only if there is
+further reduction between the output shaft and the wheel. Measuring is the
+fallback for a motor whose datasheet you do not trust, not a ritual.</p>
+<p>The pins are read through the same <code>fusion_hat</code> library that already drives
+the motors — no separate GPIO package and no daemon. One catch: <code>fusion_hat</code>
+reads pins through <code>RPi.GPIO</code>, and the <strong>stock <code>RPi.GPIO</code> cannot arm GPIO
+interrupts on a current Raspberry Pi OS kernel</strong>. It was last released in 2019
+and still does edge detection through <code>/sys/class/gpio</code>, whose numbering the
+kernel has since rebased. Setting pin direction works, so the motors are fine
+and an encoder fails with a bare <code>Failed to add edge detection</code> that looks for
+all the world like a pin conflict.</p>
+<p>Swap it for the drop-in replacement, once per robot (they conflict, so the old
+one comes off first):</p>
+<pre><code class="language-bash">just encoder-gpio
+# or by hand, on the Pi:
+sudo apt remove -y python3-rpi.gpio &amp;&amp; sudo apt install -y python3-rpi-lgpio
+</code></pre>
+<p><code>rpi-lgpio</code> presents the same API on top of lgpio and goes through the GPIO
+character device. Check which one you have with:</p>
+<pre><code class="language-bash">python3 -c "import sys, RPi.GPIO; print('lgpio-backed:', 'lgpio' in sys.modules)"
 </code></pre>
 <p>Then, <strong>wheels off the ground and the drivetrain unpowered</strong>:</p>
 <pre><code class="language-bash"># 4. prove the wiring, and MEASURE counts-per-rev
@@ -1175,6 +1214,40 @@ python tools/encoder_monitor.py --pins 17,27
 #    Then zero it, turn the wheel exactly one full turn, and read the count —
 #    that number is Counts per rev on the actuator's card.
 </code></pre>
+<h3 id="hand-the-decoding-to-the-kernel"><a class="header" href="#hand-the-decoding-to-the-kernel">Hand the decoding to the kernel</a></h3>
+<p>Decoding in Python costs an interpreter round trip per edge, which caps out
+around a few hundred edges a second. A high-resolution encoder blows straight
+past that: the goBILDA above is 1993.6 counts per output revolution, so one
+wheel at its 84 rpm free speed emits ~2800 edges a second and a pair ~5600.
+Measured on real hardware, a single hand-turned revolution decoded 157 of ~1994
+transitions — the rest were lost.</p>
+<p>Lost edges are worse than they sound. Every miss reads as a <em>slower</em> wheel, and
+loss grows with speed, so the faster track under-reports more — <code>match</code> mode
+would see it as the slower one and speed it up further. The robot detects this
+and opens the loop rather than acting on it (the <code>wheels</code> row goes blank), but
+that means no speed matching at all.</p>
+<p>The fix is to let Linux's <code>rotary-encoder</code> driver decode in its own interrupt
+handler. Once per encoder:</p>
+<pre><code class="language-bash">just encoder-overlay 17 27      # and again for the other wheel's pins
+just reboot
+just encoder-devices            # confirm they appeared
+</code></pre>
+<p>Or by hand in <code>/boot/firmware/config.txt</code>, one line per encoder:</p>
+<pre><code>dtoverlay=rotary-encoder,pin_a=17,pin_b=27,relative_axis=1,steps-per-period=4
+</code></pre>
+<p><code>steps-per-period=4</code> is quarter-period mode — all four edges of each cycle, the
+same X4 count the Python decoder produces, so <strong><code>counts_per_rev</code> does not
+change</strong> and neither do any gains tuned against it.</p>
+<p>Nothing else to configure. The robot looks for an input device matching each
+actuator's pins and prefers it, falling back to decoding in Python where there
+is no overlay. The start-up line in the journal says which one it got:</p>
+<pre><code>[Encoder] left: kernel rotary-encoder on /dev/input/event1, 1994 counts/rev
+[Encoder] left: A=GPIO17 B=GPIO27 via fusion_hat, decoded in Python, 1994 counts/rev
+</code></pre>
+<p>One trade: the kernel owns those pins, so the raw A/B levels and the
+<code>states n/4</code> display are no longer readable. <strong>Prove the wiring first, then add
+the overlay</strong> — or pass <code>--gpio</code> to the monitor to borrow the pins back
+temporarily.</p>
 <p>Enter the pins and that number in <strong>Settings → Hardware → the motor → Encoder</strong>,
 save, and restart the robot (pins are claimed at start-up, like PWM channels).
 The driving view then shows a <code>wheels</code> row. Set <strong>Settings → Robot → Wheel speed
@@ -1277,6 +1350,8 @@ refuses.</p>
 {"type": "routine_cmd", "cmd": "start", "to": "rover1"}              // start | stop | restart
 {"type": "routine_event", "name": "go", "to": "rover1"}              // advance a "when I press" transition
 {"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}      // bench test, teleop only
+{"type": "mech_preset", "mech": "intake", "preset": "in", "to": "rover1"}  // a named state, from a bound button
+{"type": "restart", "to": "rover1"}                                  // stop cleanly; systemd starts a fresh process
 
 // WiFi: the one config path that must work with NO WiFi, so it may ride the radio
 {"type": "get_wifi", "to": "rover1"}                                 // what network am I on
@@ -1355,8 +1430,12 @@ every mode until cleared. Position fields appear in telemetry once a
 <tr><td>Both motors do the same thing</td><td>They are on the same PWM channel — except the Hardware tab refuses that, so check they are not both assigned to the same <em>side</em>.</td></tr>
 <tr><td>A hardware change did nothing</td><td>Layouts take effect on the next start. <code>just restart</code>, or <code>sudo systemctl restart roversoftware-robot</code>.</td></tr>
 <tr><td>The rover curves when told to go straight</td><td>Two motors never match on the same throttle. Fit <a href="reference/wiring.html#wheel-encoders-optional">wheel encoders</a> and set Tuning → Wheel speed matching → Mode to <code>match</code>. Without encoders, trim it by hand with the mirrored motor's <em>Forward cap</em>.</td></tr>
-<tr><td>No <code>wheels</code> row on the driving view</td><td>This build has no encoder pins set, or neither <code>pigpio</code> nor <code>lgpio</code> is installed on the robot — the journal says which at start-up. Pins are claimed at start-up, so a newly saved layout needs a restart.</td></tr>
+<tr><td>No <code>wheels</code> row on the driving view</td><td>This build has no encoder pins set, or <code>fusion_hat</code> is missing on the robot — the journal says which at start-up, and if it is the library then the motors are mocked too. Pins are claimed at start-up, so a newly saved layout needs a restart.</td></tr>
 <tr><td>The <code>wheels</code> row says "not turning — matching off"</td><td>A wheel was commanded and its encoder never moved: the encoder is unplugged, its pins are wrong, or the wheel is genuinely stalled. The loop opened itself deliberately; it clears when the drivetrain next stops.</td></tr>
+<tr><td>The count stays at exactly 0 while the wheel turns</td><td>Watch the <code>states n/4</code> field. Stuck at 1/4 means neither channel is moving — almost always an unpowered encoder (it needs the supply wire, not just A/B/ground). 2/4 means one dead channel. <code>encoder_monitor.py</code> names the fault when you Ctrl-C.</td></tr>
+<tr><td><code>encoder_monitor.py</code> says "Failed to add edge detection"</td><td>Something else holds the pins — almost always the robot service, which claims them at start-up whenever a layout or <code>robot.env</code> names them. <code>sudo systemctl stop roversoftware-robot</code>, then run the tool.</td></tr>
+<tr><td>The <code>wheels</code> row keeps going blank while driving</td><td>Edges are being lost faster than 10% of a window, so the speed is no longer trustworthy and the loop opens on purpose — the journal says "losing edges". Move the decoding into the kernel: <code>just encoder-overlay A B</code> per encoder, then <code>just reboot</code>.</td></tr>
+<tr><td><code>just encoder-devices</code> lists nothing after a reboot</td><td>The overlay line never took. Check it is in <code>/boot/firmware/config.txt</code> (not <code>/boot/config.txt</code> on Bookworm and later) and that the firmware actually rebooted.</td></tr>
 <tr><td>The RPM readout is wildly wrong but steady</td><td><em>Counts per rev</em> is wrong. Measure it rather than deriving it: <code>tools/encoder_monitor.py</code>, turn the wheel one turn, read the count. <code>match</code> mode still works with a wrong value; <code>velocity</code> mode does not.</td></tr>
 <tr><td>A tuning value came back different</td><td>It was clamped, not refused. The field shows what the robot is actually using.</td></tr>
 <tr><td>Waypoint mode steers but does not move</td><td>A steered chassis with <em>pivot creep</em> at zero. It cannot turn on the spot.</td></tr>
@@ -1627,7 +1706,7 @@ messages are addressed with a <code>to</code> field.</p>
     xbee_link.py              threaded transparent-mode XBee serial reader
     doc_transfer.py           split/reassemble a whole document across frames
   sensors/
-    encoder.py                quadrature wheel encoders → signed RPM (pigpio / lgpio)
+    encoder.py                quadrature wheel encoders → signed RPM (Fusion HAT pins)
     gps.py                    Adafruit GPS reader → (lat, lon, track angle)
     bno085.py                 BNO085 IMU → absolute heading + yaw rate
     pose.py                   GPS position + IMU-or-track-angle heading → pose()
@@ -1893,10 +1972,31 @@ straight line.</p>
 <code>Encoder</code> decodes all four edges of each cycle (X4) through a transition table,
 counting only moves it can attribute a direction to — a diagonal jump means two
 edges arrived unseen, and inventing a direction for it would bias the rate. Speed
-is counts over a <code>rpm_window</code>, optionally smoothed by <code>rpm_tau</code>. Both GPIO
-libraries are optional: pigpio (Pi 4 and older, needs <code>pigpiod</code>) then lgpio (Pi
-5); with neither, every encoder is inert, <code>rpm()</code> returns <code>None</code>, and the
-drivetrain runs open-loop exactly as it always did.</p>
+is counts over a <code>rpm_window</code>, optionally smoothed by <code>rpm_tau</code>. The pins are
+the Fusion HAT's digital pins, read through the same <code>fusion_hat</code> library that
+drives the motors — no separate GPIO package and no daemon, though it does need
+<code>rpi-lgpio</code> underneath rather than the stock <code>RPi.GPIO</code>, which still arms
+interrupts through the renumbered <code>/sys/class/gpio</code> and cannot. <code>Pin</code> does setup;
+edge callbacks are registered <em>without</em> the bouncetime <code>Pin.irq()</code> would impose,
+because a 20 ms debounce discards nearly every edge a wheel encoder produces.
+The import is optional, and without it every encoder is inert, <code>rpm()</code> returns
+<code>None</code>, and the drivetrain runs open-loop exactly as it always did.</p>
+<p>Where the decoding happens is a <code>_TickSource</code>, chosen per encoder at start-up.
+<code>_GpioSource</code> decodes in a Python callback per edge and caps out in the low
+hundreds of edges a second; <code>_KernelSource</code> reads finished ±1 steps from an
+input device created by the <code>rotary-encoder</code> device-tree overlay, which decodes
+in its own IRQ handler. Both produce the same X4 counts, so <code>counts_per_rev</code> and
+every gain tuned against it are unchanged by the switch. Selection is by pin
+number against the device tree (<code>find_kernel_encoder</code>), not by device name —
+two instances of one overlay share a name and event numbering moves across
+reboots. No overlay means the Python path, so nothing needs configuring to keep
+working.</p>
+<p>The Python path also tracks transitions it could not attribute (<code>missed</code>), and
+<code>rpm()</code> returns <code>None</code> once a window loses more than <code>MAX_MISS_FRACTION</code> of
+them. That matters because loss is not symmetric noise: every miss is a count
+not made, and loss grows with edge rate, so the <em>faster</em> wheel under-reports
+more and <code>match</code> mode would speed it up further. Failing open beats a confident
+wrong number.</p>
 <p><code>RpmTrim</code> closes the loop, in the tank drivetrain only, <strong>after</strong> the slew
 limiter — the limiter shapes the operator's intent, the trim corrects what the
 hardware then did with it, and rate-limiting a correction would only add lag.</p>
@@ -2041,6 +2141,38 @@ exactly one thing commands the motors at any moment. They run <code>on_enter</co
 <code>on_tick</code> (every tick, hence the write elision above) and <code>on_exit</code>, which fires
 however the state is left, <em>including</em> a timeout, an abort or an e-stop. That is
 what makes <code>on_exit</code> the right place to disarm something.</p>
+<p><strong>One action computes rather than relays.</strong> <code>spin_up</code> is the exception to "an
+action is a number the operator typed". It reads the range to the target off the
+aligning delegate, asks <code>control/ballistics.py</code> what launch speed reaches that
+far, converts it to a flywheel RPM and then to a throttle, and sets that on a
+power mechanism. The alternative — a <code>mech_power</code> with a hand-found value — is a
+routine that is correct at exactly one distance and quietly wrong at every other
+one, which on a field where the bucket moves is most of them.</p>
+<pre><code class="language-jsonc">{ "id": "spin_up",
+  // Still AIMING while it spins: the range comes from the delegate's own
+  // estimate, so a `stop` state has nothing to measure. The schema warns.
+  "drive": {"mode": "shooter_align", "target": "bucket", "stop_within_m": 3},
+  "on_enter": [{"do": "spin_up", "mech": "flywheel"}],
+  "transitions": [{"when": "all", "of": [{"when": "in_range"},
+                                         {"when": "elapsed", "seconds": 1.5}],
+                   "to": "shoot"},
+                  {"when": "elapsed", "seconds": 6, "to": "gave_up"}] }
+</code></pre>
+<p>The model is projectile motion at a <strong>fixed</strong> launch angle — <code>v² = g·d² / (2·cos²θ·(d·tanθ − Δh))</code> — then wheel surface speed through a <code>transfer</code> factor,
+the fraction of that speed the ball actually leaves at. It models no drag, no
+backspin lift and no spin-up curve (a flywheel on a <code>PowerMechanism</code> has no
+encoder; <code>sensors/encoder.py</code> is drivetrain only), so <code>transfer</code> is where the
+error is absorbed and the first shots on a new build are the calibration. All of
+it is <code>live=True</code> for that reason: fire, watch where it lands, nudge, fire again,
+with no restart in the loop.</p>
+<p><strong>It fails by not spinning.</strong> No <code>ballistics.max_rpm</code> measured, no range, or a
+shot that would need the wheel to turn faster than it can, and the launcher is
+left exactly as it was with a line in the log saying which. Notably a shot beyond
+<code>max_rpm</code> is <em>not</em> clamped to full throttle: clamping would spin up, fire, and
+drop the ball short, which at the field is indistinguishable from a miss. The
+<code>in_range</code> condition asks the same question ahead of the shot — and it is false
+for a target that is too <strong>near</strong> as well as too far, because a fixed launch
+angle cannot throw a short, high arc into a rim above it.</p>
 <p>A document that fails validation is stored but never armed: the robot keeps
 running the last set that was good, which is the difference between a rejected
 edit and a rover that stops mid-field.</p>
@@ -2595,6 +2727,70 @@ Sending the mode first would only have shortened the wrong run to a burst,
 which is no better when the burst is a motor. This fixed the on-screen and
 voice paths too — the pad was just the first thing to make it obvious.</p>
 </blockquote>
+<p><strong>Mechanism presets on buttons.</strong> The same slot shape, for the same reason, one
+layer along: a preset is a named whole-mechanism state (<code>intake -&gt; in</code>) declared
+in a <em>rover's layout</em>, and this process holds no copy of any layout. So
+<code>MECH_SLOTS</code> (4) slots each carry a <code>(btn_mech_N, mech_N, preset_N)</code> <strong>triple</strong>
+— both names, because "out" alone does not say what moves when two mechanisms
+each have a state by that name — and a filled slot emits
+<code>mech_preset:&lt;mech&gt;:&lt;preset&gt;</code>. Layout validation constrains both names to
+<code>[a-z][a-z0-9_]*</code>, so the colon cannot appear inside either half of the action
+name. Until now the only things that could ask for a preset were a routine and
+the Hardware tab's jog controls, neither of which is a thumb while somebody is
+driving.</p>
+<p><code>Robot._mech_preset</code> handles the frame beside <code>_jog</code> and past the active
+controller, for the reason config is handled there: this is the operator asking
+a mechanism for a state, not an instruction to whatever is currently driving. It
+is refused while the e-stop is latched — nothing may start a motor through the
+one button that exists to stop them — and refused in <code>routine</code> mode, where a
+routine is writing mechanisms, possibly every tick, so honouring a press would
+either be undone 20 ms later or fight a state machine for an actuator (switching
+to teleop is how an operator takes a rover back, and that already ends the
+routine). Every other mode is allowed: object-align and waypoint drive the
+<em>drivetrain</em>, and an operator lining up on a bucket still owns the intake.</p>
+<p>The binding <strong>latches</strong>, deliberately and with no expiry of its own.
+<code>ControllerReader</code> fires on the press edge, so there is no release to send, and
+a preset is a state rather than a nudge — which is why an intake wants two
+buttons, <code>in</code> and <code>out</code>. A build that wants a mechanism to give up on its own
+says so once in its layout (<code>auto_stop_seconds</code>), which every caller then gets,
+rather than a timeout that only button presses have. A preset does clear a
+pending <code>jog</code> on the same mechanism, or that jog's 0.4 s failsafe would stop a
+motor a button had just deliberately started.</p>
+<blockquote>
+<p><strong>Two actions on one button.</strong> <code>_edge</code> <em>records</em> a press as it tests it, so
+asking it twice about the same button within a tick answers False the second
+time. The reader used to call it once per <code>(index, action)</code> pair, which meant
+a button carrying two actions ran only whichever <code>actions()</code> listed first —
+and <code>actions()</code> order is an implementation detail of a dataclass, not a
+promise. Nobody noticed while every binding had its own button; the first
+mechanism preset bound onto the cross that already clears the e-stop cleared
+the e-stop and never touched the intake, with the settings page showing the
+button as bound to the preset. <code>_fire_actions</code> now samples every edge first
+and then dispatches, so sharing a button does what the mapping says it does.</p>
+</blockquote>
+<p><strong>Restarting a rover from the base station.</strong> A layout takes effect at start-up
+and nowhere else, so every hardware change used to end in an ssh session with a
+rover that was, by then, on a field or on blocks. <code>{"type": "restart"}</code> closes
+that loop: <code>Robot._request_restart</code> sets a flag and drops out of the control
+loop, whose <code>finally</code> already parks the motors, the mechanisms and the servos.</p>
+<p>It does <strong>not</strong> shell out to <code>systemctl</code>. A restart issued from inside the unit
+races its own SIGTERM against that cleanup, and the part that matters on a
+machine with wheels is that the machine is safe before the process ends. Coming
+back is the supervisor's job: <code>run()</code> returns <code>EXIT_RESTART</code> and <code>run_robot.py</code>
+exits with it. That status is non-zero <strong>on purpose</strong> — the shipped unit says
+<code>Restart=on-failure</code>, which would leave a process that exited 0 dead, and the
+rovers in the field are running whatever unit came with their <code>.deb</code> while
+<code>just sync</code> pushes only Python. A restart that needed a new unit file would be
+a restart that switched a rover off.</p>
+<p>The refusal is the other half. <code>INVOCATION_ID</code> is set by systemd for every unit
+it starts and by nothing else, so a robot started by hand on a bench knows that
+nothing would start it again and says so instead of going dark. The base station
+cannot know that in advance — which is also why the frame goes out over the
+<em>radio</em> rather than the WiFi bulk path the rest of configuration takes: a rover
+worth restarting is often one whose WiFi is part of what is wrong with it. The
+simulator models the whole thing (park, four seconds of silence, back in the
+start mode with no routine running), so the button is learnable without
+hardware.</p>
 <p>Analog triggers arm before they steer: SDL scales a trigger to -1 released /
 +1 pulled, but some drivers report a flat <code>0.0</code> for a trigger untouched since
 the joystick opened — which rescales to <em>half throttle</em>. <code>Trigger</code> therefore
@@ -2808,7 +3004,11 @@ Each maps to a CLI flag on the respective entry point.</p>
 <tr><td><code>RS_SHOOTER_FIRE_S</code> / <code>RS_SHOOTER_RETRACT_S</code></td><td><code>0.35</code> / <code>0.35</code></td><td>Hold at the fire angle, then settle before re-arming.</td></tr>
 <tr><td><code>RS_SHOOTER_DWELL</code> / <code>RS_SHOOTER_COOLDOWN</code></td><td><code>0.5</code> / <code>2.0</code></td><td>Hold the aim this long before firing; min seconds between shots.</td></tr>
 <tr><td><code>RS_SHOOTER_REQUIRE_ARM</code> / <code>RS_SHOOTER_REQUIRE_ARRIVED</code> / <code>RS_SHOOTER_MAX_SHOTS</code></td><td><code>1</code> / <code>1</code> / <code>0</code></td><td>Firing gates; magazine size (0 = unlimited).</td></tr>
-<tr><td><code>RS_ENCODER_LEFT</code> / <code>RS_ENCODER_RIGHT</code></td><td><em>(blank)</em></td><td>Quadrature encoder pins as <code>"A,B"</code> <strong>BCM GPIO</strong> — the Pi header, not Fusion HAT channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Needs <code>pigpio</code> (Pi ≤4, plus <code>pigpiod</code>) or <code>lgpio</code> (Pi 5).</td></tr>
+<tr><td><code>RS_BALLISTICS_MAX_RPM</code></td><td><code>0</code></td><td>Flywheel RPM at full throttle, for the <code>spin_up</code> routine action. <strong>0 = unmeasured, which switches the shot solver off entirely</strong> — the robot will not turn a guess into a launch.</td></tr>
+<tr><td><code>RS_BALLISTICS_WHEEL_D</code> / <code>RS_BALLISTICS_TRANSFER</code></td><td><code>0.10</code> / <code>0.5</code></td><td>Flywheel diameter in metres, and the fraction of its surface speed the ball leaves at (always &lt; 1; the contact slips). <code>transfer</code> is the one number you find by shooting: if every shot lands long, lower it.</td></tr>
+<tr><td><code>RS_BALLISTICS_ANGLE</code> / <code>RS_BALLISTICS_LAUNCH_H</code> / <code>RS_BALLISTICS_TARGET_H</code></td><td><code>45</code> / <code>0.30</code> / <code>0.90</code></td><td>Fixed hood angle from horizontal; where the ball leaves and where it has to land, both measured from the ground.</td></tr>
+<tr><td><code>RS_BALLISTICS_IDLE_POWER</code></td><td><code>0.15</code></td><td>Throttle floor — below it a brushless ESC may not commutate at all, so a short shot would leave the wheel stalled.</td></tr>
+<tr><td><code>RS_ENCODER_LEFT</code> / <code>RS_ENCODER_RIGHT</code></td><td><em>(blank)</em></td><td>Quadrature encoder pins as <code>"A,B"</code> — the Fusion HAT's <strong>digital</strong> pins, numbered as BCM GPIO, not its PWM channels. Blank = no encoder and the drivetrain runs open-loop. For bring-up before there is a layout to edit; a saved layout's pins take over, and a dashboard-set value beats both. Read through <code>fusion_hat</code>; needs <code>rpi-lgpio</code> under it (<code>just encoder-gpio</code>).</td></tr>
 <tr><td><code>RS_ENCODER_CPR</code></td><td><code>0</code></td><td>Counts per revolution <strong>of the wheel</strong>, gearbox included. Measure it with <code>tools/encoder_monitor.py</code> — turn the wheel one full turn and read the count.</td></tr>
 <tr><td><code>RS_ENCODER_LEFT_INVERT</code> / <code>RS_ENCODER_RIGHT_INVERT</code></td><td><code>0</code> / <code>0</code></td><td>Flip so forward reads as a positive RPM. Separate from the motor's own <code>inverted</code>: that mirrors the motor, this mirrors the sensor.</td></tr>
 <tr><td><code>RS_TRIM_MODE</code> / <code>RS_TRIM_MAX_RPM</code></td><td><code>off</code> / <code>200</code></td><td>Closed-loop wheel speed: <code>off</code> | <code>match</code> (hold the two sides to each other; no calibration) | <code>velocity</code> (hold each to <code>throttle × max_rpm</code>; measure that number). See <a href="architecture.html#44-drive-layer">§4.4</a>.</td></tr>
