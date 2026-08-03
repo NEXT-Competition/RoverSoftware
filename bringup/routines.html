@@ -240,13 +240,22 @@ launcher that fires on a single noisy frame and one that waits half a second to
 be sure — it is the <code>0.3</code> on the wire out of <code>line_up</code> above.</p>
 <h2 id="what-an-action-can-do"><a class="header" href="#what-an-action-can-do">What an action can do</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Group</th><th>Actions</th></tr></thead><tbody>
-<tr><td>mechanism</td><td>set a mechanism to a preset · run one at a power · stop one · pulse one once · fire · arm / disarm the launcher</td></tr>
+<tr><td>mechanism</td><td>set a mechanism to a preset · run one at a power · stop one · pulse one once · <strong>start a sequence</strong> · fire · arm / disarm the launcher</td></tr>
 <tr><td>navigation</td><td>load a GPS route (from saved places)</td></tr>
 <tr><td>logic</td><td>count this · reset a counter</td></tr>
 </tbody></table>
 </div>
 <p>None of them drive. That is the state's <code>drive</code> source, which is what guarantees
 exactly one thing commands the motors at any moment.</p>
+<p><strong>Start a sequence</strong> is worth a note, because it is how a routine drives a
+multi-stage mechanism without spelling the stages out as states. It kicks off
+the queue the <a href="hardware.html#3a--sequence-a-mechanism-whose-parts-move-in-turn">layout already
+describes</a> —
+flywheel, then feeder, then belt — and returns at once, so the state carries on
+ticking. Asking again while it runs does nothing, which makes it safe in <em>every
+tick</em>. To wait for the end of one, transition on <strong>when a mechanism is ready</strong>:
+a sequence answers "not ready" for exactly as long as it is running, and the
+same is true if it aborts, so the wait ends either way rather than hanging.</p>
 <h2 id="running-it"><a class="header" href="#running-it">Running it</a></h2>
 <ol>
 <li><strong>Save to robot.</strong> Routines take effect the moment they land — they are data
