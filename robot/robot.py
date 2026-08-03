@@ -250,7 +250,10 @@ class Robot:
             IMU(config.imu.i2c_address, config.imu.heading_offset_deg,
                 config.imu.invert, config.imu.min_calib,
                 config.imu.persist_calibration,
-                sample_timeout=config.imu.sample_timeout)
+                sample_timeout=config.imu.sample_timeout,
+                transport=config.imu.transport,
+                serial_port=config.imu.serial_port,
+                serial_baud=config.imu.serial_baud)
             if config.imu.enabled else None
         )
 
@@ -1146,6 +1149,9 @@ class Robot:
             self.imu.min_calib = cfg.imu.min_calib
             self.imu.persist_calibration = cfg.imu.persist_calibration
             self.imu.sample_timeout = cfg.imu.sample_timeout
+            self.imu.transport = cfg.imu.transport
+            self.imu.serial_port = cfg.imu.serial_port
+            self.imu.serial_baud = cfg.imu.serial_baud
         if self.gps is not None:
             self.gps.fix_timeout = cfg.gps.fix_timeout
             self.gps.min_move_mps = cfg.gps.min_move_mps

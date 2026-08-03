@@ -92,6 +92,16 @@ except Exception:
     BNO_REPORT_ROTATION_VECTOR = None
     BNO_REPORT_GYROSCOPE = None
 
+try:  # pragma: no cover - UART backend optional on a dev laptop
+    import serial
+except Exception:
+    serial = None
+
+try:  # pragma: no cover - UART backend optional on a dev laptop
+    from adafruit_bno08x_rvc import BNO08x_RVC
+except Exception:
+    BNO08x_RVC = None
+
 _RAD_TO_DEG = 180.0 / 3.141592653589793
 
 # How often the reader polls the chip's calibration accuracy. Each poll is a
@@ -151,6 +161,9 @@ class IMU:
         persist_calibration: bool = True,
         update_hz: float = 40.0,
         sample_timeout: float = DEFAULT_SAMPLE_TIMEOUT,
+        transport: str = "i2c",
+        serial_port: str = "/dev/serial0",
+        serial_baud: int = 115200,
     ):
         self.i2c_address = i2c_address
         self.heading_offset_deg = heading_offset_deg
@@ -167,8 +180,12 @@ class IMU:
         # BNO055's saved offsets.
         self.persist_calibration = persist_calibration
         self._period = 1.0 / update_hz if update_hz > 0 else 0.025
+        self.transport = (transport or "i2c").strip().lower()
+        self.serial_port = serial_port
+        self.serial_baud = serial_baud
 
         self._sensor = None
+        self._serial = None
         self._i2c = None
         self._thread = None
         self._running = False
@@ -207,6 +224,18 @@ class IMU:
         the promise the module docstring makes — a bad IMU degrades to GPS-course
         heading — for a HANG, not just for an exception.
         """
+        if self.transport == "uart_rvc":
+            if serial is None or BNO08x_RVC is None:
+                print("[IMU] pyserial / adafruit-circuitpython-bno08x-rvc not installed — "
+                      "IMU disabled (heading falls back to GPS course).")
+                return
+            self._running = True
+            self._thread = threading.Thread(target=self._run, name="imu-rx", daemon=True)
+            self._thread.start()
+            print(f"[IMU] opening BNO085 UART-RVC on {self.serial_port} "
+                  f"@ {self.serial_baud} baud (background; heading uses GPS course until it's up)")
+            return
+
         if board is None or busio is None or adafruit_bno08x is None:
             print("[IMU] adafruit-circuitpython-bno08x / blinka not installed — IMU "
                   "disabled (heading falls back to GPS course). "
@@ -226,20 +255,23 @@ class IMU:
         self._read_loop()
 
     def _open(self) -> bool:
-        """Open the I2C device and subscribe to the reports. True on success.
+        """Open the sensor backend and subscribe to the reports. True on success."""
+        if self.transport == "uart_rvc":
+            try:
+                self._serial = serial.Serial(self.serial_port,
+                                             baudrate=self.serial_baud,
+                                             timeout=1)
+                self._sensor = BNO08x_RVC(self._serial)
+            except Exception as e:
+                print(f"[IMU] could not open BNO085 UART-RVC on {self.serial_port}: {e} — IMU "
+                      "disabled (heading falls back to GPS course)")
+                self._serial = None
+                self._sensor = None
+                return False
+            print(f"[IMU] reading BNO085 UART-RVC from {self.serial_port} "
+                  f"({self.serial_baud} baud)")
+            return True
 
-        Ordering matters here. begin_calibration() blocks until the chip
-        acknowledges the ME-calibrate command, and the adafruit driver waits for
-        that ack by draining EVERY queued packet — an inner `while
-        self._data_ready:` loop with no packet cap, so its outer timeout is only
-        re-checked once the queue runs dry. Enable the 20 Hz rotation-vector and
-        gyro reports first and the queue never runs dry on a slow bus (the
-        classic case: a leftover `dtparam=i2c_arm_baudrate=10000` from the
-        BNO055, where reports arrive faster than 10 kHz can drain them) — the
-        call then hangs forever instead of timing out. Calibrating BEFORE
-        subscribing means nothing is streaming yet, which is also the order
-        Adafruit's own calibration example uses.
-        """
         try:
             self._i2c = busio.I2C(board.SCL, board.SDA)
             self._sensor = BNO08X_I2C(self._i2c, address=self.i2c_address)
@@ -266,6 +298,22 @@ class IMU:
         return True
 
     def _read_loop(self) -> None:
+        if self.transport == "uart_rvc":
+            while self._running:
+                t0 = time.monotonic()
+                try:
+                    heading = self._sensor.heading
+                except Exception as e:  # keep the reader alive across transient UART glitches
+                    self._note_read_error(e)
+                    time.sleep(_ERROR_BACKOFF_S if isinstance(e, _TRANSPORT_ERRORS)
+                               else self._period)
+                    continue
+                self._consume_uart_heading(heading)
+                sleep_for = self._period - (time.monotonic() - t0)
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+            return
+
         next_calib = 0.0
         while self._running:
             t0 = time.monotonic()
@@ -380,6 +428,29 @@ class IMU:
             print(f"[IMU] reading again after {self._errors} read error(s); "
                   f"the heading is back")
 
+    def _consume_uart_heading(self, heading_data) -> None:
+        """Fold one UART-RVC heading tuple into the cached absolute heading."""
+        heading = None
+        if isinstance(heading_data, (tuple, list)) and len(heading_data) >= 1:
+            try:
+                yaw = float(heading_data[0])
+            except (TypeError, ValueError):
+                yaw = None
+            if yaw is not None:
+                raw_heading = yaw % 360.0
+                head = -raw_heading if self.invert else raw_heading
+                heading = (head + self.heading_offset_deg) % 360.0
+
+        now = time.monotonic()
+        with self._lock:
+            self._calib = 3 if heading is not None else self._calib
+            if heading is not None:
+                self._heading = heading
+                self._heading_at = now
+                self._have_reading = True
+            self._yaw_rate = None
+            self._rate_at = now if heading is not None else self._rate_at
+
     def _calibrated(self) -> bool:
         """True once the fused-orientation calibration level meets min_calib.
 
@@ -474,6 +545,11 @@ class IMU:
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout=1.0)
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            except Exception:
+                pass
         if self._i2c is not None:
             try:
                 self._i2c.deinit()

@@ -125,3 +125,30 @@ def test_calibration_status_is_polled_at_about_1hz(fake_libs, monkeypatch):
     # Readings still flow, and the converged calibration is still saved once.
     assert imu.heading() is not None
     assert calls.count("save") == 1
+
+
+def test_uart_rvc_backend_returns_heading(monkeypatch):
+    """The UART-RVC backend should expose headings through the shared IMU API."""
+
+    class FakeSerial:
+        def __init__(self, *a, **k):
+            self.args = a
+            self.kwargs = k
+
+    class FakeRVC:
+        def __init__(self, uart):
+            self.uart = uart
+            self.heading = (12.5, 1.0, 0.5, 0.0, 0.0, 0.0)
+
+    monkeypatch.setattr(bno085, "serial", types.SimpleNamespace(Serial=FakeSerial))
+    monkeypatch.setattr(bno085, "BNO08x_RVC", FakeRVC)
+
+    imu = bno085.IMU(transport="uart_rvc", serial_port="/dev/serial0", serial_baud=115200)
+    imu.start()
+    try:
+        deadline = time.monotonic() + 1.0
+        while imu.heading() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert imu.heading() == pytest.approx(12.5)
+    finally:
+        imu.stop()
