@@ -39,11 +39,41 @@ Also here: dead zone, trigger rest value (a trigger that idles at `-1` instead
 of `0` is normal), throttle and steer authority, and steering inversion. This
 replaces editing constants and restarting a service.
 
+### If it feels twitchy rather than wrong
+
+Reach for **expo** before authority. Authority scales everything, so it buys
+fine control by giving up top speed; expo bends the middle of the travel down
+and leaves the endpoint where it was. At `0.6`, half stick gives `0.28` instead
+of `0.5` and full stick still gives `1.0`. `0` is the linear stick, which is
+what every build had before the curve existed.
+
+Leaving the dead zone no longer steps: the remaining travel is rescaled back
+onto the full range, so just past centre is near zero rather than jumping
+straight to the dead-zone value. That means you can raise the dead zone to
+cover a worn, drifting stick without making the twitch worse.
+
+### Driving on a stick instead of the triggers
+
+Set **Throttle axis (stick)** to a stick axis and the drivetrain comes off the
+triggers entirely, which frees both to be ordinary buttons. Sticks report up as
+negative, so **Invert throttle stick** is on by default; it does not affect the
+trigger layout. The mixing is unchanged either way — it happens on the robot,
+so both layouts put the identical thing on the radio.
+
 ## The buttons a gamepad also carries
 
 Beyond driving, the mapped pad can e-stop, clear, switch mode, and arm or fire
 the launcher. All of it is remappable on the same page, and all of it goes
 through the same whitelist a spoken order does.
+
+**Shooter spin / shot** is the launcher by hand while you drive, and is not the
+same button as *Fire*: that one is the aligned, armed, dwelled shot and carries
+all of those rules. This one carries none of them — it is refused only by the
+e-stop and by a running routine. What it does depends on the build: on a
+flywheel (`shooter.target_rpm` above `0`) it toggles the wheel between speed and
+stopped, because a wheel takes seconds to spin up and holding a button for a
+whole match is nobody's idea of a control; on a servo launcher it fires one
+shot.
 
 Two things you write yourself go on buttons too, in slots further down that
 page: a **routine**, and a **mechanism preset** — the named states from

@@ -27,6 +27,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "httpx>=0.27",  # starlette TestClient
 ]
 # Offline model-conversion toolchain (tools/imx500_*.py). Kept OUT of
 # [project.dependencies] on purpose: torch is a ~100MB build-machine-only

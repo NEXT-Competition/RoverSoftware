@@ -497,6 +497,10 @@ class Robot:
             # named state, not an instruction to whatever is currently driving.
             elif mtype == "mech_preset":
                 self._mech_preset(msg)
+            # Working the shooter by hand is the same kind of thing, and for the
+            # same reason it does not go through the active controller.
+            elif mtype == "shooter_spin":
+                self._toggle_shooter(msg)
             # Restarting is the one command that ends this loop, so it is
             # handled here rather than by any controller.
             elif mtype == "restart":
@@ -970,6 +974,51 @@ class Robot:
         if self._jog_mech == name:
             self._jog_mech = ""
         print(f"[Robot] {name} -> {preset}")
+
+    def _toggle_shooter(self, msg: dict) -> None:
+        """Spin the flywheel up or down, or pulse a servo launcher.
+
+        Which one happens is decided by `shooter.target_rpm`: above zero this is
+        a flywheel and the command toggles it between that speed and stopped;
+        at zero it is a servo launcher and this fires one shot. That keeps a
+        single gamepad button meaning "work the shooter" on either build.
+
+        Distinct from the `fire` message on purpose. That one belongs to
+        ShooterAlignController and carries its whole safety policy — arming,
+        dwell, alignment, magazine. This is the manual teleop equivalent and
+        claims none of that, so it is gated the way `mech_preset` is: refused
+        under a latched e-stop, and refused in `routine` mode, where a routine
+        owns the mechanisms and a press would either be undone a tick later or
+        fight a state machine for the channel. Firing rules for autonomous shots
+        are unchanged and still live in that controller.
+
+        Idempotent when told explicitly (`{"on": true}`) so a repeated frame
+        cannot invert the wheel; a bare message toggles from the state the robot
+        is actually in, which is what the base station sends — it keeps no
+        shadow copy of mechanism state, and one would go stale the first time an
+        e-stop stopped the wheel from underneath it.
+        """
+        shooter = self.shooter
+        if shooter is None:
+            print("[Robot] shooter_spin refused: no shooter on this robot "
+                  "(RS_SHOOTER_ENABLED=0)")
+            return
+        if self.manager.estop:
+            print("[Robot] shooter_spin refused: e-stop is latched")
+            return
+        if self.manager.mode == "routine":
+            print("[Robot] shooter_spin refused: a routine is running and owns "
+                  "the mechanisms (switch to teleop to take the shooter back)")
+            return
+
+        if float(getattr(self.cfg.shooter, "target_rpm", 0.0)) <= 0.0:
+            shooter.fire()  # servo launcher: one shot, it owns its own cycle
+            return
+
+        want = bool(msg["on"]) if "on" in msg else not shooter.spinning
+        shooter.spin(want)
+        print(f"[Robot] shooter flywheel -> "
+              f"{f'{self.cfg.shooter.target_rpm:.0f} rpm' if want else 'stop'}")
 
     def _request_restart(self) -> None:
         """Come back on a fresh process, asked for from the base station.

@@ -24,6 +24,7 @@ leaving the mechanism cocked. Robot.run() ticks it unconditionally instead.
 
 from __future__ import annotations
 
+import math
 import time
 
 from ..config import ShooterConfig
@@ -34,7 +35,37 @@ from .motor import _HardwareServo, _MockServo, mock_motors
 
 
 class Shooter:
-    """One servo-actuated launcher on a single PWM channel."""
+    """One launcher on a single PWM channel, in either of two shapes.
+
+    The pulse state machine described above is the default and is what a servo
+    launcher uses. A build whose launcher is a FLYWHEEL sets
+    `shooter.target_rpm` above zero, and the same object instead holds a wheel
+    at a commanded speed: there is no swing to fire, so there is no cycle to
+    advance, and `update()` runs a speed controller rather than a timer.
+
+    Which shape is in use is decided by that one config value, so nothing else
+    has to be told about it — `spin()`, `stop()` and the parked angle all read
+    it, and a rover with no launcher at all still constructs cleanly.
+    """
+
+    # Closed-loop flywheel speed control. These are geometry and ESC facts
+    # about the reference launcher, not preferences, which is why they live
+    # here rather than in ShooterConfig: `target_rpm` is what a build tunes.
+    _NEUTRAL_ANGLE = 5.0
+    _DIRECTION = -1
+    _MAX_THROTTLE = 25.0
+    _KP = 0.0020
+    _KD = 0.0200
+    _MAX_ANGLE_CHANGE = 0.8
+    _ERROR_DEADBAND = 20.0
+    _CONTROL_INTERVAL_SECONDS = 0.1
+    _RPM_PER_THROTTLE = 340.0
+    _THROTTLE_DEADBAND = 4.54
+    _THROTTLE_HEADROOM = 1.6
+    _MAX_TRIM = 4.0
+    _FLYWHEEL_DIAMETER_IN = 3.0
+    _FLYWHEEL_RADIUS_M = _FLYWHEEL_DIAMETER_IN * 0.0254 / 2.0
+    _MAX_LEGAL_RPM = (12.0 / _FLYWHEEL_RADIUS_M) * 60.0 / (2.0 * math.pi)
 
     def __init__(self, config: ShooterConfig):
         self.cfg = config
@@ -43,6 +74,18 @@ class Shooter:
         self._state = "rest"  # rest | firing | retracting
         self._until = 0.0
         self._shots = 0
+        self._pid_target_rpm = 0.0
+        self._pid_measured_rpm = 0.0
+        self._pid_active = False
+        self._pid_last_control = 0.0
+        self._pid_throttle = 0.0
+        self._pid_trim = 0.0
+        self._pid_previous_error = 0.0
+        # Has anything ever fed a real reading in? Until something does, update()
+        # supplies a modelled one (see _estimated_rpm). A single call to
+        # set_measured_rpm() flips this for good and the model is never used
+        # again — a real sensor always wins over the estimate.
+        self._pid_has_sensor = False
         self.stop()
 
     @property
@@ -53,6 +96,130 @@ class Shooter:
     @property
     def state(self) -> str:
         return self._state
+
+    @property
+    def pid_active(self) -> bool:
+        """True while the flywheel is being held at a commanded speed."""
+        return self._pid_active
+
+    @property
+    def pid_throttle(self) -> float:
+        """Last throttle the speed controller wrote, for telemetry."""
+        return self._pid_throttle
+
+    @property
+    def spinning(self) -> bool:
+        return self._pid_active
+
+    @staticmethod
+    def _clamp(value: float, low: float, high: float) -> float:
+        return max(low, min(high, value))
+
+    def set_target_rpm(self, target_rpm: float) -> None:
+        """Enable closed-loop RPM control for a flywheel-style mechanism."""
+        self._pid_target_rpm = max(0.0, float(target_rpm))
+        self._pid_active = self._pid_target_rpm > 0.0
+        if not self._pid_active:
+            self._pid_reset()
+
+    def set_measured_rpm(self, measured_rpm: float) -> None:
+        """Feed the latest sensor reading back into the speed controller.
+
+        One call is enough to retire the model for good: a build that has an
+        encoder on the flywheel (see sensors/encoder.py) should wire it here and
+        the loop becomes genuinely closed with no other change.
+        """
+        self._pid_measured_rpm = float(measured_rpm)
+        self._pid_has_sensor = True
+        if self._pid_target_rpm > 0.0:
+            self._pid_active = True
+
+    def _estimated_rpm(self) -> float:
+        """Modelled wheel speed, for a launcher with no tachometer.
+
+        NOT a measurement: it is the assumption "the wheel reaches what we
+        commanded". That makes the error identically zero, so the trim term
+        never moves and the controller emits its pure feed-forward throttle —
+        which is the honest behaviour of an open loop, and is stable.
+
+        It deliberately does NOT invert the commanded throttle to synthesise a
+        speed. That version looks more like a measurement but is worse: the
+        model then tracks the command with a one-tick delay, and the derivative
+        term reacting to the deadband-zeroed error drives trim between 0 and its
+        clamp forever — a 5 Hz limit cycle of a few hundred rpm on the real
+        wheel, with nothing in the logs to explain it.
+
+        Either way the loop is blind to what the model cannot predict: battery
+        sag, ball drag, a wheel stalling against a jam. It exists so the
+        flywheel path is usable on a build that has no sensor yet.
+        """
+        return self._pid_target_rpm
+
+    def spin(self, on: bool) -> None:
+        """Start or stop the flywheel at the configured target speed."""
+        self.set_target_rpm(float(getattr(self.cfg, "target_rpm", 0.0)) if on else 0.0)
+        if not on:
+            self.stop()
+
+    def _pid_reset(self) -> None:
+        self._pid_trim = 0.0
+        self._pid_previous_error = 0.0
+        self._pid_throttle = 0.0
+        self._pid_last_control = 0.0
+
+    def _write_pid_throttle(self, value: float) -> None:
+        self.servo.angle(
+            self._NEUTRAL_ANGLE
+            + self._DIRECTION * self._clamp(value, 0.0, self._MAX_THROTTLE)
+        )
+
+    def _run_pid_control(self, now: float) -> None:
+        if not self._pid_active:
+            return
+
+        if now - self._pid_last_control < self._CONTROL_INTERVAL_SECONDS:
+            return
+
+        target = self._pid_target_rpm
+        if target <= 0.0:
+            self._pid_reset()
+            self._pid_active = False
+            self.stop()
+            return
+
+        error = target - self._pid_measured_rpm
+        if abs(error) < self._ERROR_DEADBAND:
+            error = 0.0
+
+        step = self._clamp(
+            self._KP * error + self._KD * (error - self._pid_previous_error),
+            -self._MAX_ANGLE_CHANGE,
+            self._MAX_ANGLE_CHANGE,
+        )
+        self._pid_previous_error = error
+        self._pid_trim = self._clamp(
+            self._pid_trim + step, -self._MAX_TRIM, self._MAX_TRIM
+        )
+
+        # The trim may only ever push the throttle a little past what the
+        # feed-forward asked for. Without a ceiling a wheel that reads slow —
+        # because a ball is in it, or because the encoder is lying — winds the
+        # trim to its clamp and holds the ESC wide open.
+        ceiling = min(
+            self._MAX_THROTTLE,
+            self._THROTTLE_DEADBAND
+            + (target / self._RPM_PER_THROTTLE) * self._THROTTLE_HEADROOM,
+            self._THROTTLE_DEADBAND
+            + (self._MAX_LEGAL_RPM / self._RPM_PER_THROTTLE) * 1.25,
+        )
+        throttle = self._clamp(
+            self._THROTTLE_DEADBAND + target / self._RPM_PER_THROTTLE + self._pid_trim,
+            0.0,
+            ceiling,
+        )
+        self._pid_throttle = throttle
+        self._write_pid_throttle(throttle)
+        self._pid_last_control = now
 
     def ready(self) -> bool:
         """True when the mechanism is home and a new shot can start."""
@@ -79,10 +246,22 @@ class Shooter:
         return True
 
     def update(self) -> None:
-        """Advance the fire/retract cycle. Cheap; call every control tick."""
+        """Advance the fire/retract cycle, or hold the flywheel at speed.
+
+        Cheap either way; call every control tick.
+        """
+        now = time.monotonic()
+
+        # A spinning flywheel has no pulse to advance, and the two paths write
+        # the same channel, so they must never both run in one tick.
+        if self._pid_active:
+            if not self._pid_has_sensor:
+                self._pid_measured_rpm = self._estimated_rpm()
+            self._run_pid_control(now)
+            return
+
         if self._state == "rest":
             return
-        now = time.monotonic()
         if now < self._until:
             return
         if self._state == "firing":
@@ -95,11 +274,33 @@ class Shooter:
         else:  # retracting
             self._state = "rest"
 
+    def _idle_angle(self) -> float:
+        """Where this mechanism sits when it is doing nothing.
+
+        A servo launcher parks at its rest POSITION, which is what rest_angle
+        describes. A flywheel must instead sit at NEUTRAL, because neutral is
+        the pulse that ARMS its ESC: an ESC that has never been held at neutral
+        ignores everything sent to it afterwards. Parking a flywheel at
+        rest_angle (-30 by default, a servo geometry value that means nothing to
+        an ESC) leaves it unarmed forever, so the robot logs a perfectly healthy
+        "flywheel -> N rpm" while the wheel never moves and the button looks
+        dead. Only the drivetrain is armed explicitly at start-up
+        (Robot.start -> drive.arm), so for the shooter this idle value IS the
+        arming signal.
+        """
+        if float(getattr(self.cfg, "target_rpm", 0.0)) > 0.0:
+            return self._NEUTRAL_ANGLE
+        return self.cfg.rest_angle
+
     def stop(self) -> None:
         """Return to rest immediately (shutdown, disarm, e-stop)."""
-        self.servo.angle(self.cfg.rest_angle)
+        self.servo.angle(self._idle_angle())
         self._state = "rest"
         self._until = 0.0
+        self._pid_active = False
+        self._pid_target_rpm = 0.0
+        self._pid_measured_rpm = 0.0
+        self._pid_reset()
 
     def status(self) -> dict:
         """Same shape a PulseMechanism reports.
@@ -112,4 +313,5 @@ class Shooter:
         Robot can hold it in the mechanism registry alongside the rest.
         """
         return {"kind": "pulse", "state": self._state, "count": self._shots,
-                "ready": self.ready(), "cool": 0.0}
+                "ready": self.ready(), "cool": 0.0,
+                "pid_active": self.pid_active, "pid_throttle": self.pid_throttle}

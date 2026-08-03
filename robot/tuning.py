@@ -293,6 +293,12 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("shooter.fire_angle", -90, 90),
     _f("shooter.fire_seconds", 0.05, 5),
     _f("shooter.retract_seconds", 0.05, 5),
+    # live=False: this decides WHICH launcher this build is (0 = servo pulse,
+    # above 0 = flywheel), and `Shooter._idle_angle` reads it to pick the angle
+    # it parks at — which for a flywheel is the neutral pulse that arms its ESC.
+    # Changing that under a constructed shooter would leave the wheel parked at
+    # a value for the shape it no longer is.
+    _f("shooter.target_rpm", 0, 20000, live=False),
     _f("shooter.dwell", 0, 10),
     _f("shooter.cooldown", 0, 60),
     _i("shooter.max_shots", 0, 999),

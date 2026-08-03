@@ -80,6 +80,13 @@ class ControllerMapping:
     axis_steer: int = 2  # right stick X
     axis_l2: int = 4  # L2 analog trigger -> reverse
     axis_r2: int = 5  # R2 analog trigger -> forward
+    # Arcade drive on a stick. UNBOUND keeps the R2-forward/L2-reverse trigger
+    # behaviour; >= 0 names a stick axis for throttle and takes the drivetrain
+    # off the triggers entirely, which frees them to be ordinary buttons.
+    axis_throttle: int = UNBOUND
+    # Sticks report UP as negative, so a stick throttle is inverted by default.
+    # Triggers are not, which is why this is separate from invert_steer.
+    invert_throttle: bool = True
     # Value an untouched trigger reports. SDL scales triggers to -1 (released)
     # .. +1 (fully pulled); 0.0 suits drivers that report a plain 0..1.
     trigger_rest: float = -1.0
@@ -89,6 +96,17 @@ class ControllerMapping:
     # long-wheelbase chassis that darts; lower throttle_gain as a trainer mode.
     steer_gain: float = 1.0
     throttle_gain: float = 1.0
+    # Input curve, applied after the dead zone and before the gain. 0 is the
+    # linear stick every build had before this existed; 1 is fully cubic.
+    #
+    # This is the knob for "too sensitive", and it is NOT the same as lowering
+    # the gain. Gain scales everything, so it costs top speed to buy fine
+    # control. Expo bends the middle of the travel down and leaves the endpoint
+    # alone: at 0.6, half stick gives 0.28 instead of 0.5, while full stick
+    # still gives 1.0. It also shrinks the step at the edge of the dead zone,
+    # which is the other thing that reads as twitchy.
+    steer_expo: float = 0.0
+    throttle_expo: float = 0.0
 
     # --- buttons (UNBOUND disables) ---
     btn_estop: int = 1  # circle
@@ -99,6 +117,12 @@ class ControllerMapping:
     btn_waypoint: int = UNBOUND
     btn_arm_shooter: int = UNBOUND
     btn_fire: int = UNBOUND
+    # Manual teleop control of the launcher, distinct from btn_fire: that one is
+    # ShooterAlignController's armed, dwelled, aligned shot. This works while
+    # driving, and on a flywheel build it TOGGLES the wheel rather than firing —
+    # a wheel needs seconds to reach speed, so holding a button for it through a
+    # match is not a thing anyone wants.
+    btn_shooter_spin: int = UNBOUND
 
     # --- routines on buttons (both halves must be set to do anything) ---
     # `btn_routine_N` is the button; `routine_N` is the id of the routine it
@@ -177,6 +201,7 @@ class ControllerMapping:
             (self.btn_waypoint, "mode:waypoint"),
             (self.btn_arm_shooter, "arm_shooter"),
             (self.btn_fire, "fire"),
+            (self.btn_shooter_spin, "shooter_spin"),
             # A half-filled slot — a button with no routine, or a routine with
             # no button — is dropped rather than bound to something arbitrary.
             # Pressing it does nothing, which is what the settings page says it
@@ -215,6 +240,10 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.axis_steer", "int", lo=0, hi=15),
     Param("controller.axis_l2", "int", lo=0, hi=15),
     Param("controller.axis_r2", "int", lo=0, hi=15),
+    # UNBOUND (the default) keeps the triggers driving; >= 0 moves throttle onto
+    # a stick axis, so unlike the two above this one has to reach UNBOUND.
+    Param("controller.axis_throttle", "int", lo=UNBOUND, hi=15),
+    Param("controller.invert_throttle", "bool"),
     Param("controller.trigger_rest", "float", lo=-1, hi=1),
     Param("controller.deadzone", "float", lo=0, hi=0.5),
     Param("controller.invert_steer", "bool"),
@@ -223,6 +252,10 @@ PARAMS: Tuple[Param, ...] = (
     # slower trainer mode than anyone wants.
     Param("controller.steer_gain", "float", lo=0.1, hi=1),
     Param("controller.throttle_gain", "float", lo=0.1, hi=1),
+    # Expo DOES reach 0 — that is "linear", the behaviour every build had
+    # before the curve existed, and it has to stay reachable.
+    Param("controller.steer_expo", "float", lo=0, hi=1),
+    Param("controller.throttle_expo", "float", lo=0, hi=1),
     Param("controller.btn_estop", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_clear", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_teleop", "int", lo=UNBOUND, hi=31),
@@ -231,6 +264,7 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.btn_waypoint", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_arm_shooter", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_fire", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_shooter_spin", "int", lo=UNBOUND, hi=31),
     # One (button, routine id) pair per slot. Generated rather than typed out
     # so ROUTINE_SLOTS is the only place the count lives.
     *(p for n in range(1, ROUTINE_SLOTS + 1) for p in (
