@@ -59,8 +59,10 @@ class PoseEstimator:
             # A typo here would silently pick a heading sensor you didn't mean,
             # so name it and fall back to the safe default rather than raising
             # (a bad env var must not stop the rover from booting).
-            print(f"[Pose] unknown heading_source {heading_source!r} — using 'auto' "
-                  f"(one of {', '.join(HEADING_SOURCES)})")
+            print(
+                f"[Pose] unknown heading_source {heading_source!r} — using 'auto' "
+                f"(one of {', '.join(HEADING_SOURCES)})"
+            )
             source = "auto"
         self.heading_source = source
         # Which sensor actually answered the last pose() call. False until one

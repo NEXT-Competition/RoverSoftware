@@ -238,6 +238,14 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # nobody bother doing. 0 metres disables distance estimates entirely.
     _f("vision.range_at_m", 0, 50),
     _f("vision.range_size", 0, 1),
+    # Fusing the ultrasonic into that estimate: answer with its metres when it
+    # is looking at the target, and learn the constant above from the pairs.
+    # Both live — they are switches you reach for while watching the distance
+    # readout disagree with a tape measure, which is not a moment to restart a
+    # service — and both inert on a build with no ultrasonic fitted.
+    _b("vision.sonar_range"),
+    _b("vision.auto_range"),
+    _i("vision.range_samples", 1, 50),
     _f("vision.hfov_deg", 10, 180),
     _f("vision.search_speed", 0, 1),
     _f("vision.target_timeout", 0.1, 10),
@@ -249,6 +257,29 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _t("vision.imx500_model", live=False),
     _f("vision.imx500_iou", 0, 1, live=False),
     _i("vision.imx500_max_detections", 1, 100, live=False),
+
+    # --- ultrasonic + collision avoidance ---
+    # The thresholds are all live, and that is the point: you find them by
+    # driving at a wall, watching where it stops, and nudging the number — a
+    # loop nobody completes if each attempt costs a service restart. `avoid` is
+    # live for a harder reason: it is the off switch, and the moment you want it
+    # is the moment the sensor is the thing misbehaving, in a field, with the
+    # rover refusing to go forward.
+    _b("ultrasonic.avoid"),
+    _f("ultrasonic.stop_m", 0.05, 4),
+    _f("ultrasonic.slow_m", 0.05, 4),
+    _f("ultrasonic.release_m", 0, 1),
+    _f("ultrasonic.min_m", 0.01, 1),
+    _f("ultrasonic.max_m", 0.1, 10),
+    _f("ultrasonic.interval", 0.02, 1),
+    _f("ultrasonic.max_age", 0.1, 5),
+    _i("ultrasonic.samples", 1, 9),
+    # Enabling the sensor and which pins it is on are owned by a constructor:
+    # the pins are claimed once, at start-up, and the reader thread is built
+    # around them. Same rule as `camera.enabled` and an encoder's pins.
+    _b("ultrasonic.enabled", live=False),
+    _i("ultrasonic.trig_pin", -1, 27, live=False),
+    _i("ultrasonic.echo_pin", -1, 27, live=False),
 
     # --- camera ---
     _b("camera.enabled", live=False),
@@ -299,6 +330,11 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("imu.heading_offset_deg", -180, 180),
     _b("imu.invert"),
     _i("imu.min_calib", 0, 3),
+    # How stale a reading may be and still count as the heading. The same idea
+    # as gps.fix_timeout, and live for the same reason: it is the knob you reach
+    # for when a rover on a noisy bus is flapping between heading sources, which
+    # is a thing you diagnose while it is happening. 0 disables the check.
+    _f("imu.sample_timeout", 0, 30),
     _b("imu.persist_calibration"),
     _b("imu.enabled", live=False),
     _i("imu.i2c_address", 0x08, 0x77, live=False),

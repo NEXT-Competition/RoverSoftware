@@ -21,6 +21,7 @@ from .control.manager import ControlManager
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
 from .control.ballistics import Ballistics
+from .control.collision import CollisionGuard
 from .control.rangefinder import Rangefinder
 from .control.routine_controller import RoutineController
 from .control.shooter_align import ShooterAlignController
@@ -38,6 +39,7 @@ from .sensors.fpv import FPVStreamer
 from .sensors.gps import GPS
 from .sensors.imx500 import IMX500Detector, resolve_backend
 from .sensors.pose import PoseEstimator
+from .sensors.ultrasonic import build_ultrasonic
 
 # Log a warning if a control tick's work (excluding the sleep) exceeds this. A
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
@@ -128,8 +130,17 @@ class Robot:
         # describes the camera and the target, not which loop is driving, and
         # two copies would be two things to re-calibrate. Built even when
         # controllers are injected, because _push_live_config re-calibrates it.
+        # Given an ultrasonic, it also stops being a guess: the sonar's metres
+        # answer directly whenever the target is centred in its beam, and every
+        # such frame is a free calibration pair that teaches the box-height
+        # constant for that label (see control/rangefinder.py). The sonar
+        # provider is wired below, once the sensor exists.
         self.rangefinder = Rangefinder(config.vision.range_at_m,
-                                       config.vision.range_size)
+                                       config.vision.range_size,
+                                       hfov_deg=config.vision.hfov_deg,
+                                       min_samples=config.vision.range_samples,
+                                       learn=config.vision.auto_range,
+                                       prefer_sonar=config.vision.sonar_range)
 
         # Metres -> flywheel speed, the other half of the same idea: the
         # rangefinder says how far away the bucket is, this says how hard to
@@ -234,9 +245,34 @@ class Robot:
         self.imu: Optional[IMU] = (
             IMU(config.imu.i2c_address, config.imu.heading_offset_deg,
                 config.imu.invert, config.imu.min_calib,
-                config.imu.persist_calibration)
+                config.imu.persist_calibration,
+                sample_timeout=config.imu.sample_timeout)
             if config.imu.enabled else None
         )
+
+        # Ultrasonic rangefinder: how far away the thing straight ahead is.
+        # Pings on its own thread; distance_m() is a cached lookup, so a ping
+        # that blocks for its echo timeout never lands inside a control tick.
+        # None on a build with no ultrasonic fitted, which is the default.
+        self.ultrasonic = build_ultrasonic(config.ultrasonic)
+
+        # Don't drive forward into it. Built whether or not there is a sensor —
+        # it holds the config object, so switching `avoid` off from the
+        # dashboard is live — and inert without one: no distance means no
+        # intervention, which is how it fails on every build that has never had
+        # an ultrasonic. Sits between the active controller and the drivetrain
+        # (see run()), so every mode gets it rather than each one re-deciding.
+        self.collision = CollisionGuard(
+            config.ultrasonic,
+            self.ultrasonic.distance_m if self.ultrasonic is not None else None)
+
+        # The second thing the ultrasonic is good for: telling the camera how
+        # far away things actually are. `stamped_m` rather than `distance_m`
+        # because pairing a distance with a FRAME needs to know when it was
+        # measured — the two sensors run at unrelated rates, and a reading from
+        # the wrong moment is a calibration sample that quietly lies.
+        if self.ultrasonic is not None:
+            self.rangefinder.set_sonar_provider(self.ultrasonic.stamped_m)
 
         # Fuse GPS position + heading behind one pose_provider (unchanged shape:
         # () -> (lat, lon, heading_deg)), so telemetry and the waypoint controller
@@ -324,6 +360,15 @@ class Robot:
                     c.set_detection_provider(self.detector.detection)
                     c.set_rate_provider(self.pose_estimator.heading_rate)
 
+        # How near an approach is allowed to get, whatever it was asked for: the
+        # collision guard clamps the command these controllers return, so a
+        # standoff inside its stop distance is unreachable. Told rather than
+        # enforced — the guard needs no help — so that the mismatch can be said
+        # out loud instead of presenting as a routine state that never finishes.
+        for c in controllers.values():
+            if isinstance(c, ObjectAlignController):
+                c.set_min_standoff(self._min_standoff())
+
         # The FSM's own sensing. Its conditions read the controllers' published
         # state (aligned, arrived, route_done) rather than re-deriving any of
         # it, so this is only what no controller owns: position and the latch.
@@ -361,6 +406,30 @@ class Robot:
         # Set by a restart asked for over the radio; read by run() on the way
         # out to decide what to tell the supervisor. See _request_restart.
         self._restarting = False
+
+    def _min_standoff(self) -> float:
+        """The nearest an approach can actually finish, given the guard.
+
+        0 when nothing is clamping — no ultrasonic, or avoidance switched off.
+        """
+        u = self.cfg.ultrasonic
+        return u.stop_m if (u.enabled and u.avoid) else 0.0
+
+    def _learn_range(self, cmd) -> None:
+        """Turn this tick's (box height, measured distance) into calibration.
+
+        Only on a build that has both sensors, and cheap enough for the loop:
+        two cached reads and a row of comparisons, with the work skipped
+        entirely unless the detector has produced a NEW frame since last time
+        (see Rangefinder.observe). The throttle goes with it because the vision
+        pipeline's latency is unknown and one-signed, so a sample taken while
+        moving is a sample biased in a consistent direction — and a bias is the
+        one error a median cannot filter out.
+        """
+        if self.detector is None or self.ultrasonic is None:
+            return
+        self.rangefinder.observe(self.detector.detection(),
+                                 throttle=(cmd.left + cmd.right) / 2.0)
 
     def _all_mechanisms(self) -> Dict[str, Mechanism]:
         """Layout mechanisms plus the built-in launcher, keyed by name."""
@@ -950,7 +1019,14 @@ class Robot:
         # Re-measured from the dashboard without a restart, which is the whole
         # point of a calibration you get right by parking the rover and reading
         # a number: the next frame uses the value you just typed.
-        self.rangefinder.calibrate(cfg.vision.range_at_m, cfg.vision.range_size)
+        # The hand-set pair, plus the lens it is a claim about. Learned fits are
+        # NOT dropped by this: they are measurements, and the pair is only the
+        # fallback for labels that have none.
+        self.rangefinder.calibrate(cfg.vision.range_at_m, cfg.vision.range_size,
+                                   hfov_deg=cfg.vision.hfov_deg)
+        self.rangefinder.learn = cfg.vision.auto_range
+        self.rangefinder.prefer_sonar = cfg.vision.sonar_range
+        self.rangefinder.min_samples = cfg.vision.range_samples
         # Wheel encoders, for exactly the same reason: counts-per-rev is a
         # number you get right by turning a wheel and typing what you counted,
         # and the speed-matching mode is switched on, watched, and switched off
@@ -979,6 +1055,12 @@ class Robot:
                 c.require_arm = cfg.shooter.require_arm
                 c.require_arrived = cfg.shooter.require_arrived
                 c.max_shots = cfg.shooter.max_shots
+            if isinstance(c, ObjectAlignController):
+                # Live, because `ultrasonic.stop_m` is: an operator who lowers
+                # the guard's threshold has just changed how near an approach
+                # can finish, and the warning about the two disagreeing should
+                # go quiet the moment they stop disagreeing.
+                c.set_min_standoff(self._min_standoff())
             if isinstance(c, WaypointController):
                 c.arrive_radius_m = cfg.nav.arrive_radius_m
                 c.cruise_speed = cfg.nav.cruise_speed
@@ -1010,9 +1092,20 @@ class Robot:
             self.imu.invert = cfg.imu.invert
             self.imu.min_calib = cfg.imu.min_calib
             self.imu.persist_calibration = cfg.imu.persist_calibration
+            self.imu.sample_timeout = cfg.imu.sample_timeout
         if self.gps is not None:
             self.gps.fix_timeout = cfg.gps.fix_timeout
             self.gps.min_move_mps = cfg.gps.min_move_mps
+        # The guard itself needs nothing pushed — it holds the config object, so
+        # its thresholds are already live. This is the sensor, which took a copy
+        # at construction the way the GPS and the IMU do. The pins are not here:
+        # they are claimed once, by a constructor, and are `live=False`.
+        if self.ultrasonic is not None:
+            self.ultrasonic.min_m = cfg.ultrasonic.min_m
+            self.ultrasonic.max_m = cfg.ultrasonic.max_m
+            self.ultrasonic.interval = cfg.ultrasonic.interval
+            self.ultrasonic.samples = cfg.ultrasonic.samples
+            self.ultrasonic.max_age = cfg.ultrasonic.max_age
 
     def _telemetry(self, cmd) -> dict:
         t = {
@@ -1041,11 +1134,16 @@ class Robot:
         # "it has 3 satellites under a tree".
         if self.gps is not None:
             t["gps"] = self.gps.telemetry()
-        # Surface IMU calibration (sys, gyro, accel, mag) so the base station can
-        # tell whether the heading is trustworthy or still falling back to the
-        # GPS track angle.
+        # Surface IMU calibration so the base station can tell whether the
+        # heading is trustworthy or still falling back to the GPS track angle.
+        #
+        # None once the sensor has gone quiet, rather than the last level it
+        # reported. A calibration reading is a claim about a heading, and there
+        # is no current heading to make it about — three pips beside a stale
+        # bearing is the dashboard being reassuring about a sensor that stopped
+        # answering, which is the exact failure sample_timeout exists to catch.
         if self.imu is not None:
-            t["imu_calib"] = self.imu.calibration()
+            t["imu_calib"] = self.imu.calibration() if self.imu.fresh() else None
         # Vision summary (target, error, size, fps) so the base station can see
         # what the model sees — this is what makes standoff tunable in the field.
         # A summary, never boxes or frames: the radio is 57600 baud and shared.
@@ -1057,9 +1155,25 @@ class Robot:
             # showing them together is what lets someone standing next to the
             # rover with a tape measure see the guess drift — and collect the
             # pairs a fitted model would need. ~8 bytes a frame.
-            distance = self.rangefinder.distance_m(t["vision"].get("size"))
+            detection = self.detector.detection()
+            distance = self.rangefinder.distance_for(detection)
             if distance is not None:
                 t["vision"]["dist"] = round(distance, 2)
+                # WHICH sensor said so, and how many samples the label's fit is
+                # standing on. Both are a few bytes and neither can be inferred
+                # from the distance: "0.80 m" measured by a transducer and
+                # "0.80 m" divided out of a constant somebody typed are
+                # different claims, and an operator deciding whether to believe
+                # one needs to know which they are looking at.
+                t["vision"].update(self.rangefinder.status(
+                    detection.label if detection is not None else ""))
+        # Distance to whatever is straight ahead, and what the collision guard
+        # is doing about it. Only on a build that has an ultrasonic, and tiny —
+        # a rounded distance and one short state word. `state` is the half that
+        # cannot be inferred from the distance: an operator whose rover has just
+        # stopped responding to forward needs to see WHY on the same frame.
+        if self.ultrasonic is not None:
+            t["sonar"] = self.collision.status(self.ultrasonic.telemetry())
         # Shooter state (armed, shots, dwelling, cooldown). Only while the mode
         # is active — an operator needs to see the arm latch before it matters,
         # and it's dropped on exit anyway, so there's nothing to report elsewhere.
@@ -1114,6 +1228,11 @@ class Robot:
             self.gps.start()
         if self.imu is not None:
             self.imu.start()
+        # After the ESCs are armed, deliberately: claiming the pins takes a
+        # moment and a failure here must not delay the drivetrain reaching
+        # neutral. A sensor that won't start says why and stays inert.
+        if self.ultrasonic is not None:
+            self.ultrasonic.start()
         # Camera before its consumers (detector, FPV) so frames are flowing when
         # they start; the detector is heaviest (it spawns the .eim subprocess, or
         # waits on the sensor's network upload). Only opened for a consumer that
@@ -1155,6 +1274,12 @@ class Robot:
                 self._expire_jog()
                 t1 = time.monotonic()
                 cmd = self.manager.update(dt)
+                # Between the controller and the drivetrain, on purpose: "do
+                # not drive into that" is not a belief any one mode should have
+                # to hold, and putting it here gives it to teleop, the autonomy
+                # modes and every routine at once. Untouched command on a build
+                # with no ultrasonic. See control/collision.py.
+                cmd = self.collision.apply(cmd)
                 # Unconditional, and deliberately outside the controller: a mode
                 # switch or an e-stop mid-shot stops update() from being called,
                 # and the servo must still retract instead of stalling against
@@ -1164,6 +1289,10 @@ class Robot:
                     mech.update()
                 t2 = time.monotonic()
                 self.drive.drive(cmd.left, cmd.right)
+                # After the motors, never before: this is bookkeeping about how
+                # far away things are, and nothing about it belongs in the path
+                # between a command and the wheels.
+                self._learn_range(cmd)
                 t3 = time.monotonic()
 
                 if self.cfg.telemetry_hz > 0 and (now - self._last_telem) >= 1.0 / self.cfg.telemetry_hz:
@@ -1220,3 +1349,5 @@ class Robot:
             self.gps.stop()
         if self.imu is not None:
             self.imu.stop()
+        if self.ultrasonic is not None:
+            self.ultrasonic.stop()

@@ -1,5 +1,10 @@
 import { selectedRobot } from "../net/ws.ts";
-import type { EncoderStatus, GpsStatus, VisionStatus } from "../net/types.ts";
+import type {
+  EncoderStatus,
+  GpsStatus,
+  SonarStatus,
+  VisionStatus,
+} from "../net/types.ts";
 
 function fmt(v: number | null | undefined, digits = 5): string {
   return v == null ? "—" : v.toFixed(digits);
@@ -15,10 +20,19 @@ function vision(v: VisionStatus): { text: string; color: string } {
   // size is null on FOMO models, which report centroids without a size.
   const size = v.size == null ? "n/a" : v.size.toFixed(2);
   const ex = v.ex == null ? "—" : (v.ex >= 0 ? "+" : "") + v.ex.toFixed(2);
-  return {
-    text: `${v.label} ${((v.conf ?? 0) * 100).toFixed(0)}% · ex ${ex} · size ${size}`,
-    color: "var(--ok)",
-  };
+  const parts = [
+    `${v.label} ${((v.conf ?? 0) * 100).toFixed(0)}%`,
+    `ex ${ex}`,
+    `size ${size}`,
+  ];
+  // A tilde means INFERRED — box height divided by a constant — and a bare
+  // number means the ultrasonic measured it. One character, because the
+  // difference decides whether this is something to drive on or something to
+  // sanity-check, and there is no room on a 57600-baud radio for a legend.
+  if (v.dist != null) {
+    parts.push(`${v.src === "v" ? "~" : ""}${v.dist.toFixed(2)} m`);
+  }
+  return { text: parts.join(" · "), color: "var(--ok)" };
 }
 
 /**
@@ -87,6 +101,38 @@ function encoders(e: EncoderStatus): { text: string; color: string } {
   return { text, color };
 }
 
+/**
+ * The ultrasonic, and what the collision guard is doing with it.
+ *
+ * The STATE leads, not the distance, because that is the question an operator
+ * actually has: a rover that has stopped answering the forward stick needs to
+ * say why on the row you were already looking at. "0.28 m" alone leaves you to
+ * remember what the stop distance was set to.
+ *
+ * The awkward case is a missing distance, which means two opposite things —
+ * nothing is in range, or nothing is listening. `mute` is the robot's own
+ * verdict on that (it has pinged and never once heard an echo), and it is
+ * coloured as the fault it almost always is, because a silent sensor on a rover
+ * whose driver believes it is protected is worse than no sensor at all.
+ */
+function sonar(s: SonarStatus): { text: string; color: string } {
+  if (s.off) return { text: "not running", color: "var(--muted)" };
+  if (s.mute) {
+    return { text: "no echo since boot — check the wiring", color: "var(--danger)" };
+  }
+  const distance = s.d == null ? "clear" : `${s.d.toFixed(2)} m`;
+  if (s.state === "stop") {
+    return { text: `${distance} · HOLDING`, color: "var(--danger)" };
+  }
+  if (s.state === "slow") return { text: `${distance} · slowing`, color: "var(--warn)" };
+  if (s.state === "off") {
+    // Fitted and reporting, but not allowed to intervene. Said plainly rather
+    // than left to be inferred from a distance that never does anything.
+    return { text: `${distance} · avoidance off`, color: "var(--muted)" };
+  }
+  return { text: distance, color: "var(--ok)" };
+}
+
 /** BNO085 fused-orientation calibration, 0-3. Below the robot's configured
  *  minimum the heading isn't trusted and navigation falls back to the GPS
  *  track angle — which only exists while moving. Worth a glance before a run. */
@@ -121,6 +167,7 @@ export function Telemetry() {
   const v = r.vision ? vision(r.vision) : null;
   const g = r.gps ? gps(r.gps) : null;
   const e = r.enc ? encoders(r.enc) : null;
+  const s = r.sonar ? sonar(r.sonar) : null;
   return (
     <div class="telemetry">
       <Row k="mode">
@@ -136,6 +183,10 @@ export function Telemetry() {
           wheel mismatch turns into a heading that drifts off the line you
           asked for, so these are the rows you read together. */}
       {e && <Row k="wheels" color={e.color}>{e.text}</Row>}
+      {/* Directly under the wheels: both rows answer "why is the rover not
+          doing what I asked?", and this is the one that can be answering it
+          on purpose. */}
+      {s && <Row k="ahead" color={s.color}>{s.text}</Row>}
       <Row k="battery">{r.battery == null ? "—" : r.battery.toFixed(1) + "%"}</Row>
       {v && <Row k="vision" color={v.color}>{v.text}</Row>}
       <Row k="link" color={r.online ? "var(--ok)" : "var(--danger)"}>

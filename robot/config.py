@@ -324,11 +324,99 @@ class IMUConfig:
     # Minimum fused-orientation calibration level (0-3) before we trust the
     # heading. Below this, heading() returns None and the fusion falls back to GPS.
     min_calib: int = 1
+    # How stale a reading may be and still count as the robot's heading. Past
+    # this, heading() and yaw_rate() return None and navigation falls back to
+    # the GPS course — the same idea as gps.fix_timeout, and needed for a
+    # sharper reason: the IMU reader survives bus errors by retrying, so a
+    # sensor that has stopped answering looks exactly like one reporting a
+    # heading that happens not to be changing. 0 disables the check and restores
+    # the old behaviour of trusting the last reading indefinitely.
+    #
+    # Not tighter than a second or so on purpose: heading source is not a free
+    # switch (the waypoint controller runs different gains on an absolute
+    # heading than on a GPS course), so flapping on every bus hiccup would be
+    # its own bug. See sensors/bno085.py::DEFAULT_SAMPLE_TIMEOUT.
+    sample_timeout: float = 2.0
     # Run the sensor's dynamic calibration and save it to the BNO08x's own flash
     # once it converges, so the board boots calibrated. The chip persists this
     # itself — there is no offsets file to manage (the BNO055 needed one because it
     # forgot its calibration on every power cycle). False disables auto-save.
     persist_calibration: bool = True
+
+
+@dataclass
+class UltrasonicConfig:
+    """An HC-SR04-style ultrasonic rangefinder, and the stop it can enforce.
+
+    Two Fusion HAT DIGITAL pins (BCM GPIO numbers, the same numbering as
+    `MotorConfig.encoder_a` and NOT the HAT's PWM channels): TRIG is pulsed,
+    ECHO comes back high for as long as the sound took to make the round trip.
+    See sensors/ultrasonic.py for the measurement and control/collision.py for
+    what the number is used for.
+
+    OFF by default. A stock chassis has no ultrasonic fitted, and enabling it
+    claims two pins — which on a build that wired something else to them is a
+    conflict, not a feature.
+
+    --- what an ultrasonic can and cannot see ---
+    It measures the distance to the nearest thing directly in front of the
+    transducer, in a cone of roughly 15 degrees, and it is honest about hard
+    flat obstacles a rover would otherwise hit: walls, boxes, table legs at
+    close range. It is blind to a surprising amount besides — sound-absorbing
+    fabric, anything angled steeply enough to bounce the ping away rather than
+    back, a table edge above the beam, a drop in front of the wheels. So
+    `avoid` below is a last-resort backstop for the obstacle class it does see,
+    not a licence to stop looking where you are driving.
+    """
+
+    enabled: bool = False
+    # BCM GPIO pins. -1 on either disables the sensor as surely as `enabled`,
+    # which is what makes "no pins configured" a safe half-edited state.
+    trig_pin: int = 27
+    echo_pin: int = 22
+
+    # --- measurement ---
+    # Seconds between pings. The HC-SR04's datasheet asks for at least 60 ms so
+    # the previous burst has died away; faster and one ping's echo is timed
+    # against the next ping's start, which reads as an obstacle that is not
+    # there. 15 Hz is already several samples inside a rover's stopping
+    # distance, so there is nothing to win by pushing it.
+    interval: float = 0.06
+    # Readings outside this band are discarded rather than believed. Below
+    # min_m the transducer is still ringing from its own burst; above max_m the
+    # echo is too weak to be the thing it claims to be. Both are the module's
+    # published limits, not a preference.
+    min_m: float = 0.03
+    max_m: float = 4.0
+    # A reading older than this is not a reading. It covers the reader thread
+    # dying and the sensor being unplugged, and it is why a stale distance can
+    # never keep the drivetrain clamped after the sensor stops answering.
+    max_age: float = 0.5
+    # Median filter width, in samples. An ultrasonic's characteristic failure is
+    # a single wildly short reading — a stray echo off the floor or off another
+    # robot's sensor — and a median of three throws that away at the cost of one
+    # ping of latency. 1 disables filtering.
+    samples: int = 3
+
+    # --- collision avoidance (control/collision.py) ---
+    # False = measure only: the distance still reaches telemetry and routines,
+    # and nothing is ever clamped. The escape hatch for an operator who wants
+    # the readout without the intervention, and live, so it can be switched off
+    # from the dashboard mid-match when the sensor is the thing misbehaving.
+    avoid: bool = True
+    # Forward motion is refused inside this distance. Measured from the FACE OF
+    # THE TRANSDUCER, so a sensor mounted behind the bumper wants a larger
+    # number by however far it sits back. Tune it against how long the rover
+    # actually takes to stop at cruise, not against how close you want it.
+    stop_m: float = 0.35
+    # Forward throttle is scaled down between here and stop_m, reaching zero at
+    # stop_m. Set it at or below stop_m for a hard stop with no run-in, which is
+    # harsher on the drivetrain and easier to reason about.
+    slow_m: float = 0.90
+    # Hysteresis. Once stopped, forward is allowed again only past
+    # stop_m + release_m. Without it, a rover sitting exactly at the threshold
+    # with a noisy reading alternates between stopped and creeping every tick.
+    release_m: float = 0.10
 
 
 @dataclass
@@ -456,8 +544,34 @@ class VisionConfig:
     # every distance the dashboard shows is a guess with two significant figures
     # of false confidence. Set range_at_m to 0 to disable metre estimates
     # entirely and keep everything in box-height units.
+    #
+    # A rover with an ultrasonic fitted can replace them by itself; see the two
+    # switches below. These stay as the fallback for every label it has not yet
+    # seen from a measurable distance.
     range_at_m: float = 1.0
     range_size: float = 0.45
+
+    # --- the ultrasonic, where this build has one (sensors/ultrasonic.py) -----
+    # Both are inert without one, so both default on: they cost a build with no
+    # sonar nothing at all, and a build with one is strictly better off.
+    #
+    # Answer with the SONAR's metres when it can be justified as looking at the
+    # detected target — centred in the beam, in range, and measured at the same
+    # moment as the frame (control/rangefinder.py has the gates). A measurement
+    # beats an inference from a constant, and it is what lets a FOMO model —
+    # which reports no box height at all — approach and hold a standoff for the
+    # first time. Off leaves every distance coming from the box height.
+    sonar_range: bool = True
+    # LEARN the box-height constant from those same pairs, per object label, so
+    # the camera goes on reporting real metres past the sonar's few. This is the
+    # tape-measure calibration above, done continuously and without the tape.
+    # Off if you would rather trust one number you set by hand.
+    auto_range: bool = True
+    # Pairs before a learned fit is believed. Each one has already survived a
+    # row of gates and the fit is their median, so this does not need to be
+    # large — and a large one is a rover that drives past the only distances it
+    # could have learned anything from.
+    range_samples: int = 8
     search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
 
 
@@ -681,6 +795,9 @@ class RobotConfig:
     imu: IMUConfig = field(default_factory=IMUConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
+    # Ultrasonic rangefinder + the collision guard it feeds. Off unless this
+    # build has one fitted; see UltrasonicConfig.
+    ultrasonic: UltrasonicConfig = field(default_factory=UltrasonicConfig)
     fpv: FPVConfig = field(default_factory=FPVConfig)
     shooter: ShooterConfig = field(default_factory=ShooterConfig)
     # How hard to throw, given how far away the thing is. Off until measured;

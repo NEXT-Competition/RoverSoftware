@@ -379,7 +379,29 @@ export const ROBOT_GROUPS: Group[] = [
         help: "Distance calibration, part one. Park the rover a tape-measured distance from the target and put that distance here. 0 disables distance estimates — routines that name a stop distance then fall back to Standoff size.",
       }),
       f("vision.range_size", "Range: box size there", 0, 1, 0.01, {
-        help: "Part two: the box height telemetry showed at that distance. These two numbers are the whole range model (distance × size is constant), so both are guesses until you measure them — the shipped pair is a placeholder that assumes 0.45 at 1 m.",
+        help: "Part two: the box height telemetry showed at that distance. These two numbers are the whole range model (distance × size is constant), so both are guesses until you measure them — the shipped pair is a placeholder that assumes 0.45 at 1 m. A rover with an ultrasonic can measure them itself; see the two switches below.",
+      }),
+      b("vision.sonar_range", "Range from the ultrasonic", {
+        help:
+          "Answer with the ultrasonic's metres when it can be shown to be " +
+          "looking at the detected target — centred in its beam, in range, " +
+          "measured at the same moment as the frame. A measurement beats " +
+          "dividing a box height by a constant, and it is what lets a FOMO " +
+          "model (no box height at all) approach and hold a standoff.",
+      }),
+      b("vision.auto_range", "Learn the range constant", {
+        help:
+          "Turn those same pairs into the calibration above, per object " +
+          "label, so the camera keeps reporting real metres well past the " +
+          "sonar's few. The `kn` count in the vision row is how many samples " +
+          "the current label is standing on. Learned fits live in memory: the " +
+          "robot logs the pair to write down here if you want it kept.",
+      }),
+      i("vision.range_samples", "Samples before trusting a fit", 1, 50, {
+        help:
+          "Each sample has already survived a row of gates and the fit is " +
+          "their median, so this does not need to be large — and a large one " +
+          "is a rover that drives past the only distances it could learn from.",
       }),
       f("vision.hfov_deg", "Horizontal FOV", 10, 180, 1, {
         unit: "°",
@@ -520,6 +542,80 @@ export const ROBOT_GROUPS: Group[] = [
     ],
   },
   {
+    title: "Ultrasonic and collision avoidance",
+    blurb:
+      "An ultrasonic module measures the distance to whatever is straight " +
+      "ahead, and the robot refuses forward motion inside the stop distance — " +
+      "in every mode, teleop included. Reverse and steering are never " +
+      "limited, so backing away and turning away are always available. It is " +
+      "a backstop for hard obstacles it can actually hear: soft or steeply " +
+      "angled surfaces bounce the ping away, the beam is a narrow cone, and " +
+      "it cannot see a drop in front of the wheels.",
+    fields: [
+      b("ultrasonic.avoid", "Avoid obstacles", {
+        help:
+          "Off measures without intervening: the distance still reaches the " +
+          "dashboard and nothing is ever overruled. This is the switch to " +
+          "reach for when the sensor itself is the thing misbehaving.",
+      }),
+      f("ultrasonic.stop_m", "Stop distance", 0.05, 4, 0.01, {
+        unit: "m",
+        help:
+          "Forward motion is refused inside this. Measure it: drive at a wall " +
+          "at cruise, see how far past the command the rover travels, and add " +
+          "however far the module sits behind the bumper.",
+      }),
+      f("ultrasonic.slow_m", "Slow-down distance", 0.05, 4, 0.01, {
+        unit: "m",
+        help:
+          "Forward throttle scales down from here to zero at the stop " +
+          "distance. Set it at or below the stop distance for a hard stop " +
+          "with no run-in.",
+      }),
+      f("ultrasonic.release_m", "Release margin", 0, 1, 0.01, {
+        unit: "m",
+        help:
+          "Extra clearance needed before forward is allowed again. Without " +
+          "it, a rover parked on the threshold switches its throttle on and " +
+          "off every tick as the reading jitters.",
+      }),
+      i("ultrasonic.samples", "Median samples", 1, 9, {
+        help:
+          "Filter width. An ultrasonic's characteristic fault is one wildly " +
+          "short reading between good ones; 3 discards it for one ping of lag.",
+      }),
+      f("ultrasonic.max_m", "Max range", 0.1, 10, 0.1, {
+        unit: "m",
+        help: "Echoes further away are ignored. 4 m is an HC-SR04's honest ceiling.",
+      }),
+      f("ultrasonic.min_m", "Min range", 0.01, 1, 0.01, {
+        unit: "m",
+        help: "Below this the transducer is still ringing from its own burst.",
+      }),
+      f("ultrasonic.interval", "Ping interval", 0.02, 1, 0.01, {
+        unit: "s",
+        help:
+          "The datasheet asks for at least 60 ms so the last burst has died " +
+          "away. Faster, and one ping's echo is timed against the next.",
+      }),
+      f("ultrasonic.max_age", "Reading timeout", 0.1, 5, 0.1, {
+        unit: "s",
+        help:
+          "A reading older than this is discarded, so a sensor that stops " +
+          "answering decays to no reading instead of looking current forever.",
+      }),
+      b("ultrasonic.enabled", "Ultrasonic fitted", { live: false }),
+      i("ultrasonic.trig_pin", "TRIG pin", -1, 27, {
+        live: false,
+        help: "HAT digital pin (BCM), not a PWM channel. -1 = none.",
+      }),
+      i("ultrasonic.echo_pin", "ECHO pin", -1, 27, {
+        live: false,
+        help: "HAT digital pin (BCM). Do not wire 5 V ECHO straight to a Pi pin.",
+      }),
+    ],
+  },
+  {
     title: "IMU",
     fields: [
       f("imu.heading_offset_deg", "Heading offset", -180, 180, 0.5, {
@@ -531,6 +627,15 @@ export const ROBOT_GROUPS: Group[] = [
       }),
       i("imu.min_calib", "Min calibration", 0, 3, {
         help: "Below this the heading isn't trusted and the fusion falls back to GPS.",
+      }),
+      f("imu.sample_timeout", "Reading timeout", 0, 30, 0.5, {
+        unit: "s",
+        help:
+          "Drop the heading after this long without a valid reading, so a " +
+          "sensor that has stopped answering hands navigation back to the GPS " +
+          "course instead of steering on the last bearing it ever read. Raise " +
+          "it if a noisy I²C bus makes the rover flap between the two; 0 " +
+          "disables the check entirely.",
       }),
       b("imu.persist_calibration", "Save calibration", {
         help: "Let the BNO08x save its converged calibration to its own flash.",

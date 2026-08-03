@@ -567,6 +567,26 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   no calibration — so the rover navigates without an IMU; the BNO085 is still
   preferred when present, because a track angle is meaningless standing still.
   Choose with `--heading-source auto|gps|imu`. Bring-up: `tools/gps_monitor.py`.
+- **Collision avoidance** — ✅ done: an ultrasonic on two HAT digital pins
+  (`RS_ULTRASONIC_PINS=27,22`) measures what is straight ahead, and the robot
+  scales forward throttle down from `slow_m` and refuses it inside `stop_m` — in
+  *every* mode, teleop included, because the guard sits between the active
+  controller and the drivetrain rather than inside any one of them. Reverse and
+  steering are never limited, so backing away and turning away are always
+  available. It fails **open**: a sensor that hears nothing sounds exactly like a
+  clear path, so silence never stops the rover, and the dashboard says when it
+  believes that silence is a wiring fault. Bring-up and stop-distance
+  calibration: `tools/ultrasonic_monitor.py`.
+- **The sonar calibrates the camera** — ✅ done: vision turns box height into
+  metres through one constant that folds in the object's real height, which is
+  why the shipped pair is a placeholder. Every frame where the detected target
+  is centred in the ultrasonic's beam and inside its range is a free
+  `(box height, measured distance)` pair, so the rover fits that constant
+  itself, **per label**, and then reports real metres well past the sonar's 4 m
+  — the sonar teaches, the camera extrapolates. While the target is close and
+  ahead the distance is *measured* rather than inferred (the dashboard marks
+  which), and that is also what lets a FOMO model — centroids, no box height at
+  all — approach and hold a standoff for the first time.
 - **FPV live video** — ✅ done: the robot streams its camera as JPEG-over-UDP to
   the base station, which serves it as browser-native MJPEG in the dashboard's
   Camera panel. When a model is loaded, detection boxes are drawn onto the feed

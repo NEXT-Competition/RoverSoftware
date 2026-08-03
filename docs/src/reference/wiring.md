@@ -158,6 +158,83 @@ toward zero. `match` needs no calibration at all and only acts while you are
 driving straight; `velocity` also works in turns but first wants **Max wheel
 RPM**, which you get by driving flat out and reading that same row.
 
+## Ultrasonic and collision avoidance (optional)
+
+An HC-SR04-style module on two of the HAT's **digital** pins — same BCM
+numbering as the encoders, still not the PWM channels. The robot measures the
+distance straight ahead and refuses forward motion inside a stop distance, in
+every mode including teleop. Reverse and steering are never limited, so backing
+away and turning away are always available.
+
+**Wiring.** The module needs **5 V** to transmit, and its ECHO output drives 5 V
+— which a Pi GPIO is not tolerant of. Use the Fusion HAT's own ultrasonic port,
+or a divider on ECHO. Straight onto a bare GPIO pin is how that pin dies.
+
+```bash
+# prove it, and size the stop distance
+python tools/ultrasonic_monitor.py --pins 27,22
+#    wave a book in front of it and watch the distance track. A reading that
+#    never appears is a sensor that is not wired — NOT a room with nothing in
+#    it. The two look identical to the sensor, which is the whole difficulty.
+```
+
+Then set the pins in `robot.env` (`RS_ULTRASONIC_PINS=27,22`) or in
+**Settings → Ultrasonic**, and restart — pins are claimed at start-up, like PWM
+channels. The driving view grows an `ahead` row showing the distance and what
+the guard is doing about it: `clear`, `slowing`, or `HOLDING`.
+
+**Measure the stop distance rather than guessing it.** Drive at a wall at the
+speed the rover actually runs at, see how far past the command it travels, and
+add however far the module sits behind the bumper. Forward throttle scales down
+from **Slow-down distance** to zero at **Stop distance**; a rover that stops
+dead from cruise is one you can tip onto its nose.
+
+**What it cannot see**, because this is a backstop and not a licence: soft or
+steeply angled surfaces bounce the ping away rather than back, the beam is a
+~15° cone straight ahead, and it has nothing to say about a table edge above it
+or a drop in front of the wheels. It also fails **open** — a sensor that stops
+answering sounds exactly like a clear path, so the robot keeps driving rather
+than stranding itself in a field. The `ahead` row turns red and says
+`no echo since boot` when it believes the silence is a wiring fault.
+
+Switch **Avoid obstacles** off to keep the readout without the intervention.
+That one is live, which is the point: the moment you want it is the moment the
+sensor is the thing misbehaving.
+
+### It also calibrates the camera's distances
+
+The vision stack estimates distance from bounding-box height through one
+constant — `distance × size = k` — and `k` folds in how tall the object really
+is, so the shipped pair is a placeholder rather than a measurement.
+
+With an ultrasonic fitted, the rover fills it in itself. Every frame where the
+target is centred in the sonar's beam and inside its range is a free
+`(box height, measured distance)` pair, and the median of a handful of them is
+`k` **for that label**. Two things follow:
+
+- Distances become *measured* while the target is close and ahead. The vision
+  row shows `1.42 m`; an inferred one shows `~1.42 m`, and `kn` counts the
+  samples behind the current label's fit.
+- Once a fit exists the camera keeps reporting real metres **past** the sonar's
+  4 m, which is the whole point — the sonar teaches, the camera extrapolates.
+
+It is fussy about what it learns from, deliberately: the target must be inside
+the beam, the box must not touch a frame edge, the two readings must be from the
+same moment, and the rover must be barely moving. A pair that disagrees wildly
+with an established fit is treated as the sonar finding something nearer than
+the target, which in a cluttered room it usually is.
+
+Learned fits live in memory. When one converges the robot logs the
+`vision.range_at_m` / `vision.range_size` pair to write down if you want it to
+survive a restart:
+
+```
+[Range] calibrated 'bucket' from the ultrasonic: k=0.412 (8 samples).
+```
+
+Switch either half off under **Settings → Vision** (*Range from the ultrasonic*,
+*Learn the range constant*). A build with no ultrasonic is unaffected by both.
+
 ## The tools
 
 | Tool | What it is for |
@@ -165,9 +242,10 @@ RPM**, which you get by driving flat out and reading that same row.
 | `servo_sweep.py` | Raw servo sweep — the Fusion HAT hello-world |
 | `esc_calibrate.py` | Interactive single-channel ESC bring-up |
 | `encoder_monitor.py` | Encoder bring-up, and the counts-per-rev measurement |
+| `ultrasonic_monitor.py` | Ultrasonic bring-up, and the stop-distance calibration |
 | `xbee_monitor.py` | Watch and inject XBee frames to prove the link |
 | `gps_monitor.py` | GPS bring-up: fix quality, track angle |
-| `imu_monitor.py` | BNO085 heading and calibration status |
+| `imu_monitor.py` | BNO085 heading and calibration status, and an I²C bus audit (`--seconds 60`) |
 | `imu_selftest.py` | Confirms the IMU answers and calibrates |
 | `detector_selftest.py` | Vision bring-up and standoff calibration, either backend |
 | `fetch_tiles.py` | Build an offline `.mbtiles` cache before you lose signal |

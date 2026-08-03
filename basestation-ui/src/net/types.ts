@@ -24,6 +24,17 @@ export interface VisionStatus {
   ex?: number; // horizontal error, -1..1 (0 = centered)
   size?: number | null; // bbox height fraction; null on FOMO (no size available)
   age?: number; // seconds since this detection
+  dist?: number; // metres to the target; absent when nothing can estimate one
+  /** Where `dist` came from — "s" = MEASURED by the ultrasonic (the target was
+   *  centred in its beam and in range), "v" = inferred from the box height and
+   *  a calibration constant. Different claims, and an operator deciding whether
+   *  to believe the number needs to know which one they are reading. */
+  src?: "s" | "v" | (string & {});
+  /** How many sonar-measured samples the box-height constant for this label is
+   *  standing on (robot/control/rangefinder.py). Absent until the rover has
+   *  seen this label from a distance it could measure. Watch it climb: that is
+   *  the camera being taught what "one metre" looks like for this object. */
+  kn?: number;
 }
 
 /** Shooter state, present only while shooter_align is the active mode
@@ -65,6 +76,28 @@ export interface EncoderStatus {
    *  encoder is unplugged or the wheel is stalled. Latched on the robot until
    *  the drivetrain stops, and the loop is open until then. */
   fault?: string;
+}
+
+/** The ultrasonic and the collision guard built on it
+ *  (robot/sensors/ultrasonic.py + robot/control/collision.py::status).
+ *
+ *  Absent on a build with no ultrasonic fitted, which is the default.
+ *
+ *  Read `d` and `mute` together, because a missing distance means TWO different
+ *  things and the difference is the whole sensor: an ultrasonic hears nothing
+ *  when the path is clear AND when it is unplugged. No `d` normally means
+ *  nothing is within range; no `d` WITH `mute` means the robot has pinged it
+ *  since start-up and never once heard an echo, which is a wiring fault wearing
+ *  a clear road's clothes. */
+export interface SonarStatus {
+  d?: number; // metres to the nearest thing ahead; absent = no echo
+  /** What forward motion would get right now. "off" = avoidance disabled (or
+   *  measuring only), "clear" = unrestricted, "slow" = forward is being scaled
+   *  down, "stop" = forward is refused. Reverse and steering are never limited
+   *  in any of these states. */
+  state: "off" | "clear" | "slow" | "stop" | (string & {});
+  mute?: boolean; // pinging, but has never heard an echo — suspect the wiring
+  off?: boolean; // the reader isn't running (no HAT library, or it wouldn't start)
 }
 
 /** One step of a PID loop (robot/control/pid.py::trace).
@@ -125,6 +158,7 @@ export interface Robot {
   mech?: Record<string, MechStatus> | null; // absent unless the layout has any
   routine?: RoutineStatus | null; // absent unless `routine` is active
   enc?: EncoderStatus | null; // absent unless the build has wheel encoders
+  sonar?: SonarStatus | null; // absent unless the build has an ultrasonic fitted
   /** Live closed-loop traces, keyed by the loop's own tuning path
    *  ("align.pid", "nav.heading_pid"). Absent unless the robot has
    *  `nav.pid_trace` switched on AND is in a mode that runs a loop. */

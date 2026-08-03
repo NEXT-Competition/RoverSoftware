@@ -20,7 +20,9 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_BALLISTICS_ANGLE/LAUNCH_H/TARGET_H/WHEEL_D/TRANSFER/MAX_RPM/IDLE_POWER,
     RS_ROUTINE_ALLOW_ARM/STATE_TIMEOUT,
     RS_ENCODER_LEFT/RIGHT ("A,B" BCM pins), RS_ENCODER_CPR,
-    RS_ENCODER_LEFT_INVERT/RIGHT_INVERT, RS_TRIM_MODE, RS_TRIM_MAX_RPM
+    RS_ENCODER_LEFT_INVERT/RIGHT_INVERT, RS_TRIM_MODE, RS_TRIM_MAX_RPM,
+    RS_ULTRASONIC_PINS ("TRIG,ECHO" BCM pins — setting them fits the sensor),
+    RS_ULTRASONIC_ENABLED/AVOID/STOP_M/SLOW_M/MAX_M
 
 Two files are read after all of that, in this order:
 
@@ -60,20 +62,22 @@ from robot.config import RobotConfig
 from robot.robot import Robot
 
 
-def _encoder_pins(value: str) -> tuple:
+def _pin_pair(value: str, what: str = "encoder",
+              example: str = "17,27") -> tuple:
     """Parse an "A,B" pair of BCM pins, or (-1, -1) if it is unusable.
 
     Never raises. This runs at boot from a file somebody edited over SSH, and a
-    typo in an encoder pin must cost you closed-loop speed, not the rover.
+    typo in a pin must cost you one sensor — closed-loop speed, or the collision
+    guard — rather than the rover.
     """
     try:
         a, b = (int(part.strip()) for part in value.split(","))
     except ValueError:
-        print(f"[Robot] ignoring encoder pins {value!r}: expected two BCM pin "
-              "numbers, e.g. 17,27")
+        print(f"[Robot] ignoring {what} pins {value!r}: expected two BCM pin "
+              f"numbers, e.g. {example}")
         return (-1, -1)
     if a == b:
-        print(f"[Robot] ignoring encoder pins {value!r}: A and B must differ")
+        print(f"[Robot] ignoring {what} pins {value!r}: the two pins must differ")
         return (-1, -1)
     return (a, b)
 
@@ -88,7 +92,7 @@ def _apply_encoder_env(cfg: RobotConfig) -> None:
         motor = cfg.drive.actuators.get(names[0])
         if motor is None:
             continue
-        motor.encoder_a, motor.encoder_b = _encoder_pins(raw)
+        motor.encoder_a, motor.encoder_b = _pin_pair(raw)
         motor.encoder_cpr = float(os.environ.get("RS_ENCODER_CPR",
                                                  motor.encoder_cpr))
         motor.encoder_invert = os.environ.get(
@@ -97,6 +101,50 @@ def _apply_encoder_env(cfg: RobotConfig) -> None:
     cfg.drive.trim.mode = os.environ.get("RS_TRIM_MODE", cfg.drive.trim.mode)
     cfg.drive.trim.max_rpm = float(
         os.environ.get("RS_TRIM_MAX_RPM", cfg.drive.trim.max_rpm))
+
+
+def _apply_ultrasonic_env(cfg: RobotConfig) -> None:
+    """Fit the ultrasonic and set the collision thresholds from robot.env.
+
+    Env-only, like the encoders and for the same reason: a stock build has no
+    layout to edit yet, and "set two pins in robot.env, walk the rover at a
+    wall, watch it stop" is how you find out whether the module is wired at all.
+    Anything saved from the settings page still wins, because tuning is applied
+    after this.
+    """
+    u = cfg.ultrasonic
+    raw = os.environ.get("RS_ULTRASONIC_PINS", "").strip()
+    if raw:
+        u.trig_pin, u.echo_pin = _pin_pair(raw, "ultrasonic", "27,22")
+    # Fitted, unless the pins were unusable. Stated in that order so a typo in
+    # the pins can't leave a "sensor" that is enabled and pointing at nothing:
+    # a rover with a broken guard should behave exactly like one with no guard.
+    u.enabled = os.environ.get(
+        "RS_ULTRASONIC_ENABLED", "1" if raw else "").strip().lower() in (
+            "1", "true", "yes", "on")
+    if u.enabled and (u.trig_pin == -1 or u.echo_pin == -1):
+        print("[Robot] ultrasonic disabled: no usable RS_ULTRASONIC_PINS")
+        u.enabled = False
+    # Applied after the layout and the encoder env on purpose, so this can see
+    # every pin already spoken for. Two claimants on one line is not an error
+    # either library reports — it is an encoder that counts nothing, or a sensor
+    # that hears nothing, discovered days later. The ultrasonic loses, because
+    # the encoder was configured first and feeds a control loop.
+    if u.enabled:
+        taken = {pin: a.name or name
+                 for name, a in cfg.drive.actuators.items()
+                 for pin in (a.encoder_a, a.encoder_b) if pin != -1}
+        clash = [p for p in (u.trig_pin, u.echo_pin) if p in taken]
+        if clash:
+            print(f"[Robot] ultrasonic disabled: GPIO "
+                  f"{', '.join(str(p) for p in clash)} already belongs to the "
+                  f"{taken[clash[0]]!r} encoder. One pin cannot serve both.")
+            u.enabled = False
+    u.avoid = os.environ.get(
+        "RS_ULTRASONIC_AVOID", "1").strip().lower() in ("1", "true", "yes", "on")
+    u.stop_m = float(os.environ.get("RS_ULTRASONIC_STOP_M", u.stop_m))
+    u.slow_m = float(os.environ.get("RS_ULTRASONIC_SLOW_M", u.slow_m))
+    u.max_m = float(os.environ.get("RS_ULTRASONIC_MAX_M", u.max_m))
 
 
 def main():
@@ -313,6 +361,11 @@ def main():
     # over both, because it is applied last.
     _apply_encoder_env(cfg)
 
+    # The ultrasonic and its collision guard, applied here for the same reason
+    # and in the same spirit: two pins in robot.env are the whole fitting, and a
+    # value saved from the settings page still wins over them.
+    _apply_ultrasonic_env(cfg)
+
     # Values tuned from the base station's settings page, saved on this robot.
     # Applied LAST, on purpose: they are the operator's most recent deliberate
     # decision, and the paths they can touch (gains, speeds, limits) are
@@ -347,10 +400,20 @@ def main():
     wired = [a.name for a in cfg.drive.actuators.values() if a.encoder_a != -1]
     encoders = (f"{len(wired)} ({cfg.drive.trim.mode})" if wired
                 else "none")
+    if not cfg.ultrasonic.enabled:
+        sonar = "off"
+    else:
+        # The thresholds, not just "on": a guard that stops the rover is
+        # something you want to see the numbers of in the journal, since the
+        # first symptom of a bad one is a rover that won't drive forward.
+        sonar = (f"{cfg.ultrasonic.trig_pin}/{cfg.ultrasonic.echo_pin} "
+                 + (f"stop@{cfg.ultrasonic.stop_m:.2f}m"
+                    if cfg.ultrasonic.avoid else "measure-only"))
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "
           f"mode={cfg.start_mode} motors={motors} gps={gps} imu={imu} "
           f"heading={cfg.heading_source} vision={vision} "
-          f"fpv={fpv} shooter={shooter} encoders={encoders} bulk={bulk}")
+          f"fpv={fpv} shooter={shooter} encoders={encoders} "
+          f"sonar={sonar} bulk={bulk}")
     # The exit status is the whole mechanism behind "restart from the base
     # station": run() returns robot.EXIT_RESTART when it was asked to come back,
     # and systemd's Restart= policy is what actually starts the new process.

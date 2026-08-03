@@ -155,7 +155,16 @@ def test_live_parameters_are_reachable_from_push_live_config():
     # off cfg by _telemetry on every frame it builds, but the rest of `nav.` is
     # gains that DO have to be pushed onto a live PID — exempting the prefix
     # would stop this test checking the parameters it exists for.
-    reads_config_directly_exactly = ("nav.pid_trace",)
+    #
+    # The four `ultrasonic.` thresholds are the collision guard's, and it holds
+    # the UltrasonicConfig object the way `Ballistics` holds its own. The rest of
+    # that prefix is the SENSOR's, which took a copy at construction and must be
+    # pushed — so this is named one by one rather than exempted wholesale.
+    reads_config_directly_exactly = (
+        "nav.pid_trace",
+        "ultrasonic.avoid", "ultrasonic.stop_m", "ultrasonic.slow_m",
+        "ultrasonic.release_m",
+    )
     for param in tuning.PARAMS:
         if (not param.live or param.path.startswith(reads_config_directly)
                 or param.path in reads_config_directly_exactly):

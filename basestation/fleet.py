@@ -62,6 +62,13 @@ class RobotState:
     # above — the robot omits it entirely on a build with no encoders, and a
     # held-over RPM readout is a speedometer that lies about a stopped rover.
     enc: Optional[dict] = None
+    # Distance to whatever is straight ahead and what the collision guard is
+    # doing about it: {d, state, mute, off}. Non-sticky like the blocks above,
+    # and here the reason is the sharpest of them: a held-over "0.4 m" from a
+    # sensor that has stopped reporting is the dashboard telling an operator
+    # there is a wall where there may be nothing, or nothing where there is a
+    # wall. Absent entirely on a build with no ultrasonic fitted.
+    sonar: Optional[dict] = None
     # Live closed-loop traces {loop_path: {sp, e, o, p, i, d, m, sat}}, present
     # only while the robot has nav.pid_trace on AND is in a mode that runs a
     # loop. Non-sticky like the two above: a frozen curve left on screen after
@@ -143,8 +150,14 @@ class FleetManager:
                 st.heading = float(msg["heading"])
             if msg.get("vision") is not None:
                 st.vision = msg["vision"]
-            if msg.get("imu_calib") is not None:
-                st.imu_calib = int(msg["imu_calib"])
+            # Assigned unconditionally rather than only when present, unlike the
+            # sticky fields above it. The robot sends null the moment the IMU
+            # stops answering, and the whole point of that null is to take the
+            # calibration pips off the screen — a sticky copy would hold them
+            # there, which is the reassurance-about-a-dead-sensor this is meant
+            # to prevent.
+            calib = msg.get("imu_calib")
+            st.imu_calib = int(calib) if calib is not None else None
             if msg.get("gps") is not None:
                 st.gps = msg["gps"]
             # Assigned unconditionally, breaking the "only overwrite when present"
@@ -157,6 +170,7 @@ class FleetManager:
             st.routine = msg.get("routine")
             st.pid = msg.get("pid")
             st.enc = msg.get("enc")
+            st.sonar = msg.get("sonar")
             if msg.get("lat") is not None and msg.get("lon") is not None:
                 st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
                 st.trail.append((st.lat, st.lon))
@@ -408,6 +422,7 @@ class FleetManager:
                     "routine": st.routine,
                     "pid": st.pid,
                     "enc": st.enc,
+                    "sonar": st.sonar,
                     "online": st.online(now),
                     "age": round(now - st.last_seen, 2) if st.last_seen else None,
                     "trail": st.trail,

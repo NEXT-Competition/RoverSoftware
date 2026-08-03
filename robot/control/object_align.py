@@ -19,17 +19,40 @@ camera, and a different detector could be swapped in without touching this file.
     otherwise              -> creep forward while the PID trims the heading
 
 --- How near is "arrived" ---
-Natively, in box-height units: stop once the box fills `standoff_size` of the
-frame. That is what the detector measures and what the arrival latch is tuned in,
-but it is not a distance anyone can pace out, so `standoff_m` says the same thing
-in metres and a `Rangefinder` converts it (once, on the way in — see
-`standoff_threshold`). A routine state sets that per state, which is how "close
-in on the bucket, then hang back from the goal" is one document.
+Two tests, and which one runs depends on what the robot can actually measure.
 
-Metres are best-effort and never load-bearing: with no rangefinder, no
-calibration, or a model that reports no box height at all, the metre standoff is
-dropped and `standoff_size` decides. The fallback tightens nothing and loosens
-nothing — it is exactly where this controller stopped before distances existed.
+    metres      When the rangefinder has a MEASURED distance for this target —
+                an ultrasonic reading it has justified as belonging to the thing
+                in the frame (control/rangefinder.py) — and a `standoff_m` was
+                asked for, arrival is a straight comparison in metres.
+    box height  Otherwise, natively: stop once the box fills `standoff_size` of
+                the frame. That is what the detector measures and what the
+                arrival latch was tuned in; a `standoff_m` is converted into it
+                once, on the way in (see `standoff_threshold`).
+
+A routine state sets the metre standoff per state, which is how "close in on the
+bucket, then hang back from the goal" is one document.
+
+The measured path is what lets a FOMO model approach at all. Those models emit
+centroids, not sized boxes, so `size` is None and this controller has always
+refused to advance on one — correctly, since it had no way to know when to stop.
+A sonar gives it one, and only that: no box height is ever invented.
+
+Metres are otherwise best-effort and never load-bearing: with no rangefinder, no
+calibration and nothing measured, the metre standoff is dropped and
+`standoff_size` decides. The fallback tightens nothing and loosens nothing — it
+is exactly where this controller stopped before distances existed.
+
+The latch survives a switch between the two tests. A test with no input this
+frame cannot release it, and neither can one judging a different standoff:
+having stopped for a reason and then lost sight of that reason is not grounds to
+drive forward again.
+
+--- The collision guard is downstream of all of this ---
+`control/collision.py` clamps the command this controller returns, so a standoff
+NEARER than `ultrasonic.stop_m` can never be reached — the guard stops the rover
+first, and it is right to. Said out loud in `set_min_standoff` rather than left
+as a rover that mysteriously halts 15 cm short of everything it is sent to.
 
 --- Why the PID advances on detection stamps, not control ticks ---
 The detector and the control loop run at unrelated rates, and `detection()` is a
@@ -76,6 +99,11 @@ class ObjectAlignController(Controller):
         standoff_hysteresis: float = 0.05,  # must shrink by this to un-arrive
         rangefinder: Optional[Rangefinder] = None,  # bbox height <-> metres
         standoff_m: float = 0.0,  # stop this far off instead; 0 = use standoff_size
+        # The same hysteresis, for the metre test: the target must recede this
+        # much further than the standoff before arrival releases. In metres
+        # because that test lives in metres — converting the size hysteresis
+        # would make its meaning depend on how far away the target happens to be.
+        standoff_hysteresis_m: float = 0.05,
         search_speed: float = 0.25,  # 0 disables the search sweep
         search_after: float = 0.5,  # ride out dropouts this long before searching
         search_timeout: float = 10.0,  # give up (stop) after searching this long
@@ -96,6 +124,11 @@ class ObjectAlignController(Controller):
         # distances existed. Arrival is never silently loosened.
         self.rangefinder = rangefinder
         self.standoff_m = standoff_m
+        self.standoff_hysteresis_m = standoff_hysteresis_m
+        # The nearest standoff the drivetrain will actually be allowed to reach,
+        # set by Robot from the collision guard's stop distance. 0 = no guard.
+        self.min_standoff_m = 0.0
+        self._warned_standoff = False
         self.search_speed = search_speed
         self.search_after = search_after
         self.search_timeout = search_timeout
@@ -147,16 +180,40 @@ class ObjectAlignController(Controller):
         return self._last_detection
 
     def distance_m(self) -> Optional[float]:
-        """Estimated metres to the current target, or None.
+        """Metres to the current target, or None.
 
-        None covers all three ways this can be unknown and they are worth not
-        conflating: nothing is in view, the model reports no box height (FOMO),
-        or nobody has calibrated the rangefinder. All three mean "do not print a
-        number an operator would steer by".
+        Measured when the rangefinder can justify a sonar reading as belonging
+        to this target, estimated from the box height otherwise — see
+        `Rangefinder.distance_for`, which is also what decides between them.
+        `range_source()` says which answered.
+
+        None still covers the ways this can be unknown, and they are worth not
+        conflating: nothing is in view, nothing measured it and the model
+        reports no box height (FOMO), or nobody has calibrated anything. All of
+        them mean "do not print a number an operator would steer by" — and
+        `routine/actions.py::spin_up` turns this number into a flywheel speed,
+        so a confident wrong answer here is a shot that misses.
         """
         if self._last_detection is None or self.rangefinder is None:
             return None
-        return self.rangefinder.distance_m(self._last_detection.size)
+        return self.rangefinder.distance_for(self._last_detection)
+
+    def range_source(self) -> str:
+        """"sonar" | "vision" | "" for the last `distance_m()`."""
+        return self.rangefinder.source if self.rangefinder is not None else ""
+
+    def set_min_standoff(self, metres: float) -> None:
+        """Tell this controller how near the collision guard will let it get.
+
+        Not a limit this controller enforces — the guard downstream does that on
+        its own, whatever anyone here believes. It is so the mismatch can be
+        SAID: a routine that asks to stop 0.2 m from a bucket on a rover whose
+        guard holds at 0.35 m will stop at 0.35 m and never latch arrival, and
+        the symptom (a state that times out, every time, for no visible reason)
+        points nowhere near the cause.
+        """
+        self.min_standoff_m = float(metres)
+        self._warned_standoff = False
 
     def standoff_threshold(self) -> float:
         """The box height arrival is judged against, in size units.
@@ -211,7 +268,7 @@ class ObjectAlignController(Controller):
         self._aligned = abs(d.error_x) <= self.aligned_tolerance
 
         # Arrived: latched, so we don't chatter forward/stop on the boundary.
-        if self.approach and d.size is not None and self._check_arrived(d.size):
+        if self.approach and self._check_arrived_for(d):
             self.pid.reset()
             self._steer = 0.0
             # Drop the stamp too, not just the PID state: we may sit here for
@@ -229,10 +286,84 @@ class ObjectAlignController(Controller):
         # same arbitration waypoint.py uses (there in degrees, here normalized).
         if abs(d.error_x) > self.pivot_threshold:
             return DriveCommand.arcade(0.0, steer)
-        if not self.approach or d.size is None:
-            # No range information (FOMO): face it, but never drive blind at it.
+        if not self.approach or not self._can_stop_for(d):
+            # Nothing here could tell us when to stop, so we do not start. That
+            # is the FOMO case (no box height) on a build with no ultrasonic —
+            # and, mid-approach, the moment a measured target drifts out of the
+            # sonar's cone: the rover holds, the steering loop brings it back on
+            # axis, the reading returns, and the approach resumes.
             return DriveCommand.arcade(0.0, steer)
         return DriveCommand.arcade(self.forward_speed, steer)
+
+    def _measured_m(self, d: Detection) -> Optional[float]:
+        """A sonar distance the rangefinder has justified as belonging to `d`."""
+        if self.rangefinder is None:
+            return None
+        return self.rangefinder.sonar_for(d)
+
+    def _size_test_judges_the_same_standoff(self) -> bool:
+        """Would the box-height test be answering the question that was asked?
+
+        Yes when the ask WAS a box height (`standoff_m` is 0), and yes when a
+        metre ask converts into one. No when the conversion fails, because then
+        the size test would silently be judging `standoff_size` — a different
+        distance, and usually a much nearer one.
+        """
+        if self.standoff_m <= 0.0:
+            return True
+        return (self.rangefinder is not None
+                and self.rangefinder.size_at(self.standoff_m) is not None)
+
+    def _can_stop_for(self, d: Detection) -> bool:
+        """Is there any test that could tell us we have arrived?
+
+        Asked before advancing, because advancing without one is driving at
+        something with no plan for stopping.
+        """
+        if self.standoff_m > 0.0 and self._measured_m(d) is not None:
+            return True
+        return d.size is not None and self._size_test_judges_the_same_standoff()
+
+    def _check_arrived_for(self, d: Detection) -> bool:
+        """Latch arrival by whichever test can actually judge this frame.
+
+        Measured metres win when there are any: they are a measurement of the
+        distance that was asked about, rather than an inference from a constant.
+        """
+        self._warn_if_unreachable()
+        measured = self._measured_m(d) if self.standoff_m > 0.0 else None
+        if measured is not None:
+            return self._check_arrived_m(measured)
+        if d.size is not None and self._size_test_judges_the_same_standoff():
+            return self._check_arrived(d.size)
+        # Neither test has an input. Hold the latch rather than clearing it —
+        # see the module docstring. Nothing here starts the robot moving; it
+        # only declines to un-stop it.
+        return self._arrived
+
+    def _warn_if_unreachable(self) -> None:
+        """Say once when the guard downstream will stop us short of the ask."""
+        if (self._warned_standoff or self.min_standoff_m <= 0.0
+                or self.standoff_m <= 0.0
+                or self.standoff_m >= self.min_standoff_m):
+            return
+        self._warned_standoff = True
+        print(f"[{self.name}] asked to stop {self.standoff_m:.2f} m from the "
+              f"target, but collision avoidance holds at "
+              f"{self.min_standoff_m:.2f} m — the rover will stop there and "
+              f"never report arriving. Lower ultrasonic.stop_m, or ask for a "
+              f"standoff beyond it.")
+
+    def _check_arrived_m(self, distance: float) -> bool:
+        """Arrival in metres, latched, hysteresis in metres."""
+        if self._arrived:
+            # Stay arrived until it has genuinely receded past the standoff, not
+            # merely a centimetre beyond it.
+            self._arrived = distance < (self.standoff_m + self.standoff_hysteresis_m)
+            return self._arrived
+        if distance <= self.standoff_m:
+            self._arrived = True
+        return self._arrived
 
     def _check_arrived(self, size: float) -> bool:
         """Latch arrival, releasing only once the target genuinely shrinks.

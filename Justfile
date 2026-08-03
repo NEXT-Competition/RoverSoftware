@@ -133,6 +133,19 @@ encoder-overlay a b:
 encoder-devices:
     ssh {{target}} "python3 /opt/roversoftware/tools/encoder_monitor.py --list"
 
+# Watch the ultrasonic on the robot, and see where the collision guard would
+# stop it. Wave something in front of the module: a distance that never appears
+# is a sensor that is not wired, NOT a room with nothing in it — the two are the
+# same silence, which is why proving this by hand is not optional.
+#
+# ECHO drives 5 V and a Pi GPIO is not 5 V tolerant: use the HAT's ultrasonic
+# port or a divider. The robot service claims these pins at start-up whenever
+# robot.env names them, so stop it first if the tool cannot claim them.
+#
+#   just ultrasonic 27 22
+ultrasonic trig="27" echo="22":
+    ssh -t {{target}} "python3 /opt/roversoftware/tools/ultrasonic_monitor.py --pins {{trig}},{{echo}}"
+
 # Free the header UART for the GPS: enable_uart=1 + dtoverlay=disable-bt in
 # config.txt, and the serial console off cmdline.txt. Needs a reboot afterwards.
 #
