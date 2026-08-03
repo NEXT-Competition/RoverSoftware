@@ -39,7 +39,7 @@ import threading
 import time
 from typing import List, Optional, Tuple
 
-from ..control.detection import Detection
+from ..control.detection import Detection, distance_m
 from .camera import imx500_present
 
 
@@ -525,4 +525,13 @@ class IMX500Detector:
                     size=round(d.size, 3) if d.size is not None else None,
                     age=round(age, 2),
                 )
+                # Metres, only on a calibrated build. NOTE the focal_frac that
+                # is right here is NOT the one that is right for edge_impulse:
+                # this backend normalizes against the FULL frame (~66 deg) and
+                # that one against a ~50 deg center crop. Same field, different
+                # correct value — recalibrate when you switch backends.
+                dist = distance_m(d.size, self.cfg.focal_frac,
+                                  self.cfg.target_height_m)
+                if dist is not None:
+                    t["dist"] = round(dist, 2)
         return t

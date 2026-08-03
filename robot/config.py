@@ -326,6 +326,12 @@ class VisionConfig:
     # Focal length in FRAME HEIGHTS (not pixels), so it pairs with the
     # normalized `size` and survives a resolution change. 0 = uncalibrated.
     #
+    # *** Like hfov_deg above, its correct value DEPENDS ON THE BACKEND. ***
+    # edge_impulse normalizes size against a ~50 deg center crop, imx500
+    # against the full ~66 deg frame — the same target fills a different
+    # fraction of each. Reusing one backend's constant on the other is a ~28%
+    # distance error, not a rounding one. Recalibrate when you switch.
+    #
     # Calibrate once, don't guess — park at a tape-measured distance, run
     # tools/detector_selftest.py, read the printed size, then:
     #     focal_frac = size * distance_m / target_height_m
