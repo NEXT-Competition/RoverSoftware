@@ -31,6 +31,21 @@ it to stop, run this, and read off the printed `size`. That's your
 RS_VISION_STANDOFF. No tape measure, no camera intrinsics. (Recalibrate it if
 you switch backends — the two normalize `size` against different rectangles.)
 
+--- And the METRIC RANGE calibration (separate, and optional) ---
+Standoff above needs none of this — it stops on the raw `size` ratio. Metres are
+for telemetry, and they do need a tape measure. Two runs:
+
+    # 1. CALIBRATE: bucket centred, tape-measured 3.00 m away
+    python tools/detector_selftest.py --target-height 0.29 --distance 3.00
+    #    -> prints RS_VISION_TARGET_HEIGHT / RS_VISION_FOCAL_FRAC to paste
+
+    # 2. VERIFY at a distance you did NOT calibrate at (e.g. 1.5 m)
+    python tools/detector_selftest.py --target-height 0.29 --focal-frac 1.07
+    #    -> prints `range=` per frame; a few percent off is right
+
+Both work off the MEDIAN box over the run, not one frame — the box jitters.
+Same backend caveat: the focal_frac from one backend is ~28% wrong on the other.
+
 --- And it's how you verify framing and colour order ---
 `--save` writes a frame. On Edge Impulse it's the model's own CROPPED input, and
 two things need checking by eye: the colours must look right (if red and blue
@@ -53,6 +68,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from robot.config import RobotConfig  # noqa: E402
+from robot.control.detection import distance_m  # noqa: E402
 from robot.sensors.camera import describe, draw_boxes, encode_jpeg, open_source  # noqa: E402
 from robot.sensors.imx500 import (Decoder, resolve_backend, select_box,  # noqa: E402
                                   to_detection)
@@ -72,6 +88,50 @@ _FOMO_TYPE = "constrained_object_detection"
 
 def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
+
+
+def _median(xs):
+    s = sorted(xs)
+    return s[len(s) // 2]
+
+
+def _range_report(sizes, clipped, args) -> None:
+    """Turn the frames just captured into a focal_frac, or check an existing one.
+
+    The box jitters several percent frame to frame, so this works off the MEDIAN
+    of the run — never a single reading. Median, not mean: one frame where the
+    model boxes half a bucket is an outlier, not evidence.
+    """
+    if clipped:
+        print(f"\n  {clipped} frame(s) had the target CLIPPED at the frame edge "
+              "and were excluded")
+        print("  (a clipped box is short, so it reads as further away). Back off "
+              "or re-aim if")
+        print("  that is most of the run.")
+    if not sizes:
+        if clipped:
+            print("  No usable frames — nothing to calibrate from.")
+        return
+    med = _median(sizes)
+    print(f"\n  median size over {len(sizes)} frames: {med:.3f} "
+          f"(min {min(sizes):.3f} / max {max(sizes):.3f})")
+    if args.target_height <= 0.0:
+        print("  Pass --target-height <metres> to calibrate metric range.")
+        return
+    if args.distance > 0.0:
+        focal = med * args.distance / args.target_height
+        print(f"\n  CALIBRATION — target {args.target_height:.3f} m tall at "
+              f"{args.distance:.2f} m. Paste into /etc/roversoftware/robot.env:")
+        print(f"      RS_VISION_TARGET_HEIGHT={args.target_height}")
+        print(f"      RS_VISION_FOCAL_FRAC={focal:.3f}")
+        print("  Then VERIFY: move to a different distance you did NOT calibrate")
+        print("  at, re-run with --target-height and --focal-frac (no --distance),")
+        print("  and check the printed range. A few percent off is right; tens of")
+        print("  percent means something upstream is wrong.")
+        return
+    if args.focal_frac > 0.0:
+        print(f"  range at the median box: "
+              f"{args.focal_frac * args.target_height / med:.2f} m")
 
 
 def imx500_selftest(cfg, args) -> int:
@@ -136,7 +196,7 @@ def imx500_selftest(cfg, args) -> int:
     # 5. Live frames. No inference timing to report — the sensor did that before
     #    the frame arrived; what's measured here is the Pi-side decode.
     print(f"\n[5/5] reading {args.frames} frames...\n")
-    times, seen, last = [], 0, None
+    times, seen, last, sizes, clipped = [], 0, None, [], 0
     try:
         for i in range(args.frames):
             frame, metadata = source.read_with_metadata()
@@ -157,9 +217,23 @@ def imx500_selftest(cfg, args) -> int:
             for b in boxes:
                 d = to_detection(b, w, h, 0.0)
                 mark = "*" if b is best else " "
+                # Decoder.parse CLIPS boxes to the frame, so a target running off
+                # the top or bottom reports a short height and therefore reads as
+                # further away than it is. Poison for a calibration median — drop
+                # those frames and say so rather than averaging the error in.
+                cut = b[1] <= 0 or (b[1] + b[3]) >= h - 1
+                # Only the box object_align would steer on feeds calibration — a
+                # second bucket further away must not drag the median either.
+                if b is best and d.size and not cut:
+                    sizes.append(d.size)
+                elif b is best and cut:
+                    clipped += 1
+                rng = distance_m(d.size, args.focal_frac, args.target_height)
                 print(f"  frame {i:3d}  {ms:6.2f} ms {mark} {d.label:<12} "
                       f"conf={d.confidence:.2f}  error_x={d.error_x:+.3f}  "
-                      f"size={d.size:.3f}")
+                      f"size={d.size:.3f}"
+                      + (f"  range={rng:.2f} m" if rng is not None else "")
+                      + ("  [CLIPPED at the frame edge]" if cut else ""))
     finally:
         source.close()
 
@@ -170,6 +244,7 @@ def imx500_selftest(cfg, args) -> int:
     print(f"  frames with a target: {seen}/{len(times)}")
     print("  '*' marks the box object_align would steer on "
           f"(select={cfg.vision.select}).")
+    _range_report(sizes, clipped, args)
 
     if args.save and last is not None:
         frame, boxes = last
@@ -206,6 +281,12 @@ def main() -> int:
     p.add_argument("--imx500-model", dest="imx500_model",
                    default=os.environ.get("RS_VISION_IMX500_MODEL", cfg.vision.imx500_model),
                    help="the .rpk network uploaded to the AI Camera's sensor")
+    # A CUSTOM YOLO export (tools/imx500_export_yolo.py) carries no embedded
+    # labels, so without this every box comes back "0"/"1"/"2" and --label never
+    # matches. Zoo networks embed theirs and need nothing here.
+    p.add_argument("--imx500-labels", dest="imx500_labels",
+                   default=os.environ.get("RS_VISION_IMX500_LABELS", cfg.vision.imx500_labels),
+                   help="labels.txt for a custom .rpk export (empty = embedded)")
     p.add_argument("--label", default=os.environ.get("RS_VISION_LABEL", cfg.vision.target_label),
                    help="only report this label ('' = all)")
     p.add_argument("--device", default=os.environ.get("RS_CAMERA_DEVICE", cfg.camera.device))
@@ -213,11 +294,26 @@ def main() -> int:
     p.add_argument("--frames", type=int, default=20, help="how many frames to classify")
     p.add_argument("--save", default=None, metavar="OUT.jpg",
                    help="write a frame here (check colour + framing)")
+    # Metric range. Defaults come from the env so a robot.env that is already
+    # calibrated makes this print real metres with no extra flags.
+    p.add_argument("--target-height", type=float, metavar="M",
+                   default=float(os.environ.get("RS_VISION_TARGET_HEIGHT",
+                                                cfg.vision.target_height_m)),
+                   help="real height of the target in metres (a bucket is ~0.29)")
+    p.add_argument("--distance", type=float, default=0.0, metavar="M",
+                   help="CALIBRATE: tape-measured distance to the target right "
+                        "now; prints the focal_frac to put in robot.env")
+    p.add_argument("--focal-frac", type=float, metavar="F",
+                   default=float(os.environ.get("RS_VISION_FOCAL_FRAC",
+                                                cfg.vision.focal_frac)),
+                   help="VERIFY: an already-calibrated focal_frac; prints range "
+                        "per frame so you can check it at a new distance")
     args = p.parse_args()
 
     cfg.vision.backend = args.backend
     cfg.vision.model_path = args.model
     cfg.vision.imx500_model = args.imx500_model
+    cfg.vision.imx500_labels = args.imx500_labels
     cfg.vision.target_label = args.label
     cfg.vision.min_confidence = args.conf
     cfg.camera.device = args.device
@@ -305,7 +401,7 @@ def main() -> int:
 
     # 5. Live inference.
     print(f"[5/5] classifying {args.frames} frames...\n")
-    times, seen, last_cropped = [], 0, None
+    times, seen, last_cropped, sizes, clipped = [], 0, None, [], 0
     try:
         for i in range(args.frames):
             frame = source.read()
@@ -326,12 +422,28 @@ def main() -> int:
                 print(f"  frame {i:3d}  {ms:6.1f} ms   (no target)")
                 continue
             seen += 1
+            # Largest box only — matches the default select=largest that
+            # object_align steers on, and keeps a background bucket out of it.
+            big = None if fomo else max(boxes, key=lambda b: b["height"])
+            # A target running off the top or bottom of EI's crop reports a short
+            # height and so reads as further away. Never calibrate on one: drop
+            # the frame and say how many went.
+            cut = big is not None and (
+                big["y"] <= 0 or (big["y"] + big["height"]) >= mh - 1)
+            if cut:
+                clipped += 1
+            elif big is not None:
+                sizes.append(big["height"] / mh)
             for b in boxes:
                 cx = b["x"] + b["width"] / 2.0
                 ex = _clamp(2.0 * cx / mw - 1.0, -1.0, 1.0)
-                sz = "n/a (FOMO)" if fomo else f"{b['height'] / mh:.3f}"
+                size = None if fomo else b["height"] / mh
+                sz = "n/a (FOMO)" if fomo else f"{size:.3f}"
+                rng = distance_m(size, args.focal_frac, args.target_height)
                 print(f"  frame {i:3d}  {ms:6.1f} ms   {b['label']:<12} "
-                      f"conf={b['value']:.2f}  error_x={ex:+.3f}  size={sz}")
+                      f"conf={b['value']:.2f}  error_x={ex:+.3f}  size={sz}"
+                      + (f"  range={rng:.2f} m" if rng is not None else "")
+                      + ("  [CLIPPED at the crop edge]" if cut and b is big else ""))
     finally:
         source.close()
         runner.stop()
@@ -342,6 +454,7 @@ def main() -> int:
         print(f"  inference: avg {avg:.1f} ms  ->  {1000.0 / avg:.1f} fps "
               f"(min {min(times):.0f} / max {max(times):.0f})")
     print(f"  frames with a target: {seen}/{len(times)}")
+    _range_report(sizes, clipped, args)
 
     if args.save and last_cropped is not None:
         try:

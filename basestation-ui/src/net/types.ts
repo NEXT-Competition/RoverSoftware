@@ -23,6 +23,7 @@ export interface VisionStatus {
   conf?: number; // 0..1
   ex?: number; // horizontal error, -1..1 (0 = centered)
   size?: number | null; // bbox height fraction; null on FOMO (no size available)
+  dist?: number; // metres; ABSENT unless the robot is range-calibrated
   age?: number; // seconds since this detection
 }
 

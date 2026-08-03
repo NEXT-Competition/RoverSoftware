@@ -332,10 +332,12 @@ class VisionConfig:
     # fraction of each. Reusing one backend's constant on the other is a ~28%
     # distance error, not a rounding one. Recalibrate when you switch.
     #
-    # Calibrate once, don't guess — park at a tape-measured distance, run
-    # tools/detector_selftest.py, read the printed size, then:
-    #     focal_frac = size * distance_m / target_height_m
-    # Take the median of a few frames; the box jitters. Sanity check: it
+    # Calibrate once, don't guess — park at a tape-measured distance and run
+    #     tools/detector_selftest.py --target-height H --distance D
+    # which prints the RS_VISION_FOCAL_FRAC / RS_VISION_TARGET_HEIGHT lines to
+    # paste into robot.env. It is doing `focal_frac = size * distance_m /
+    # target_height_m` over the MEDIAN size, because the box jitters frame to
+    # frame and a single reading is not the number you want. Sanity check: it
     # should land near 1 / (2 * tan(vfov / 2)) — ~1.07 for the edge_impulse
     # backend's square 50 deg crop. Calibrating against REAL detector output
     # (rather than that formula) is what folds in any systematic tight/loose

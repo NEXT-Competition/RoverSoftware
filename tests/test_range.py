@@ -1,6 +1,15 @@
 """Metric range from a bounding box: the 1/d law and its refusals."""
 
+import importlib.util
+import pathlib
+
 from robot.control.detection import distance_m
+
+_spec = importlib.util.spec_from_file_location(
+    "detector_selftest",
+    pathlib.Path(__file__).resolve().parents[1] / "tools" / "detector_selftest.py")
+_selftest = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_selftest)
 
 # A bucket 0.29 m tall, seen at half a frame height, on a calibrated build.
 FOCAL = 1.07  # frame heights; ~1 / (2 * tan(25 deg))
@@ -28,3 +37,22 @@ def test_none_when_range_is_unavailable():
     assert distance_m(0.0, FOCAL, HEIGHT) is None  # degenerate box, no div-by-0
     assert distance_m(0.4, 0.0, HEIGHT) is None  # uncalibrated focal
     assert distance_m(0.4, FOCAL, 0.0) is None  # target height unknown
+
+
+def test_median_ignores_an_outlier_frame():
+    """One frame where the model boxes half the bucket must not move the answer."""
+    assert _selftest._median([0.20, 0.21, 0.22]) == 0.21
+    assert _selftest._median([0.20, 0.21, 0.22, 0.10]) == 0.21  # outlier, not evidence
+
+
+def test_selftest_calibration_inverts_distance_m():
+    """What the tool prints must be the exact constant distance_m wants back.
+
+    This is the whole contract between the calibration run and the robot: the
+    tool computes size*d/h, the rover computes focal*h/size. If those two ever
+    stop being inverses, every reported range is silently wrong.
+    """
+    truth_m, sizes = 2.5, [0.12, 0.13, 0.125]
+    med = _selftest._median(sizes)
+    focal = med * truth_m / HEIGHT  # what _range_report prints
+    assert abs(distance_m(med, focal, HEIGHT) - truth_m) < 1e-9
