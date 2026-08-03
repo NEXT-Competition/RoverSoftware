@@ -18,6 +18,7 @@ from .comms.xbee_link import XBeeLink
 from .comms import wifi
 from .control.controller import Controller
 from .control.manager import ControlManager
+from .control.ball_intake import BallIntakeController
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
 from .control.ballistics import Ballistics
@@ -189,6 +190,25 @@ class Robot:
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
+                ),
+                # Ball collection. The intake mechanism is attached below,
+                # if the layout declares one - the controller drives and steers
+                # without it, it just cannot collect.
+                "ball_intake": BallIntakeController(
+                    target_label=config.ball_intake.target_label,
+                    intake_power=config.ball_intake.intake_power,
+                    collect_line=config.ball_intake.collect_line,
+                    chase_speed=config.ball_intake.chase_speed,
+                    collect_speed=config.ball_intake.collect_speed,
+                    push_speed=config.ball_intake.push_speed,
+                    pivot_threshold=config.ball_intake.pivot_threshold,
+                    collect_push_s=config.ball_intake.collect_push_s,
+                    intake_hold_s=config.ball_intake.intake_hold_s,
+                    search_spin_s=config.ball_intake.search_spin_s,
+                    search_advance_s=config.ball_intake.search_advance_s,
+                    search_spin_speed=config.ball_intake.search_spin_speed,
+                    search_advance_speed=config.ball_intake.search_advance_speed,
+                    pid=_pid(config.ball_intake.pid),
                 ),
                 "waypoint": WaypointController(
                     arrive_radius_m=config.nav.arrive_radius_m,
@@ -363,6 +383,23 @@ class Robot:
                 if isinstance(c, ObjectAlignController):
                     c.set_detection_provider(self.detector.detection)
                     c.set_rate_provider(self.pose_estimator.heading_rate)
+                elif isinstance(c, BallIntakeController):
+                    # Same perception, no rate provider: this loop steers on the
+                    # detection alone and has no heading to hold.
+                    c.set_detection_provider(self.detector.detection)
+
+        # And its actuator, if the layout declares one. A build with no intake
+        # still gets a controller that drives and steers - it simply collects
+        # nothing - rather than a mode that fails to construct.
+        for c in controllers.values():
+            if isinstance(c, BallIntakeController):
+                mech = self.mechanisms.get(config.ball_intake.mechanism)
+                if mech is not None:
+                    c.set_intake(mech)
+                elif config.ball_intake.mechanism:
+                    print(f"[ball_intake] no mechanism named "
+                          f"{config.ball_intake.mechanism!r} in the layout - "
+                          f"will chase balls but not collect them")
 
         # How near an approach is allowed to get, whatever it was asked for: the
         # collision guard clamps the command these controllers return, so a

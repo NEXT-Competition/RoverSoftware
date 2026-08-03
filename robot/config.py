@@ -839,6 +839,39 @@ class AlignConfig:
 
 
 @dataclass
+class BallIntakeConfig:
+    # Behaviour of the ball_intake autonomy mode (robot/control/ball_intake.py).
+    # Distinct from AlignConfig because the policy is the opposite: object_align
+    # stops SHORT at a standoff, this drives THROUGH the ball with the intake
+    # running. Sharing one config would mean one forward_speed for "creep up to
+    # a bucket" and "drive over a ball", which are not the same number.
+    mechanism: str = "intake"  # which layout mechanism to run; "" = none wired
+    target_label: str = "ball"  # detections with any other label are ignored
+    intake_power: float = 1.0  # +1 takes in, -1 spits (see PowerMechanism)
+    # error_y is normalized: 0 = frame centre, +1 = bottom edge. At or below
+    # this the ball is at the intake mouth.
+    collect_line: float = 0.4
+    chase_speed: float = 0.5  # throttle when the ball is far up the frame
+    collect_speed: float = 0.3  # creep once at the mouth
+    push_speed: float = 0.3  # blind, after the ball drops out of frame
+    pivot_threshold: float = 0.35  # |error_x| above this => turn in place
+    # Open-loop, because nothing on this robot can see under the intake. The
+    # intake timer is the longer of the two: a ball in the throat is still
+    # being collected after the robot has stopped moving. Stopwatch values.
+    collect_push_s: float = 1.0  # keep DRIVING this long after losing sight
+    intake_hold_s: float = 3.0  # keep the INTAKE turning this long
+    # Sweep in place, then step forward, and repeat. Spinning alone only ever
+    # searches one circle of the field.
+    search_spin_s: float = 5.0
+    search_advance_s: float = 1.0
+    search_spin_speed: float = 0.25
+    search_advance_speed: float = 0.3
+    pid: PIDConfig = field(
+        default_factory=lambda: PIDConfig(kp=0.5, ki=0.0, kd=0.05, out_limit=0.8)
+    )
+
+
+@dataclass
 class NavConfig:
     # Waypoint navigation (robot/control/waypoint.py).
     arrive_radius_m: float = 2.0  # a leg is done inside this radius
@@ -899,6 +932,7 @@ class RobotConfig:
     # see BallisticsConfig.
     ballistics: BallisticsConfig = field(default_factory=BallisticsConfig)
     align: AlignConfig = field(default_factory=AlignConfig)
+    ball_intake: BallIntakeConfig = field(default_factory=BallIntakeConfig)
     nav: NavConfig = field(default_factory=NavConfig)
     # Extra subsystems declared by the layout (intake, arm, a second launcher).
     # Empty on a stock build, which is why nothing above changes shape.
@@ -913,7 +947,8 @@ class RobotConfig:
     # step is 0.08 and motion is continuous. docs/ARCHITECTURE.md has always
     # specified 50 Hz.
     loop_hz: float = 50.0
-    start_mode: str = "teleop"  # teleop | object_align | waypoint | shooter_align
+    start_mode: str = "teleop"  # teleop | object_align | waypoint |
+    #                             shooter_align | ball_intake
     # Which sensor answers "which way am I facing" (see sensors/pose.py):
     #   auto - IMU when calibrated, else the GPS track angle (recommended)
     #   gps  - the GPS track angle only; no IMU needed for heading
