@@ -23,7 +23,7 @@ the endpoints/clamps; whichever is closer to neutral sets the usable throw.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -662,11 +662,70 @@ class BallisticsConfig:
 
 
 @dataclass
+class SequenceStep:
+    """One leg of a `sequence` mechanism: what to move, and when to move on.
+
+    --- what `values` means ---
+    Actuator name -> what that actuator should be doing for this step, read in
+    the units of the actuator's own `kind`:
+
+        esc    throttle, -1..1        (ESCMotor.set_throttle)
+        servo  degrees, -90..90       (ESCMotor.set_angle)
+
+    Two units in one map is a real cost, and it buys the thing this whole
+    mechanism exists for: a step reads "put the feeder arm at 40 degrees" and
+    "hold the flywheel at 0.9", which is how the build is actually described by
+    the people who wired it. The alternative — throttle everywhere, as
+    PowerMechanism does — means expressing a feeder's travel as a fraction of a
+    symmetric throw about neutral, and getting a number nobody can check against
+    the arm in front of them.
+
+    AN UNNAMED ACTUATOR IS LEFT EXACTLY AS IT WAS. This is the single most
+    important difference from `presets`, which zero what they do not mention.
+    A preset describes the whole mechanism at one instant; a step describes a
+    CHANGE, and the flywheel spun up in step 1 has to still be spinning while
+    step 2 runs the feeder into it. `clear: true` opts a step back into
+    preset behaviour when what you want really is "everything else off".
+
+    --- when the step ends ---
+    `seconds` is a MINIMUM DWELL, not a duration: the step ends once both the
+    dwell has elapsed and `wait_for` is satisfied. Either half may be left out.
+    Both together is the common shooter shape — "give the ESC 0.2 s to even
+    react, then wait until the wheel is actually at speed".
+
+    `wait_for` is the "and other factor" half, one of:
+
+        {}                                                  no gate; time only
+        {"kind": "rpm", "actuator": "fly", "at_least": 3000, "at_most": 0}
+        {"kind": "mech_ready", "mech": "launcher"}
+
+    `timeout` bounds the gate, because a gate that cannot be satisfied is a
+    mechanism that never returns to rest. 0 means "use the mechanism's
+    step_timeout". Reaching it runs `on_timeout`:
+
+        abort    (default) stop the whole sequence and park at rest
+        advance  carry on to the next step anyway
+
+    `abort` is the default because the reason a shooter gates on RPM is that
+    feeding a ball into a flywheel that never reached speed jams the mechanism.
+    Advancing on timeout does the exact thing the gate was written to prevent.
+    """
+
+    name: str = ""            # what the dashboard calls this leg; "" => "step N"
+    values: Dict[str, float] = field(default_factory=dict)
+    seconds: float = 0.0      # minimum dwell before the step may end
+    wait_for: Dict[str, Any] = field(default_factory=dict)
+    timeout: float = 0.0      # 0 => inherit the mechanism's step_timeout
+    on_timeout: str = "abort"  # abort | advance
+    clear: bool = False       # zero the actuators this step does not name
+
+
+@dataclass
 class MechanismConfig:
     """One named non-drivetrain subsystem: an intake, an arm, a second launcher.
 
-    This is `ShooterConfig` generalized. Two shapes cover what a build actually
-    needs:
+    This is `ShooterConfig` generalized. Three shapes cover what a build
+    actually needs:
 
       power - hold a value. An intake spins at +1 to take a ball in, -1 to spit
               it out, 0 to stop. Several actuators move together, which is why
@@ -675,6 +734,11 @@ class MechanismConfig:
               return to `rest_angle`, settle for `recover_seconds`. Exactly the
               launcher's rest -> firing -> retracting machine (drive/shooter.py),
               and non-blocking for exactly the same reason.
+   sequence - an ordered queue of `steps`, one at a time: the servo, then one
+              motor, then another. The kind for a launcher whose actuators
+              CANNOT all move at once, which neither of the above can express —
+              `power` writes them together and `pulse` swings them together.
+              See SequenceStep above.
 
     The built-in launcher is deliberately NOT expressed here — it keeps its own
     `ShooterConfig` so the RS_SHOOTER_* env vars, the `shooter.*` tuning paths
@@ -685,7 +749,7 @@ class MechanismConfig:
 
     name: str = ""
     label: str = ""  # what the dashboard calls it; "" => derived from `name`
-    kind: str = "power"  # power | pulse
+    kind: str = "power"  # power | pulse | sequence
     enabled: bool = True
     actuators: Dict[str, MotorConfig] = field(default_factory=dict)
 
@@ -704,6 +768,23 @@ class MechanismConfig:
     recover_seconds: float = 0.35
     cooldown: float = 0.0  # minimum seconds between activations
     max_activations: int = 0  # magazine capacity; 0 = unlimited
+
+    # --- sequence ---
+    # An ordered queue of legs, run one at a time off the control tick. Shares
+    # `rest_angle`, `cooldown` and `max_activations` with `pulse`, which is not
+    # a coincidence: a sequence IS a pulse with more than one leg and a gate on
+    # each, and a build that outgrows `pulse` should not have to relearn the
+    # fields it already set.
+    steps: List[SequenceStep] = field(default_factory=list)
+    # A ceiling on any step that does not set its own `timeout`. A sequence is
+    # the one mechanism that can wait on something other than a clock, so it is
+    # also the one that can wait forever; this is the backstop that means it
+    # cannot. Never 0 in a validated layout.
+    step_timeout: float = 5.0
+    # Run the queue again from the top when it finishes, until `stop()`. For a
+    # feeder that should keep cycling while a routine holds a state, rather than
+    # one shot per activation.
+    loop: bool = False
 
 
 @dataclass

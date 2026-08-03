@@ -267,6 +267,14 @@ export const ACTIONS: VerbSpec[] = [
     args: [{ key: "mech", label: "mechanism", kind: "mech" }],
   },
   {
+    key: "sequence",
+    group: "mechanism",
+    label: "start a sequence",
+    help:
+      "Runs a sequence mechanism's steps in order — a feeder servo, then a flywheel, then a belt — and returns immediately; the mechanism advances itself off the control loop. Asking again while it runs does nothing, so this is safe in “every tick”. To wait for it to finish, transition on “mechanism is ready”, which stays false for exactly as long as it is running.",
+    args: [{ key: "mech", label: "mechanism", kind: "mech" }],
+  },
+  {
     key: "count",
     group: "logic",
     label: "count this",

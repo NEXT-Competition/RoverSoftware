@@ -86,7 +86,8 @@ def _pulse(spec) -> Effect:
             return
         fire = getattr(mech, "fire", None) or getattr(mech, "activate", None)
         if fire is None:
-            print(f"[routine] {name!r} is not a pulse mechanism")
+            print(f"[routine] {name!r} has nothing to activate: it is not a "
+                  "pulse or sequence mechanism")
             return
         fire()  # False just means "still cycling"; the mechanism owns that
     return run
@@ -324,6 +325,12 @@ BUILDERS: Dict[str, Tuple[Callable[[dict], Effect], Tuple[str, ...]]] = {
     "mech_stop": (_mech_stop, ("mech",)),
     "pulse": (_pulse, ("mech",)),
     "fire": (_pulse, ("mech",)),  # the launcher's word for the same thing
+    # And the queue's word for it. One builder for all three: "start the cycle
+    # this mechanism owns" is the same instruction whatever the cycle is, and
+    # the mechanism is the authority on what that means. A routine waits for the
+    # end of one with the `mech_ready` condition, which a sequence answers False
+    # to for exactly as long as it is running.
+    "sequence": (_pulse, ("mech",)),
     "arm": (_arm, ()),
     "disarm": (_disarm, ()),
     # No required field: a route with no waypoints yet is the state a freshly
