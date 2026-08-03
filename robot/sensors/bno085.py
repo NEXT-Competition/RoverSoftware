@@ -183,8 +183,12 @@ class IMU:
         # When each quantity was last actually measured. Two stamps, not one:
         # the quaternion and the gyro are separate reports, and a read that
         # returns one but not the other must not refresh both.
-        self._heading_at = 0.0
-        self._rate_at = 0.0
+        # -inf, not 0.0, means "never measured": these hold `time.monotonic()`,
+        # which is time since boot, so 0.0 is a REACHABLE reading rather than a
+        # sentinel — overloading it makes an early sample indistinguishable from
+        # no sample at all.
+        self._heading_at = -math.inf
+        self._rate_at = -math.inf
         # Read-error bookkeeping, so a bad bus costs one log line per interval
         # rather than five a second, and so the handover to the GPS course is
         # announced once rather than never.
@@ -309,7 +313,7 @@ class IMU:
             due = (now - self._last_error_log) >= _ERROR_LOG_INTERVAL
             if due:
                 self._last_error_log = now
-            went_stale = (not self._stale and last_good > 0.0
+            went_stale = (not self._stale and math.isfinite(last_good)
                           and not self._fresh_locked(last_good))
             if went_stale:
                 self._stale = True
@@ -328,7 +332,7 @@ class IMU:
 
     def _fresh_locked(self, stamp: float) -> bool:
         """Is a sample taken at `stamp` still an answer? Call under the lock."""
-        if stamp <= 0.0:
+        if not math.isfinite(stamp):
             return False            # nothing has ever been measured
         if self.sample_timeout <= 0:
             return True             # the check is switched off
