@@ -61,7 +61,22 @@ HOLD_REFRESH_S = 0.25
 
 
 def _dz(v, dz=0.08):
-    return 0.0 if abs(v) < dz else v
+    """Dead zone that RESCALES [dz, 1] back onto [0, 1].
+
+    Passing v through unchanged above the threshold makes the output jump
+    straight from 0.0 to dz the moment the stick leaves centre — with the
+    default dead zone that is 8% of steering differential appearing in a single
+    frame, which on a skid-steer chassis is a visible twitch every time you
+    start a turn, and again every time you come back to centre.
+
+    Rescaling removes the step without narrowing what is reachable: full stick
+    still gives 1.0. It also means `deadzone` can be raised to cover a worn,
+    drifting stick without that making the twitch worse, which is the tuning
+    dead end the old version created.
+    """
+    if abs(v) < dz or dz >= 1.0:
+        return 0.0
+    return (v - dz if v > 0 else v + dz) / (1.0 - dz)
 
 
 def _expo(v: float, e: float) -> float:
