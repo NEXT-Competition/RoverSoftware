@@ -74,7 +74,18 @@ class ESCMotor:
         throttle = _clamp(throttle, -1.0, 1.0)
         self._throttle = throttle
 
-        cmd = -throttle if self.cfg.inverted else throttle
+        # Caps are applied to the REQUESTED direction, before inversion, so
+        # `max_forward` means forward on every track. Applied after inversion
+        # they follow the ESC's direction instead of the rover's: on a mirrored
+        # motor, driving forward runs its ESC in reverse, so a `max_reverse`
+        # below 1.0 quietly capped that one track going FORWARD and left the
+        # other at full — a left/right power offset out of a knob that claims to
+        # limit reverse. This is also what makes the pair usable as a per-side
+        # trim, which is the supported way to match two tracks that don't.
+        cmd = throttle * (self.cfg.max_forward if throttle > 0
+                          else self.cfg.max_reverse)
+        if self.cfg.inverted:
+            cmd = -cmd
 
         if abs(cmd) < self.cfg.deadband:
             self.servo.angle(self.cfg.neutral_angle)
@@ -89,7 +100,6 @@ class ESCMotor:
         # match, so full forward and full reverse are equal magnitudes.
         throw = max(0.0, min(self.cfg.max_angle - self.cfg.neutral_angle,
                              self.cfg.neutral_angle - self.cfg.min_angle))
-        cmd *= self.cfg.max_forward if cmd > 0 else self.cfg.max_reverse
         self.servo.angle(self.cfg.neutral_angle + cmd * throw)
 
     def set_angle(self, degrees: float) -> None:

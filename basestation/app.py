@@ -301,9 +301,14 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             dispatch(rid, {"type": "clear_estop"})
         elif name.startswith("mode:"):
             dispatch(rid, {"type": "mode", "mode": name.split(":", 1)[1]})
-        elif name in ("arm_shooter", "disarm_shooter", "fire"):
+        elif name in ("arm_shooter", "disarm_shooter", "fire", "shooter_spin"):
             # A bindable button reaches the same pass-through the on-screen
             # controls use; the robot still owns every firing rule.
+            #
+            # `shooter_spin` is sent bare, with no "on", so the robot toggles
+            # from the state it is actually in. The base station keeps no copy
+            # of mechanism state, and a shadow copy would go stale the first
+            # time an e-stop stopped the wheel from underneath it.
             dispatch(rid, {"type": name})
         elif name.startswith("routine:"):
             # The same two messages the driving view's routine buttons send

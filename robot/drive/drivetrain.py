@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Iterable, List, Optional
 
-from ..config import DriveConfig
+from ..config import DriveConfig, MotorConfig
 from ..control.rpm_trim import RpmTrim
 from ..sensors.encoder import Encoder, build_encoder, close_backend
 from .motor import ESCMotor
@@ -86,9 +86,24 @@ class Drivetrain:
         # One ESCMotor per declared actuator, built once. `kind` decides how it
         # is armed, not how it is driven — the throttle-to-angle mapping is the
         # same for an ESC and a positional servo (see drive/motor.py).
-        self.motors: Dict[str, ESCMotor] = {
+        motors: Dict[str, ESCMotor] = {
             name: ESCMotor(actuator) for name, actuator in config.actuators.items()
         }
+        # A role naming an actuator nobody declared gets a default one on the
+        # next free channel rather than being dropped. `_named` skips names it
+        # cannot find, so a typo or a half-edited layout used to produce a
+        # drivetrain that armed cleanly, reported no error, and then simply did
+        # not drive that side — the failure showed up as a rover that turned in
+        # circles. Materialising the motor instead means the wiring is wrong in
+        # a way somebody can see and fix.
+        for name in dict.fromkeys(
+            config.roles.left + config.roles.right + config.roles.throttle
+        ):
+            if name not in motors:
+                motors[name] = ESCMotor(
+                    MotorConfig(channel=len(motors), name=name, label=name)
+                )
+        self.motors: Dict[str, ESCMotor] = motors
         # One quadrature encoder per actuator that declares a pair of pins;
         # nothing at all on a build that doesn't, which is every build that
         # existed before sensors/encoder.py did. Constructed here (not started —

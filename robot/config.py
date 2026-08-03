@@ -607,6 +607,20 @@ class ShooterConfig:
     fire_seconds: float = 0.35
     retract_seconds: float = 0.35  # settle at rest before another shot may start
 
+    # --- flywheel launcher (closed-loop RPM path in drive/shooter.py) ---
+    # 0 = this is a servo launcher: {"type":"shooter_spin"} does a pulse shot and
+    # the RPM controller never runs. Above 0 = this is a flywheel: the same
+    # command toggles the wheel between this speed and stopped, and the pulse
+    # state machine is not used.
+    #
+    # On a build with no tachometer the loop is fed a MODELLED rpm (see
+    # Shooter._estimated_rpm) rather than a measured one, so it behaves as
+    # feed-forward: it holds the commanded speed, but it cannot see or correct
+    # for battery sag, ball drag or a stalling wheel. Wire an encoder to
+    # set_measured_rpm() and it becomes genuinely closed-loop with no other
+    # change.
+    target_rpm: float = 0.0
+
     # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
     # Hold the alignment this long before firing. This is the single most
     # important safety/accuracy knob: the detector is noisy and a single centered
