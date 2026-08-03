@@ -136,6 +136,8 @@ class BallIntakeController(Controller):
         # time, not for how fast the drivetrain could react.
         self.pid = pid or PID(kp=0.5, ki=0.0, kd=0.05, out_limit=0.8)
 
+        self._vision = None
+        self._target_restore: Optional[str] = None
         self._last_seen = 0.0
         self._last_stamp: Optional[float] = None
         self._steer = 0.0
@@ -154,9 +156,30 @@ class BallIntakeController(Controller):
     def set_intake(self, intake: IntakeActuator) -> None:
         self.intake = intake
 
+    def set_vision_config(self, vision) -> None:
+        """Narrow the DETECTOR to balls, not just this loop.
+
+        Filtering by label here is not enough. The detector picks ONE box per
+        frame (`vision.select`, default "largest") and only then does this
+        controller look at the label — so with `vision.target_label` empty, a
+        blue bucket in view wins the pick every frame simply by being bigger,
+        this loop sees "not a ball" (i.e. nothing at all), and the robot
+        searches with a ball plainly in frame.
+
+        Setting the shared VisionConfig moves the filter ahead of the pick.
+        Same object and same borrow-and-restore contract the RoutineController
+        already uses for its per-state targets; restored on deactivate so
+        switching to object_align does not leave the detector blind to buckets.
+        """
+        self._vision = vision
+
     # -- lifecycle ----------------------------------------------------------
 
     def on_activate(self) -> None:
+        if self._vision is not None and self.target_label:
+            if self._target_restore is None:  # not already borrowed
+                self._target_restore = str(getattr(self._vision, "target_label", ""))
+            self._vision.target_label = self.target_label
         self.pid.reset()
         self._last_stamp = None
         self._steer = 0.0
@@ -168,6 +191,8 @@ class BallIntakeController(Controller):
 
     def on_deactivate(self) -> None:
         self._set_intake(False)
+        if self._vision is not None and self._target_restore is not None:
+            self._vision.target_label, self._target_restore = self._target_restore, None
 
     def on_estop(self) -> None:
         # The manager stops the drivetrain; the intake is ours and must not

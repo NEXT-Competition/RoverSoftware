@@ -255,6 +255,33 @@ def test_no_provider_stops_everything():
     assert not ctl.intake_running()
 
 
+class FakeVision:
+    target_label = ""
+
+
+def test_activate_narrows_the_detector_to_balls():
+    """REGRESSION. The detector picks ONE box per frame BEFORE this controller
+    checks the label, and `largest` is the default pick — so a bucket in view
+    beats every ball and this loop sees nothing at all."""
+    ctl, _, _, _ = make()
+    vision = FakeVision()
+    ctl.set_vision_config(vision)
+    ctl.on_activate()
+    assert vision.target_label == "ball"
+
+
+def test_deactivate_gives_the_detector_back():
+    """object_align aligns to buckets; leaving the filter on would blind it."""
+    ctl, _, _, _ = make()
+    vision = FakeVision()
+    vision.target_label = "blue bucket"
+    ctl.set_vision_config(vision)
+    ctl.on_activate()
+    ctl.on_activate()  # re-entry must not record "ball" as the thing to restore
+    ctl.on_deactivate()
+    assert vision.target_label == "blue bucket"
+
+
 def test_runs_with_no_intake_wired():
     """Perception and drive must not depend on a mechanism being present."""
     ctl = BallIntakeController(detection_provider=lambda: det(error_y=0.5))

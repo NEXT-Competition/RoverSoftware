@@ -385,8 +385,12 @@ class Robot:
                     c.set_rate_provider(self.pose_estimator.heading_rate)
                 elif isinstance(c, BallIntakeController):
                     # Same perception, no rate provider: this loop steers on the
-                    # detection alone and has no heading to hold.
+                    # detection alone and has no heading to hold. It also needs
+                    # the vision config, so the detector filters to balls BEFORE
+                    # picking its one box per frame — see set_vision_config.
                     c.set_detection_provider(self.detector.detection)
+                    if config.vision.enabled:
+                        c.set_vision_config(config.vision)
 
         # And its actuator, if the layout declares one. A build with no intake
         # still gets a controller that drives and steers - it simply collects
