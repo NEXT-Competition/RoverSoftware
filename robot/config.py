@@ -318,6 +318,24 @@ class VisionConfig:
     standoff_size: float = 0.45
     search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
 
+    # --- Metric range (telemetry only; standoff above needs none of this) ---
+    # Real height of the target, in metres. Buckets are a known, fixed size —
+    # that is the whole reason range is solvable from one box dimension. 0
+    # disables the distance estimate rather than reporting a made-up number.
+    target_height_m: float = 0.0
+    # Focal length in FRAME HEIGHTS (not pixels), so it pairs with the
+    # normalized `size` and survives a resolution change. 0 = uncalibrated.
+    #
+    # Calibrate once, don't guess — park at a tape-measured distance, run
+    # tools/detector_selftest.py, read the printed size, then:
+    #     focal_frac = size * distance_m / target_height_m
+    # Take the median of a few frames; the box jitters. Sanity check: it
+    # should land near 1 / (2 * tan(vfov / 2)) — ~1.07 for the edge_impulse
+    # backend's square 50 deg crop. Calibrating against REAL detector output
+    # (rather than that formula) is what folds in any systematic tight/loose
+    # box bias of the model, so no second correction factor is needed.
+    focal_frac: float = 0.0
+
 
 @dataclass
 class FPVConfig:

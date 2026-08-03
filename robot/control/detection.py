@@ -48,3 +48,38 @@ class Detection:
     # which cannot report object size. None => no range information available.
     size: Optional[float]
     stamp: float  # time.monotonic() when this frame was classified
+
+
+def distance_m(
+    size: Optional[float], focal_frac: float, target_height_m: float
+) -> Optional[float]:
+    """Metres to a target of KNOWN height, from its box height fraction.
+
+    Similar triangles, nothing more: a lens projects the world such that
+    apparent size falls off as 1/distance, so
+
+        distance = focal_frac * target_height_m / size
+
+    `focal_frac` is the focal length expressed in frame heights (not pixels),
+    which is what makes this work against `size` — a normalized fraction —
+    rather than raw pixels. That choice is deliberate: the same constant holds
+    when the capture resolution changes, because both the focal length and the
+    frame scale together. Only a change of LENS (or of the model's crop, which
+    is an effective FOV change) invalidates it.
+
+    Returns None rather than a guess whenever range is unavailable: no size
+    (FOMO emits fixed-size boxes), or an uncalibrated build. A caller that gets
+    None must degrade, never substitute a default — a wrong distance is worse
+    than a missing one, since it looks usable.
+
+    Standoff does NOT go through here. The controller compares `size` against
+    `standoff_size` directly, which needs no calibration at all and is the
+    reason approach has always worked on an uncalibrated robot. This is for
+    telemetry and anything downstream that needs real units.
+    """
+    # ponytail: no lens-distortion model. A wide-angle lens breaks the 1/d
+    # assumption toward the frame edges — fix it with cv2.undistort and real
+    # intrinsics, not by curve-fitting around it here.
+    if not size or focal_frac <= 0.0 or target_height_m <= 0.0:
+        return None
+    return focal_frac * target_height_m / size
