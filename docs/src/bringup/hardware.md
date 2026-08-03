@@ -121,7 +121,7 @@ why.
 ## 3 · Group the rest into mechanisms
 
 Anything that is not drive is a **mechanism**: an intake, an arm, a launcher. A
-mechanism owns one or more actuators and comes in two kinds.
+mechanism owns one or more actuators and comes in three kinds.
 
 **Powered**
 : Holds a value until told otherwise — an intake that spins, an arm that holds
@@ -135,12 +135,79 @@ and a magazine count. Asking it to fire repeatedly still yields one activation
 per cycle, which is what makes a launcher safe to wire to a condition that stays
 true.
 
+**Sequence**
+: A queue of steps run **one after another**. This is the kind for a shooter
+whose actuators cannot all move at once — spin the flywheel, *then* push the
+ball in, *then* run the belt. It is covered in full below.
+
 ![A mechanism card named intake of type Power, with an Enabled checkbox, an auto-stop field, two named presets on and off each mapping intake_motor to a value, an Add preset row, and Test controls reading Reverse and Forward.](../img/hardware-mechanism.webp)
 
 A powered mechanism with two presets and its own actuator. The **Test** row jogs
 it from the bench — and is refused unless the robot is in teleop with no e-stop
 latched, because a bench test that runs while a routine owns the motors is how a
 hand ends up in an intake.
+
+## 3a · Sequence a mechanism whose parts move in turn
+
+Both of the kinds above write every actuator at the same instant. A launcher
+with a feeder servo, a flywheel and a belt on it needs the opposite: an order.
+Press **+ Sequence mechanism**, add the actuators, then add a step per stage.
+
+Each step has three parts.
+
+**What it moves.**
+: Tick an actuator to include it, and give it a value. The units are the
+actuator's own — **degrees** for a servo, **throttle** (−1 to 1) for a motor —
+so a step reads the way the build does.
+
+: An actuator you *do not* tick is **left exactly as it was**. This is the whole
+point, and the one thing to get straight: the flywheel started in step 1 keeps
+spinning through step 2, which is what lets the feeder push a ball into a wheel
+that is already up to speed. (Presets work the other way round, zeroing what
+they do not name. If you want that here, tick *"stop everything this step
+doesn't name"*.)
+
+**How long it holds.**
+: *Hold for at least* is a **floor, not a duration**. The step ends when that
+time has passed *and* its condition is satisfied. Leave the condition off and
+the floor is all there is, which is an ordinary timed sequence.
+
+**What else it waits for.**
+: *"A motor reaching a speed"* is the one a shooter wants. Timing a spin-up
+works at one battery charge and fires early at every other; waiting for the
+encoder to actually read 3 000 rpm works at all of them. It needs encoder pins
+on that actuator — the robot refuses the layout otherwise, rather than shipping
+a gate that can never open.
+
+: *"Another mechanism being ready"* waits for a different mechanism to go idle,
+which is how two mechanisms hand off to each other.
+
+A gate that never opens would leave the flywheel at full throttle forever, so
+every gated step has a ceiling — its own *give up after*, or the mechanism's
+**step timeout**. Reaching it **stops the whole sequence** by default and parks
+everything, because carrying on is exactly the jam the gate was written to
+prevent. Switch it to *carry on anyway* only when the wait is an optimisation
+rather than a safety condition.
+
+The finished thing for the three-actuator launcher:
+
+| # | Step | Moves | Holds ≥ | Waits for |
+|---|------|-------|---------|-----------|
+| 1 | spin up | flywheel `1.0` | 0.2 s | flywheel ≥ 3000 rpm |
+| 2 | feed | feeder `40°` | 0.35 s | — |
+| 3 | advance | belt `0.8` | 0.6 s | — |
+
+Start it from a routine with **start a sequence**, or bind it to a gamepad
+button. It returns immediately and advances itself off the control loop, so
+nothing here ever blocks driving — asking again while it runs does nothing, so
+it is safe on a button that stays held. To wait for it to finish, transition on
+**mechanism is ready**, which stays false for exactly as long as it is running.
+
+> **Every way of stopping parks it**
+>
+> E-stop, a mode change and shutdown all park a half-finished queue: servos to
+> the rest angle, motors to stop. A sequence never resumes from the middle — the
+> next activation starts at step 1.
 
 ## 4 · Save it
 

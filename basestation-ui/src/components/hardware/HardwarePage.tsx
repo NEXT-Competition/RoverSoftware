@@ -325,6 +325,14 @@ export function HardwarePage() {
                   >
                     + Pulse mechanism
                   </button>
+                  <button
+                    type="button"
+                    class="btn ghost small"
+                    onClick={() => addMechanism("sequence")}
+                    title="Actuators that have to run one after another — a feeder, then a flywheel, then a belt"
+                  >
+                    + Sequence mechanism
+                  </button>
                 </div>
               </div>
             </section>

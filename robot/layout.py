@@ -42,6 +42,7 @@ from .config import (
     MechanismConfig,
     MotorConfig,
     RobotConfig,
+    SequenceStep,
 )
 from .tuning import _actuator_params, coerce
 
@@ -56,12 +57,19 @@ MAX_DRIVE_ACTUATORS = 16
 MAX_MECHANISMS = 8
 MAX_ACTUATORS_PER_MECHANISM = 8
 MAX_PRESETS = 8
+# A sequence long enough to need more legs than this is a routine, not a
+# mechanism — and the doc size cap would stop a runaway list anyway, but with a
+# message about bytes rather than about the sequence.
+MAX_SEQUENCE_STEPS = 12
 MAX_DOC_BYTES = 6144
 CHANNELS = range(0, 16)  # Fusion HAT PWM channels
 
 DRIVE_KINDS = ("tank", "servo_steer", "single", "none")
-MECHANISM_KINDS = ("power", "pulse")
+MECHANISM_KINDS = ("power", "pulse", "sequence")
 ACTUATOR_KINDS = ("esc", "servo")
+# The conditions a sequence step may wait on, beyond its own clock.
+WAIT_KINDS = ("rpm", "mech_ready")
+ON_TIMEOUT = ("abort", "advance")
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 
@@ -126,6 +134,25 @@ def _actuator_doc(m: MotorConfig) -> dict:
     }
 
 
+def _step_doc(step: SequenceStep) -> dict:
+    """One sequence step, as the editor round-trips it.
+
+    Optional halves are omitted rather than sent as empty: a step gated on time
+    alone should read as one in the document too, not as one carrying an empty
+    gate that someone has to recognise as meaning nothing.
+    """
+    doc: Dict[str, Any] = {"name": step.name, "values": dict(step.values),
+                           "seconds": step.seconds}
+    if step.wait_for:
+        doc["wait_for"] = dict(step.wait_for)
+        doc["on_timeout"] = step.on_timeout
+        if step.timeout:
+            doc["timeout"] = step.timeout
+    if step.clear:
+        doc["clear"] = True
+    return doc
+
+
 def _mechanism_doc(mech: MechanismConfig) -> dict:
     doc = {
         "name": mech.name,
@@ -142,6 +169,15 @@ def _mechanism_doc(mech: MechanismConfig) -> dict:
             recover_seconds=mech.recover_seconds,
             cooldown=mech.cooldown,
             max_activations=mech.max_activations,
+        )
+    elif mech.kind == "sequence":
+        doc.update(
+            rest_angle=mech.rest_angle,
+            cooldown=mech.cooldown,
+            max_activations=mech.max_activations,
+            step_timeout=mech.step_timeout,
+            loop=mech.loop,
+            steps=[_step_doc(s) for s in mech.steps],
         )
     else:
         doc.update(presets=mech.presets, auto_stop_seconds=mech.auto_stop_seconds)
@@ -371,7 +407,49 @@ def _validate_mechanism(raw: Any, errors: List[str],
                 errors.append(f"{what}: max_activations must be a whole number")
         if len(actuators) > 1:
             warnings.append(f"{what}: a pulse mechanism drives all "
-                            f"{len(actuators)} of its actuators together")
+                            f"{len(actuators)} of its actuators together — a "
+                            "'sequence' is the kind that moves them in turn")
+    elif kind == "sequence":
+        # `rest_angle` is where a servo is parked between runs, and `cooldown` /
+        # `max_activations` mean exactly what they mean for a pulse — a sequence
+        # is a pulse with more than one leg. Shared rather than re-spelled so a
+        # build that outgrows `pulse` keeps the numbers it already found.
+        for fname, lo, hi in (("rest_angle", -90, 90), ("cooldown", 0, 60),
+                              ("step_timeout", 0.1, 60)):
+            if fname in raw:
+                try:
+                    setattr(mech, fname, _clamp_float(raw[fname], lo, hi))
+                except (TypeError, ValueError):
+                    errors.append(f"{what}: {fname} must be a number")
+        if "max_activations" in raw:
+            try:
+                mech.max_activations = max(0, min(999, int(raw["max_activations"])))
+            except (TypeError, ValueError):
+                errors.append(f"{what}: max_activations must be a whole number")
+        mech.loop = bool(raw.get("loop", False))
+
+        steps = raw.get("steps", [])
+        if not isinstance(steps, list):
+            errors.append(f"{what}: 'steps' must be a list")
+        elif len(steps) > MAX_SEQUENCE_STEPS:
+            errors.append(f"{what}: {len(steps)} steps, at most "
+                          f"{MAX_SEQUENCE_STEPS} allowed")
+        else:
+            for index, raw_step in enumerate(steps):
+                step = _validate_step(raw_step, index, what, actuators,
+                                      errors, warnings)
+                if step is not None:
+                    mech.steps.append(step)
+        if not mech.steps:
+            # A warning, not an error: an empty queue is the state a mechanism
+            # is in the moment it is added in the editor, and refusing to save
+            # it would mean the only way to create one is to type the whole
+            # thing correctly first time.
+            warnings.append(f"{what}: has no steps yet, so activating it does "
+                            "nothing")
+        if mech.loop and mech.cooldown <= 0 and len(mech.steps) == 1:
+            warnings.append(f"{what}: loops a single step with no cooldown, so "
+                            "it will re-apply that step every tick")
     else:
         presets = raw.get("presets", {})
         if not isinstance(presets, dict):
@@ -407,6 +485,140 @@ def _validate_mechanism(raw: Any, errors: List[str],
                 errors.append(f"{what}: auto_stop_seconds must be a number")
 
     return mech
+
+
+def _validate_wait(raw: Any, what: str, actuators: Dict[str, MotorConfig],
+                   errors: List[str], warnings: List[str]) -> Dict[str, Any]:
+    """One step's `wait_for` gate. `{}` means the step is timed only."""
+    if raw is None or raw == {}:
+        return {}
+    if not isinstance(raw, dict):
+        errors.append(f"{what}: 'wait_for' must be an object")
+        return {}
+    kind = str(raw.get("kind", "")).strip()
+    if kind not in WAIT_KINDS:
+        errors.append(f"{what}: unknown wait_for kind {kind!r} "
+                      f"(expected one of {', '.join(WAIT_KINDS)})")
+        return {}
+    if kind == "rpm":
+        act = str(raw.get("actuator", "")).strip()
+        if act not in actuators:
+            errors.append(f"{what}: wait_for names unknown actuator {act!r}")
+            return {}
+        if actuators[act].encoder_a == -1 or actuators[act].encoder_b == -1:
+            # Refused, not warned. The mechanism holds an unsatisfiable gate
+            # closed until the step times out, so a build that saved this would
+            # find out at the field, as a shooter that aborts every time.
+            errors.append(f"{what}: wait_for reads the speed of {act!r}, which "
+                          "has no encoder pins — set encoder_a/encoder_b on it, "
+                          "or gate the step on time alone")
+            return {}
+        gate: Dict[str, Any] = {"kind": kind, "actuator": act}
+        for bound in ("at_least", "at_most"):
+            if bound in raw:
+                try:
+                    gate[bound] = _clamp_float(raw[bound], 0.0, 60000.0)
+                except (TypeError, ValueError):
+                    errors.append(f"{what}: wait_for {bound} must be a number")
+        if not (gate.get("at_least", 0.0) or gate.get("at_most", 0.0)):
+            errors.append(f"{what}: wait_for on a speed needs at_least or "
+                          "at_most — without one there is nothing to wait for")
+            return {}
+        lo, hi = gate.get("at_least", 0.0), gate.get("at_most", 0.0)
+        if lo and hi and lo > hi:
+            errors.append(f"{what}: wait_for wants a speed at least {lo:.0f} and "
+                          f"at most {hi:.0f}, which nothing can be")
+            return {}
+        return gate
+    # mech_ready: the named mechanism is checked once every mechanism is parsed,
+    # by _resolve_wait_targets — it may legally refer to one declared later.
+    mech = str(raw.get("mech", "")).strip()
+    if not mech:
+        errors.append(f"{what}: wait_for needs 'mech', the mechanism to wait for")
+        return {}
+    return {"kind": kind, "mech": mech}
+
+
+def _validate_step(raw: Any, index: int, what: str,
+                   actuators: Dict[str, MotorConfig], errors: List[str],
+                   warnings: List[str]) -> Optional[SequenceStep]:
+    if not isinstance(raw, dict):
+        errors.append(f"{what}: step {index + 1} must be an object")
+        return None
+    where = f"{what} step {index + 1}"
+    step = SequenceStep(name=str(raw.get("name", "") or ""))
+
+    values = raw.get("values", {})
+    if not isinstance(values, dict):
+        errors.append(f"{where}: 'values' must map actuator names to numbers")
+        return None
+    for act, value in values.items():
+        if act not in actuators:
+            errors.append(f"{where}: unknown actuator {act!r}")
+            continue
+        # Two units, chosen by what the actuator IS — degrees for a servo,
+        # throttle for an ESC. See SequenceStep in config.py for why.
+        servo = actuators[act].kind == "servo"
+        lo, hi = (-90.0, 90.0) if servo else (-1.0, 1.0)
+        try:
+            step.values[act] = _clamp_float(value, lo, hi)
+        except (TypeError, ValueError):
+            errors.append(f"{where}: {act} must be a number "
+                          f"({'degrees' if servo else 'throttle'}, {lo} to {hi})")
+
+    for fname, lo, hi in (("seconds", 0.0, 60.0), ("timeout", 0.0, 60.0)):
+        if fname in raw:
+            try:
+                setattr(step, fname, _clamp_float(raw[fname], lo, hi))
+            except (TypeError, ValueError):
+                errors.append(f"{where}: {fname} must be a number")
+
+    on_timeout = str(raw.get("on_timeout", "abort")).strip()
+    if on_timeout not in ON_TIMEOUT:
+        errors.append(f"{where}: unknown on_timeout {on_timeout!r} "
+                      f"(expected one of {', '.join(ON_TIMEOUT)})")
+    else:
+        step.on_timeout = on_timeout
+
+    step.clear = bool(raw.get("clear", False))
+    step.wait_for = _validate_wait(raw.get("wait_for"), where, actuators,
+                                   errors, warnings)
+
+    if not step.values and not step.wait_for and step.seconds <= 0:
+        warnings.append(f"{where}: moves nothing, waits for nothing and takes "
+                        "no time, so it does nothing")
+    # The dwell is served BEFORE the gate is ever tested, so a dwell longer than
+    # the timeout leaves the condition no grace at all: it gets one look, and
+    # anything short of already-true aborts. Almost always a swapped pair of
+    # numbers, and invisible at the field as a shooter that fires only when the
+    # wheel happened to be up to speed anyway.
+    if step.wait_for and step.timeout and step.seconds >= step.timeout:
+        warnings.append(f"{where}: holds for {step.seconds:g}s but gives up "
+                        f"after {step.timeout:g}s, so the condition gets one "
+                        "look and no time to come true")
+    return step
+
+
+def _resolve_wait_targets(mechanisms: Dict[str, MechanismConfig],
+                          errors: List[str]) -> None:
+    """Check every `mech_ready` gate names a mechanism that exists.
+
+    A separate pass because a step may legitimately wait on a mechanism
+    declared further down the list, and refusing that would make the order of
+    an array carry meaning it does not otherwise have.
+    """
+    for name, mech in mechanisms.items():
+        for index, step in enumerate(mech.steps):
+            if step.wait_for.get("kind") != "mech_ready":
+                continue
+            target = str(step.wait_for.get("mech", ""))
+            if target == name:
+                errors.append(f"mechanism {name!r} step {index + 1}: waits for "
+                              "itself to be ready, which cannot happen while it "
+                              "is the thing running")
+            elif target not in mechanisms and target not in _RESERVED_MECHANISM_NAMES:
+                errors.append(f"mechanism {name!r} step {index + 1}: waits for "
+                              f"unknown mechanism {target!r}")
 
 
 def _clamp_float(value: Any, lo: float, hi: float) -> float:
@@ -563,6 +775,7 @@ def validate(doc: Any, reserved_channels: Optional[Dict[int, str]] = None) -> Va
 
     _resolve_channels(drive, mechanisms, reserved_channels or {}, errors)
     _resolve_encoder_pins(drive, mechanisms, errors)
+    _resolve_wait_targets(mechanisms, errors)
 
     return Validated(drive, mechanisms, errors, warnings)
 

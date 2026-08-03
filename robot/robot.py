@@ -117,6 +117,10 @@ class Robot:
         self._registry: Dict[str, Mechanism] = dict(self.mechanisms)
         if self.shooter is not None:
             self._registry["shooter"] = self.shooter
+        # Hand every mechanism the same registry, so a sequence step can wait on
+        # another mechanism being ready. By reference, for the reason above.
+        for mech in self.mechanisms.values():
+            mech.bind(self._registry)
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
         # Multi-frame replies (a config snapshot, a layout, a routine set) wait
@@ -1216,6 +1220,13 @@ class Robot:
     def start(self) -> None:
         print("[Robot] arming ESCs (holding neutral)...")
         self.drive.arm()
+        # After the drivetrain, which is what actually holds the ESCs at neutral
+        # for arm_seconds: a mechanism's encoders want claiming against the same
+        # known standstill, and none of them can be turning before this point.
+        # Layout mechanisms only — the built-in launcher is not one of these
+        # objects (it keeps its own ShooterConfig) and has no GPIO to claim.
+        for mech in self.mechanisms.values():
+            mech.start()
         print(f"[Robot] opening XBee link on {self.cfg.comms.port} @ {self.cfg.comms.baud}...")
         self.link.start()
         # Opportunistic, and started after the radio on purpose: the radio is the
@@ -1334,6 +1345,11 @@ class Robot:
         # cocked, and leaving an intake powered is worse.
         for mech in self._all_mechanisms().values():
             mech.stop()
+        # Then their encoder pins, after the motors are at rest and after
+        # drive.shutdown() above — which owns closing the shared GPIO backend,
+        # so this only hands back what each mechanism claimed.
+        for mech in self.mechanisms.values():
+            mech.shutdown()
         # Stop the frame consumers, then the camera they read from. The detector
         # owns a subprocess, so stopping it early also halts inference promptly.
         if self.fpv is not None:
