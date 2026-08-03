@@ -213,12 +213,12 @@ needs a tape measure and a target of known height:
 python tools/detector_selftest.py --backend imx500 \
     --imx500-model /path/to/network/network.rpk \
     --imx500-labels /path/to/labels.txt \
-    --label bucket --target-height 0.29 --distance 3.00
+    --label bucket --target-height 0.368 --distance 3.00
 #    -> prints RS_VISION_TARGET_HEIGHT / RS_VISION_FOCAL_FRAC to paste
 
 # 2. VERIFY at a distance you did NOT calibrate at
 python tools/detector_selftest.py --backend imx500 ... \
-    --target-height 0.29 --focal-frac <the number>
+    --target-height 0.368 --focal-frac <the number>
 #    -> `range=` per frame; a few percent off is right
 ```
 

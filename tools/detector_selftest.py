@@ -36,11 +36,11 @@ Standoff above needs none of this — it stops on the raw `size` ratio. Metres a
 for telemetry, and they do need a tape measure. Two runs:
 
     # 1. CALIBRATE: bucket centred, tape-measured 3.00 m away
-    python tools/detector_selftest.py --target-height 0.29 --distance 3.00
+    python tools/detector_selftest.py --target-height 0.368 --distance 3.00
     #    -> prints RS_VISION_TARGET_HEIGHT / RS_VISION_FOCAL_FRAC to paste
 
     # 2. VERIFY at a distance you did NOT calibrate at (e.g. 1.5 m)
-    python tools/detector_selftest.py --target-height 0.29 --focal-frac 1.07
+    python tools/detector_selftest.py --target-height 0.368 --focal-frac 1.03
     #    -> prints `range=` per frame; a few percent off is right
 
 Both work off the MEDIAN box over the run, not one frame — the box jitters.
@@ -299,7 +299,7 @@ def main() -> int:
     p.add_argument("--target-height", type=float, metavar="M",
                    default=float(os.environ.get("RS_VISION_TARGET_HEIGHT",
                                                 cfg.vision.target_height_m)),
-                   help="real height of the target in metres (a bucket is ~0.29)")
+                   help="real height of the target in metres (our buckets are 14.5 in = 0.368)")
     p.add_argument("--distance", type=float, default=0.0, metavar="M",
                    help="CALIBRATE: tape-measured distance to the target right "
                         "now; prints the focal_frac to put in robot.env")
