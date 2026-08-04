@@ -154,8 +154,12 @@ class IMU(HeadingSource):
         # transport. What is left here is what genuinely differs: opening an I2C
         # device, subscribing to reports, quaternion maths, and a calibration
         # level that only this transport can report.
-        super().__init__(heading_offset_deg=heading_offset_deg, invert=invert,
-                         min_calib=min_calib, sample_timeout=sample_timeout)
+        super().__init__(
+            heading_offset_deg=heading_offset_deg,
+            invert=invert,
+            min_calib=min_calib,
+            sample_timeout=sample_timeout,
+        )
         self.i2c_address = i2c_address
         # Whether to run the sensor's dynamic calibration and save it to the
         # BNO08x's own flash once it converges, so the board boots calibrated. The
@@ -170,12 +174,7 @@ class IMU(HeadingSource):
         self._sensor = None
         self._serial = None
         self._i2c = None
-        self._calib_saved = False      # save the chip's calibration once per session
-<<<<<<< HEAD
-        # Unlike RVC, this transport does report an accuracy level, and 0 is a
-        # meaningful value for it (uncalibrated) rather than "no such number".
-        self._calib = 0
-=======
+        self._calib_saved = False  # save the chip's calibration once per session
         # When each quantity was last actually measured. Two stamps, not one:
         # the quaternion and the gyro are separate reports, and a read that
         # returns one but not the other must not refresh both.
@@ -191,7 +190,6 @@ class IMU(HeadingSource):
         self._errors = 0
         self._last_error_log = 0.0
         self._stale = False
->>>>>>> a44f5bfa99df5806350b69d66afd263b700da2c7
 
     def start(self) -> None:
         """Begin reading on a background thread; the sensor is opened there.
@@ -206,26 +204,36 @@ class IMU(HeadingSource):
         """
         if self.transport == "uart_rvc":
             if serial is None or BNO08x_RVC is None:
-                print("[IMU] pyserial / adafruit-circuitpython-bno08x-rvc not installed — "
-                      "IMU disabled (heading falls back to GPS course).")
+                print(
+                    "[IMU] pyserial / adafruit-circuitpython-bno08x-rvc not installed — "
+                    "IMU disabled (heading falls back to GPS course)."
+                )
                 return
             self._running = True
-            self._thread = threading.Thread(target=self._run, name="imu-rx", daemon=True)
+            self._thread = threading.Thread(
+                target=self._run, name="imu-rx", daemon=True
+            )
             self._thread.start()
-            print(f"[IMU] opening BNO085 UART-RVC on {self.serial_port} "
-                  f"@ {self.serial_baud} baud (background; heading uses GPS course until it's up)")
+            print(
+                f"[IMU] opening BNO085 UART-RVC on {self.serial_port} "
+                f"@ {self.serial_baud} baud (background; heading uses GPS course until it's up)"
+            )
             return
 
         if board is None or busio is None or adafruit_bno08x is None:
-            print("[IMU] adafruit-circuitpython-bno08x / blinka not installed — IMU "
-                  "disabled (heading falls back to GPS course). "
-                  "Install on the Pi: pip install adafruit-circuitpython-bno08x")
+            print(
+                "[IMU] adafruit-circuitpython-bno08x / blinka not installed — IMU "
+                "disabled (heading falls back to GPS course). "
+                "Install on the Pi: pip install adafruit-circuitpython-bno08x"
+            )
             return
         self._running = True
         self._thread = threading.Thread(target=self._run, name="imu-rx", daemon=True)
         self._thread.start()
-        print(f"[IMU] opening BNO085 @ 0x{self.i2c_address:02x} on I2C "
-              f"(background; heading uses GPS course until it's up)")
+        print(
+            f"[IMU] opening BNO085 @ 0x{self.i2c_address:02x} on I2C "
+            f"(background; heading uses GPS course until it's up)"
+        )
 
     def _run(self) -> None:
         """Thread body: open the sensor, then stream from it."""
@@ -238,18 +246,22 @@ class IMU(HeadingSource):
         """Open the sensor backend and subscribe to the reports. True on success."""
         if self.transport == "uart_rvc":
             try:
-                self._serial = serial.Serial(self.serial_port,
-                                             baudrate=self.serial_baud,
-                                             timeout=1)
+                self._serial = serial.Serial(
+                    self.serial_port, baudrate=self.serial_baud, timeout=1
+                )
                 self._sensor = BNO08x_RVC(self._serial)
             except Exception as e:
-                print(f"[IMU] could not open BNO085 UART-RVC on {self.serial_port}: {e} — IMU "
-                      "disabled (heading falls back to GPS course)")
+                print(
+                    f"[IMU] could not open BNO085 UART-RVC on {self.serial_port}: {e} — IMU "
+                    "disabled (heading falls back to GPS course)"
+                )
                 self._serial = None
                 self._sensor = None
                 return False
-            print(f"[IMU] reading BNO085 UART-RVC from {self.serial_port} "
-                  f"({self.serial_baud} baud)")
+            print(
+                f"[IMU] reading BNO085 UART-RVC from {self.serial_port} "
+                f"({self.serial_baud} baud)"
+            )
             return True
 
         try:
@@ -269,12 +281,16 @@ class IMU(HeadingSource):
             self._sensor.enable_feature(BNO_REPORT_ROTATION_VECTOR)
             self._sensor.enable_feature(BNO_REPORT_GYROSCOPE)
         except Exception as e:
-            print(f"[IMU] could not open BNO085 @ 0x{self.i2c_address:02x}: {e} — IMU "
-                  "disabled (heading falls back to GPS course)")
+            print(
+                f"[IMU] could not open BNO085 @ 0x{self.i2c_address:02x}: {e} — IMU "
+                "disabled (heading falls back to GPS course)"
+            )
             self._sensor = None
             return False
-        print(f"[IMU] reading BNO085 @ 0x{self.i2c_address:02x} (rotation vector), "
-              f"offset={self.heading_offset_deg:g} invert={self.invert}")
+        print(
+            f"[IMU] reading BNO085 @ 0x{self.i2c_address:02x} (rotation vector), "
+            f"offset={self.heading_offset_deg:g} invert={self.invert}"
+        )
         return True
 
     def _read_loop(self) -> None:
@@ -283,10 +299,15 @@ class IMU(HeadingSource):
                 t0 = time.monotonic()
                 try:
                     heading = self._sensor.heading
-                except Exception as e:  # keep the reader alive across transient UART glitches
+                except (
+                    Exception
+                ) as e:  # keep the reader alive across transient UART glitches
                     self._note_read_error(e)
-                    time.sleep(_ERROR_BACKOFF_S if isinstance(e, _TRANSPORT_ERRORS)
-                               else self._period)
+                    time.sleep(
+                        _ERROR_BACKOFF_S
+                        if isinstance(e, _TRANSPORT_ERRORS)
+                        else self._period
+                    )
                     continue
                 self._consume_uart_heading(heading)
                 sleep_for = self._period - (time.monotonic() - t0)
@@ -298,8 +319,8 @@ class IMU(HeadingSource):
         while self._running:
             t0 = time.monotonic()
             try:
-                quat = self._sensor.quaternion              # (i, j, k, real)
-                gyro = self._sensor.gyro                     # (x, y, z) rad/s
+                quat = self._sensor.quaternion  # (i, j, k, real)
+                gyro = self._sensor.gyro  # (x, y, z) rad/s
                 # calibration_status is not a cached value: every read sends an
                 # ME command and waits for the reply, so polling it at the loop
                 # rate triples the bus traffic for a number that moves over
@@ -308,12 +329,17 @@ class IMU(HeadingSource):
                 if t0 >= next_calib:
                     next_calib = t0 + CALIB_POLL_S
                     calib = self._sensor.calibration_status  # single level 0-3
-            except Exception as e:  # keep the reader alive across transient I2C glitches
+            except (
+                Exception
+            ) as e:  # keep the reader alive across transient I2C glitches
                 self._note_read_error(e)
                 # A corrupted packet costs one sample; a broken bus costs a
                 # backoff. See _ERROR_BACKOFF_S for why the difference matters.
-                time.sleep(_ERROR_BACKOFF_S if isinstance(e, _TRANSPORT_ERRORS)
-                           else self._period)
+                time.sleep(
+                    _ERROR_BACKOFF_S
+                    if isinstance(e, _TRANSPORT_ERRORS)
+                    else self._period
+                )
                 continue
             self._consume(quat, gyro, calib)
             self._maybe_autosave(calib)
@@ -338,29 +364,39 @@ class IMU(HeadingSource):
             due = (now - self._last_error_log) >= _ERROR_LOG_INTERVAL
             if due:
                 self._last_error_log = now
-            went_stale = (not self._stale and math.isfinite(last_good)
-                          and not self._fresh_locked(last_good))
+            went_stale = (
+                not self._stale
+                and math.isfinite(last_good)
+                and not self._fresh_locked(last_good)
+            )
             if went_stale:
                 self._stale = True
         if due:
-            print(f"[IMU] read error: {error} ({errors} since start)"
-                  + ("\n  A bare number is an SHTP report id the driver does "
-                     "not know, i.e. a corrupted or desynchronised stream — not "
-                     "a missing sensor. Usual causes: a second process on the "
-                     "I2C bus (a monitor tool running against the service), "
-                     "wiring or noise, or a stale dtparam=i2c_arm_baudrate."
-                     if errors == 1 else ""))
+            print(
+                f"[IMU] read error: {error} ({errors} since start)"
+                + (
+                    "\n  A bare number is an SHTP report id the driver does "
+                    "not know, i.e. a corrupted or desynchronised stream — not "
+                    "a missing sensor. Usual causes: a second process on the "
+                    "I2C bus (a monitor tool running against the service), "
+                    "wiring or noise, or a stale dtparam=i2c_arm_baudrate."
+                    if errors == 1
+                    else ""
+                )
+            )
         if went_stale:
-            print(f"[IMU] no valid sample for {self.sample_timeout:.1f}s — the "
-                  f"heading is no longer being reported, so navigation falls "
-                  f"back to the GPS course until it recovers")
+            print(
+                f"[IMU] no valid sample for {self.sample_timeout:.1f}s — the "
+                f"heading is no longer being reported, so navigation falls "
+                f"back to the GPS course until it recovers"
+            )
 
     def _fresh_locked(self, stamp: float) -> bool:
         """Is a sample taken at `stamp` still an answer? Call under the lock."""
         if not math.isfinite(stamp):
-            return False            # nothing has ever been measured
+            return False  # nothing has ever been measured
         if self.sample_timeout <= 0:
-            return True             # the check is switched off
+            return True  # the check is switched off
         return (time.monotonic() - stamp) <= self.sample_timeout
 
     def _consume(self, quat, gyro, calib) -> None:
@@ -384,7 +420,7 @@ class IMU(HeadingSource):
             rate_cw = -gyro[2] * _RAD_TO_DEG
             yaw_rate = -rate_cw if self.invert else rate_cw
 
-       now = time.monotonic()
+        now = time.monotonic()
         with self._lock:
             if calib is not None:
                 self._calib = int(calib)
@@ -402,8 +438,10 @@ class IMU(HeadingSource):
             if recovered:
                 self._stale = False
         if recovered:
-            print(f"[IMU] reading again after {self._errors} read error(s); "
-                  f"the heading is back")
+            print(
+                f"[IMU] reading again after {self._errors} read error(s); "
+                f"the heading is back"
+            )
 
     def _consume_uart_heading(self, heading_data) -> None:
         """Fold one UART-RVC heading tuple into the cached absolute heading."""
@@ -491,8 +529,11 @@ class IMU(HeadingSource):
     def has_heading(self) -> bool:
         """True once a valid, calibrated, CURRENT absolute heading is available."""
         with self._lock:
-            return (self._have_reading and self._calibrated()
-                    and self._fresh_locked(self._heading_at))
+            return (
+                self._have_reading
+                and self._calibrated()
+                and self._fresh_locked(self._heading_at)
+            )
 
     # --- Calibration persistence -------------------------------------------------
     # The BNO08x stores its calibration in on-chip flash, so unlike the BNO055 we
