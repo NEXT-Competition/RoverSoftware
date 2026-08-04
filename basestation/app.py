@@ -293,6 +293,33 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             _drive.update(throttle=throttle, steer=steer, t=now)
             dispatch(rid, {"type": "drive", "throttle": round(throttle, 3), "steer": round(steer, 3)})
 
+    # Same shape as _drive above, and for the same reason: a trigger held down
+    # produces a reading at the controller's poll rate, and putting 40 frames a
+    # second of it onto a radio shared with telemetry would starve the thing the
+    # operator actually needs. Paced to drive_hz, with a keepalive that must stay
+    # under the robot's JOG_TIMEOUT_S (0.4s) or a held trigger would stutter as
+    # the jog expired between frames.
+    _mech = {"power": None, "t": -1.0}
+    MECH_EPS = 0.02
+
+    def on_mech_axis(mech: str, power: float) -> None:
+        rid = fleet.selected
+        if not rid:
+            return
+        now = time.monotonic()
+        dt = now - _mech["t"]
+        min_interval = 1.0 / max(settings.base.drive_hz, 1.0)
+        changed = (_mech["power"] is None
+                   or abs(power - _mech["power"]) > MECH_EPS)
+        # The release is never rate-limited away: going to zero is the frame
+        # that stops the motor, and dropping it because it arrived a few
+        # milliseconds early would leave the mechanism running until the
+        # robot's own timeout caught it.
+        release = power == 0.0 and _mech["power"] not in (None, 0.0)
+        if release or (changed and dt >= min_interval) or dt >= DRIVE_KEEPALIVE:
+            _mech.update(power=power, t=now)
+            dispatch(rid, {"type": "jog", "mech": mech, "power": round(power, 3)})
+
     def on_action(name: str) -> None:
         rid = fleet.selected
         if name == "estop":
@@ -344,6 +371,7 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     if controller is not None:
         controller.on_drive = on_drive
         controller.on_action = on_action
+        controller.on_mech_axis = on_mech_axis
         controller.set_mapping(settings.mapping())
 
     # ---- settings changes -> the things that cached them ----

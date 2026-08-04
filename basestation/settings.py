@@ -186,6 +186,33 @@ class ControllerMapping:
             for n in range(1, MECH_SLOTS + 1)
         )
 
+    # --- a mechanism on an analog trigger -----------------------------------
+    # The slots above are all BUTTONS, because `actions()` is a list of button
+    # indices and a press is an edge. A trigger is neither: it is an axis with a
+    # position, and the interesting thing about it is how far it is pulled. On a
+    # DualShock, L2/R2 report ONLY as axes — there is no button behind them — so
+    # a flywheel "on R2" cannot be expressed as a binding at all.
+    #
+    # Hence a separate pair: which axis, and which mechanism its position powers.
+    # Deliberately not folded into the preset slots, because it is a different
+    # kind of control — it sends a POWER every tick while held, not a state on a
+    # press, and it reaches the robot as `jog` rather than `mech_preset`.
+    axis_mech: int = UNBOUND  # axis index, e.g. 5 for R2
+    mech_axis: str = ""       # mechanism that axis powers
+    # Below this the trigger reads as released, so a pad that rests a little off
+    # zero does not hold a motor at a few percent forever.
+    axis_mech_deadzone: float = 0.06
+
+    def mech_axis_slot(self) -> Tuple[int, str]:
+        """(axis index, mechanism), or (-1, "") when the pair is not set.
+
+        Half a binding is dropped for the reason a half-filled preset slot is:
+        an axis with no mechanism has nothing to drive, and a mechanism with no
+        axis has nothing to drive it.
+        """
+        axis, mech = int(self.axis_mech), str(self.mech_axis or "").strip()
+        return (axis, mech) if (axis >= 0 and mech) else (-1, "")
+
     def actions(self):
         """(button index, action name) for every bound button.
 
@@ -278,6 +305,12 @@ PARAMS: Tuple[Param, ...] = (
         Param(f"controller.mech_{n}", "text"),
         Param(f"controller.preset_{n}", "text"),
     )),
+    # A mechanism on an analog trigger. An AXIS, so its ceiling is the axis
+    # range rather than the button range — binding this to 31 would name an axis
+    # no pad has, which reads as a mechanism that never responds.
+    Param("controller.axis_mech", "int", lo=UNBOUND, hi=15),
+    Param("controller.mech_axis", "text"),
+    Param("controller.axis_mech_deadzone", "float", lo=0, hi=0.5),
 )
 
 BY_PATH: Dict[str, Param] = {p.path: p for p in PARAMS}

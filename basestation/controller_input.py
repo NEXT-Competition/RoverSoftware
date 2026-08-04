@@ -137,6 +137,10 @@ class ControllerReader:
         self.hz = hz
         self.on_drive = None    # (throttle, steer) -> None
         self.on_action = None   # (name: str) -> None
+        # (mechanism: str, power: float) -> None, every tick the mapping binds
+        # an axis to a mechanism. Continuous rather than edge-triggered, which
+        # is the whole difference between this and on_action.
+        self.on_mech_axis = None
         self.connected = False
         self.name = None
         self._map = mapping or ControllerMapping()
@@ -144,6 +148,12 @@ class ControllerReader:
         self._prev = {}
         self._l2 = Trigger(self._map.trigger_rest)
         self._r2 = Trigger(self._map.trigger_rest)
+        # The trigger a mechanism hangs off, if the mapping names one. Its own
+        # Trigger instance, and so its own arming latch: it must be seen at rest
+        # once before it will report anything, or a driver that reports a flat
+        # 0.0 for an untouched trigger would spin a flywheel the moment the pad
+        # was plugged in. Fail stopped, exactly as the drive triggers do.
+        self._mech_axis = Trigger(self._map.trigger_rest)
         self._thread = None
         self._running = False
         # Raw sample published for the settings page's bind-by-pressing flow.
@@ -157,6 +167,7 @@ class ControllerReader:
         self._map = mapping
         self._l2.set_rest(mapping.trigger_rest)
         self._r2.set_rest(mapping.trigger_rest)
+        self._mech_axis.set_rest(mapping.trigger_rest)
 
     def state(self) -> dict:
         """What the pad is reporting right now: raw axes and pressed buttons.
@@ -183,6 +194,7 @@ class ControllerReader:
         # A fresh device has fresh triggers: make them prove they're at rest.
         self._l2.reset()
         self._r2.reset()
+        self._mech_axis.reset()
         self.connected = True
         self.name = self._js.get_name()
         print(f"[controller] connected: {self.name}")
@@ -218,6 +230,35 @@ class ControllerReader:
 
     def _axis(self, idx: int, naxes: int) -> float:
         return self._js.get_axis(idx) if (0 <= idx < naxes) else 0.0
+
+    def _push_mech_axis(self, m: ControllerMapping, naxes: int) -> None:
+        """Report how far the bound trigger is pulled, as a mechanism power.
+
+        Sent EVERY tick, including the 0.0 on release, and that is the point:
+        the robot's `jog` expires on its own a fraction of a second after the
+        last message (Robot.JOG_TIMEOUT_S), so a pad that is unplugged or a base
+        station that dies stops the motor without having to send anything. The
+        release frame is what stops it promptly; the timeout is what stops it
+        when there is nobody left to send one.
+        """
+        if self.on_mech_axis is None:
+            return
+        axis, mech = m.mech_axis_slot()
+        if axis < 0:
+            return
+        if axis >= naxes:
+            # An axis this pad does not have. Reported as zero rather than read
+            # through `_axis`, whose 0.0 fallback is NOT neutral here: rescaled
+            # from a -1.0 rest that is half throttle, so a mapping made against a
+            # six-axis pad and used on a smaller one would spin the mechanism at
+            # 50% forever. The arming latch does not save this case, because a
+            # mapping edited from a valid axis to this one keeps its armed state.
+            self.on_mech_axis(mech, 0.0)
+            return
+        power = self._mech_axis.value(self._axis(axis, naxes))
+        if power < m.axis_mech_deadzone:
+            power = 0.0
+        self.on_mech_axis(mech, _clamp1(power))
 
     def _publish(self, naxes: int) -> None:
         nbtn = self._js.get_numbuttons()
@@ -266,6 +307,7 @@ class ControllerReader:
                 if self.on_drive:
                     self.on_drive(_clamp1(throttle), _clamp1(steer))
                 self._fire_actions(m)
+                self._push_mech_axis(m, naxes)
             except Exception as e:
                 print(f"[controller] error: {e}")
                 self._js = None
