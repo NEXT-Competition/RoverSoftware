@@ -776,6 +776,25 @@ doesn't name"</em>.)</p>
 : <em>Hold for at least</em> is a <strong>floor, not a duration</strong>. The step ends when that
 time has passed <em>and</em> its condition is satisfied. Leave the condition off and
 the floor is all there is, which is an ordinary timed sequence.</p>
+<p><strong>How fast it gets there.</strong>
+: <em>Ramp over</em> is acceleration, and it answers a different question from the one
+above: not how long the step holds, but how long the actuators take to <strong>arrive</strong>.
+Leave it at 0 and the step writes its values instantly, which is what every step
+did before this field existed. Set it, and each actuator the step names is walked
+from where it actually was to its target over that many seconds — a flywheel
+eased up to speed instead of slammed there, a feeder arm that arrives at the ball
+instead of hitting it.</p>
+<p>: It is per-step because a shooter wants both in one cycle: a long, gentle
+spin-up, then a feeder that must move <em>now</em>, before the wheel bleeds speed.</p>
+<p>: <strong>Deceleration is a ramp downward</strong> — a step whose target is lower than the
+current value, which the same linear walk handles in either direction. A shooter
+that should wind down rather than cut out ends with <code>flywheel 0</code> over 1 s. Note
+that this is the <em>only</em> way to get a soft stop: e-stop, a mode change and
+shutdown all park instantly and always will, because a mechanism that eased
+itself down over a second is one that ignores the button for a second.</p>
+<p>: The ramp counts as part of the hold: a step cannot hand over while its own
+actuators are still travelling, so the effective floor is whichever of <em>hold for
+at least</em> and <em>ramp over</em> is longer.</p>
 <p><strong>What else it waits for.</strong>
 : <em>"A motor reaching a speed"</em> is the one a shooter wants. Timing a spin-up
 works at one battery charge and fires early at every other; waiting for the
@@ -791,17 +810,28 @@ everything, because carrying on is exactly the jam the gate was written to
 prevent. Switch it to <em>carry on anyway</em> only when the wait is an optimisation
 rather than a safety condition.</p>
 <p>The finished thing for the three-actuator launcher:</p>
-<div class="table-wrapper"><table><thead><tr><th>#</th><th>Step</th><th>Moves</th><th>Holds ≥</th><th>Waits for</th></tr></thead><tbody>
-<tr><td>1</td><td>spin up</td><td>flywheel <code>1.0</code></td><td>0.2 s</td><td>flywheel ≥ 3000 rpm</td></tr>
-<tr><td>2</td><td>feed</td><td>feeder <code>40°</code></td><td>0.35 s</td><td>—</td></tr>
-<tr><td>3</td><td>advance</td><td>belt <code>0.8</code></td><td>0.6 s</td><td>—</td></tr>
+<div class="table-wrapper"><table><thead><tr><th>#</th><th>Step</th><th>Moves</th><th>Ramp</th><th>Holds ≥</th><th>Waits for</th></tr></thead><tbody>
+<tr><td>1</td><td>spin up</td><td>flywheel <code>1.0</code></td><td>1.2 s</td><td>0.2 s</td><td>flywheel ≥ 3000 rpm</td></tr>
+<tr><td>2</td><td>feed</td><td>feeder <code>40°</code></td><td>0.35 s</td><td>0.25 s</td><td>—</td></tr>
+<tr><td>3</td><td>advance</td><td>belt <code>0.8</code></td><td>0.2 s</td><td>0.6 s</td><td>—</td></tr>
+<tr><td>4</td><td>spin down</td><td>flywheel <code>0</code></td><td>1.0 s</td><td>—</td><td>—</td></tr>
 </tbody></table>
 </div>
-<p>Start it from a routine with <strong>start a sequence</strong>, or bind it to a gamepad
-button. It returns immediately and advances itself off the control loop, so
-nothing here ever blocks driving — asking again while it runs does nothing, so
-it is safe on a button that stays held. To wait for it to finish, transition on
-<strong>mechanism is ready</strong>, which stays false for exactly as long as it is running.</p>
+<p>Start it from a routine with <strong>start a sequence</strong>. It returns immediately and
+advances itself off the control loop, so nothing here ever blocks driving —
+asking again while it runs does nothing, so it is safe on a button that stays
+held. To wait for it to finish, transition on <strong>mechanism is ready</strong>, which stays
+false for exactly as long as it is running.</p>
+<blockquote>
+<p><strong>A sequence cannot go straight onto a gamepad button</strong></p>
+<p>The <strong>mechanism preset</strong> button slots bind a <em>preset</em>, and only <code>power</code>
+mechanisms have presets — a sequence has steps. Binding one to a preset slot
+gets you <code>preset refused: 'launcher' is not a powered mechanism</code> on the
+robot's console and nothing else.</p>
+<p>To fire one from the pad, put it in a one-state routine (<strong>start a sequence</strong>)
+and bind <em>that</em> to a <strong>routine</strong> button. Give the state <code>drive: teleop</code> and you
+keep stick control while it fires. See <a href="bringup/routines.html">Routines</a>.</p>
+</blockquote>
 <blockquote>
 <p><strong>Every way of stopping parks it</strong></p>
 <p>E-stop, a mode change and shutdown all park a half-finished queue: servos to
