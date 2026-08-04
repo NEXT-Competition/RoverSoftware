@@ -12,6 +12,7 @@ import { FleetPanel } from "./components/FleetPanel.tsx";
 import { FPV } from "./components/FPV.tsx";
 import { ModeControls } from "./components/ModeControls.tsx";
 import { RoutineControls } from "./components/RoutineControls.tsx";
+import { ScriptControls } from "./components/ScriptControls.tsx";
 import { PitBoard } from "./components/PitBoard.tsx";
 import { PlacesPanel } from "./components/PlacesPanel.tsx";
 import { RouteControls } from "./components/RouteControls.tsx";
@@ -120,6 +121,10 @@ function ControlSection() {
           operator wrote themselves. */}
       <div style="height:12px" />
       <RoutineControls />
+      {/* Directly under the routines, because they are the same kind of thing:
+          a mode the operator wrote. Renders nothing until this rover carries a
+          script, so a fleet that does not use them loses no rail. */}
+      <ScriptControls />
       <div style="height:14px" />
       {/* Renders nothing unless the robot is in shooter_align (see the component). */}
       <ShooterControls />

@@ -16,9 +16,10 @@
 - [4 · Places and routes](bringup/places-routes.md)
 - [5 · Add motors and mechanisms](bringup/hardware.md)
 - [6 · Program a routine](bringup/routines.md)
-- [7 · Tune it in the field](bringup/tuning.md)
-- [8 · Command it by voice](bringup/command.md)
-- [9 · Put it on the robot](bringup/deploy.md)
+- [7 · Program it in Python](bringup/scripts.md)
+- [8 · Tune it in the field](bringup/tuning.md)
+- [9 · Command it by voice](bringup/command.md)
+- [10 · Put it on the robot](bringup/deploy.md)
 
 # Reference
 

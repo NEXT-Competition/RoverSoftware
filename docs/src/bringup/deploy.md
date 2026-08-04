@@ -1,4 +1,4 @@
-# 9 · Put it on the robot
+# 10 · Put it on the robot
 
 *A Debian package, a systemd service, and one command to iterate.*
 

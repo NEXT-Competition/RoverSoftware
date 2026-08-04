@@ -1,15 +1,21 @@
 # Extending it in Python
 
-You do not need Python to program behaviour — that is what
-[step 6](../bringup/routines.md) is for. You need it to teach the robot
-something genuinely new: a different sensor, a different way of deciding where
-to go.
+This is about extending the CODEBASE, which is a different thing from writing a
+program for a rover. To program behaviour you want either
+[step 6](../bringup/routines.md), which is a state machine you draw, or
+[step 7](../bringup/scripts.md), which is Python written in the dashboard and
+run on the robot against the `rover` API. Neither needs anything here.
+
+What this page is for is teaching the robot something genuinely new: a different
+sensor, a different way of deciding where to go, a new verb for the two editors
+above to offer.
 
 | Where | What lives there |
 |---|---|
 | `robot/control/` | Controllers. Subclass `Controller`, return a `DriveCommand`, register a mode — nothing downstream changes. |
 | `robot/drive/` | `ESCMotor`, the drivetrain kinds, and mechanisms. Mocks the HAT when it is absent. |
 | `robot/routine/` | The FSM: schema, conditions, actions, engine, store. Adding a condition here is what makes it appear in the editor's menu. |
+| `robot/script/` | The Python runtime: the `rover` API, the sandbox, schema, store. A method added to `Rover` is a call every script can make — mirror it in `basestation-ui/src/scripts/api.ts` so the editor's reference panel lists it. |
 | `robot/tuning.py` | The whitelist of what the dashboard may change, and each field's limits. |
 | `robot/comms/` | The protocol, the threaded XBee reader, and document fragmenting. |
 | `robot/layout.py` | The hardware layout document — what this build HAS. |

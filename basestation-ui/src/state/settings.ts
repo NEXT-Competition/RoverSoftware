@@ -31,7 +31,14 @@ export const confirmed = signal<Record<string, number>>({});
 const CONFIRM_MS = 1400;
 
 /** Which settings tab is showing. */
-export type Tab = "robot" | "hardware" | "routines" | "network" | "controller" | "base";
+export type Tab =
+  | "robot"
+  | "hardware"
+  | "routines"
+  | "code"
+  | "network"
+  | "controller"
+  | "base";
 export const tab = signal<Tab>("robot");
 
 /** The robot the settings page is editing. Defaults to the driving selection,

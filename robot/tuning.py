@@ -363,6 +363,18 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # shooter_align, and is dropped on every state exit, mode exit and e-stop.
     _b("routines.allow_arm", live=False),
 
+    # --- scripts (operator-written Python; the code lives in scripts.json) ---
+    # All live: these are the knobs you reach for WHILE bringing a script up,
+    # and one that needed a service restart is one nobody would turn down
+    # before the first run.
+    _b("scripts.enabled"),
+    _f("scripts.max_runtime", 5, 3600),
+    # Turn this down to bench-test a new script at a crawl. It scales the
+    # command rather than clamping each track, so the arc the script asked for
+    # is the arc it drives — just slower.
+    _f("scripts.drive_limit", 0.05, 1.0),
+    _i("scripts.output_lines", 20, 2000),
+
     # --- FPV ---
     _i("fpv.fps", 1, 60),
     _i("fpv.jpeg_quality", 1, 100),

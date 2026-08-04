@@ -9,6 +9,7 @@ import type {
   Action,
   CommandMessage,
   ConnState,
+  ConsoleMessage,
   ControllerStatus,
   FleetMessage,
   GamepadMessage,
@@ -18,6 +19,7 @@ import type {
   Robot,
   RobotConfigEntry,
   RobotDocuments,
+  ScriptConsole,
   SettingsMessage,
   SettingValue,
   WifiState,
@@ -64,6 +66,11 @@ export const robotWifi = signal<Record<string, WifiState>>({});
 export const places = signal<Place[]>([]);
 /** Which entries the bridge refused on the last save, if any. */
 export const placesResult = signal<PlacesResult | null>(null);
+/** What each robot's running script has printed, and the values it asked to be
+ *  watched. Its own frame rather than part of the cold channel: a script prints
+ *  continuously, and folding it in would re-send every config and every document
+ *  alongside each new line (basestation/app.py::broadcast_loop). */
+export const scriptConsole = signal<Record<string, ScriptConsole>>({});
 /** Raw gamepad sample. Only streams while a client is watching. */
 export const gamepad = signal<GamepadState | null>(null);
 /** True once the first settings frame has landed (before that, a blank form
@@ -106,7 +113,12 @@ export function connect(): void {
   };
 
   ws.onmessage = (ev) => {
-    let msg: FleetMessage | SettingsMessage | GamepadMessage | CommandMessage;
+    let msg:
+      | FleetMessage
+      | SettingsMessage
+      | GamepadMessage
+      | CommandMessage
+      | ConsoleMessage;
     try {
       msg = JSON.parse(ev.data);
     } catch {
@@ -132,6 +144,10 @@ export function connect(): void {
     }
     if (msg.type === "gamepad") {
       gamepad.value = msg.gamepad;
+      return;
+    }
+    if (msg.type === "console") {
+      scriptConsole.value = msg.console ?? {};
       return;
     }
     if (msg.type !== "fleet") return;

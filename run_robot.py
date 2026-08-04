@@ -171,7 +171,7 @@ def main():
                         help="base station TCP port for WiFi bulk transfers")
     parser.add_argument("--mode", default=os.environ.get("RS_START_MODE", cfg.start_mode),
                         choices=["teleop", "object_align", "shooter_align",
-                                 "waypoint", "routine"])
+                                 "waypoint", "routine", "script"])
     parser.add_argument("--hz", type=float,
                         default=float(os.environ.get("RS_LOOP_HZ", cfg.loop_hz)))
     parser.add_argument("--telemetry-hz", type=float,
@@ -343,6 +343,16 @@ def main():
     cfg.routines.allow_arm = os.environ.get("RS_ROUTINE_ALLOW_ARM", "").strip().lower() in ("1", "true", "yes", "on")
     cfg.routines.state_timeout_default = float(
         os.environ.get("RS_ROUTINE_STATE_TIMEOUT", cfg.routines.state_timeout_default))
+    # Script policy. Unlike allow_arm above these are all live from the
+    # dashboard too (robot/tuning.py) — they are the knobs you turn WHILE
+    # bringing a script up, and one that needed an ssh session is one nobody
+    # would turn down before the first run. The env vars set where they start.
+    cfg.scripts.enabled = os.environ.get(
+        "RS_SCRIPTS_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+    cfg.scripts.max_runtime = float(
+        os.environ.get("RS_SCRIPT_MAX_RUNTIME", cfg.scripts.max_runtime))
+    cfg.scripts.drive_limit = float(
+        os.environ.get("RS_SCRIPT_DRIVE_LIMIT", cfg.scripts.drive_limit))
 
     # The hardware layout, if this build has been given one from the dashboard.
     # Applied BEFORE tuning because it decides which tuning paths even exist: a

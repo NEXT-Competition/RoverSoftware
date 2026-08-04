@@ -17,11 +17,18 @@ from robot.comms.doc_transfer import Reassembler
 ONLINE_TIMEOUT = 3.0  # seconds without telemetry before a robot is "offline"
 
 # Chunked documents a robot sends, and the verdicts it returns on ones we sent.
-_DOC_TYPES = ("layout", "routines", "fields")
-_DOC_RESULTS = {"layout_result": "layout", "routines_result": "routines"}
-# The same two documents named by what we SEND, which is what a delivery failure
+_DOC_TYPES = ("layout", "routines", "scripts", "fields")
+_DOC_RESULTS = {"layout_result": "layout", "routines_result": "routines",
+                "scripts_result": "scripts"}
+# The same documents named by what we SEND, which is what a delivery failure
 # knows about — there is no reply to key on when nothing was delivered.
-_DOC_SENDS = {"put_layout": "layout", "put_routines": "routines"}
+_DOC_SENDS = {"put_layout": "layout", "put_routines": "routines",
+              "put_scripts": "scripts"}
+
+# How many console lines from a running script are kept per robot. A ring
+# buffer, because a script printing in a loop is a normal thing to write and a
+# base station that grew a list for the rest of the match is not.
+SCRIPT_CONSOLE_MAX = 500
 
 
 @dataclass
@@ -57,6 +64,10 @@ class RobotState:
     # copy would show a state machine still running one the robot has left.
     mech: Optional[dict] = None
     routine: Optional[dict] = None
+    # Whether the operator's Python is still going, and why it stopped if it
+    # isn't. Rides the hot frame rather than the bulk link the console takes,
+    # because a rover out of WiFi range still has to be able to say this.
+    script: Optional[dict] = None
     # Measured wheel speed and what the speed-matching loop did about it:
     # {rpm: {actuator: rpm}, mode, tl, tr, fault}. Non-sticky like the two
     # above — the robot omits it entirely on a build with no encoders, and a
@@ -105,6 +116,17 @@ class RobotState:
     routines: Optional[dict] = None
     routines_rev: int = 0
     routines_result: Optional[dict] = None
+    # Operator-written Python, and what the last save of it was told.
+    scripts: Optional[dict] = None
+    scripts_rev: int = 0
+    scripts_result: Optional[dict] = None
+    # What a running script has printed, and the values it asked to be watched.
+    # Not a document — it is a live stream off the bulk link — so it gets its
+    # own revision and its own frame rather than riding with the editors'
+    # kilobytes. See FleetManager.script_console.
+    console: List[str] = field(default_factory=list)
+    console_rev: int = 0
+    watch: Dict[str, object] = field(default_factory=dict)
     # Descriptors for the tunable fields the dashboard's schema.ts cannot know
     # about in advance, because the operator invented them.
     fields: List[dict] = field(default_factory=list)
@@ -168,6 +190,10 @@ class FleetManager:
             st.shooter = msg.get("shooter")
             st.mech = msg.get("mech")
             st.routine = msg.get("routine")
+            # Assigned unconditionally, like `routine` above it: the robot omits
+            # this entirely once `script` is no longer the active mode, and a
+            # sticky copy would leave the rail showing a run that ended.
+            st.script = msg.get("script")
             st.pid = msg.get("pid")
             st.enc = msg.get("enc")
             st.sonar = msg.get("sonar")
@@ -189,6 +215,8 @@ class FleetManager:
             self.update_from_config(msg)
         elif mtype == "wifi":
             self.update_from_wifi(msg)
+        elif mtype == "script_output":
+            self.update_from_script_output(msg)
         elif mtype in _DOC_TYPES or mtype in _DOC_RESULTS:
             self.update_from_document(msg)
         else:
@@ -319,7 +347,61 @@ class FleetManager:
             elif mtype == "routines":
                 st.routines = doc
                 st.routines_rev += 1
+            elif mtype == "scripts":
+                st.scripts = doc
+                st.scripts_rev += 1
         return robot_id
+
+    def update_from_script_output(self, msg: dict) -> Optional[str]:
+        """Absorb a `script_output` frame: console lines and watched values.
+
+        Not a document and not chunked — each frame is a self-contained batch
+        of whatever the script printed in the last quarter second, so a frame
+        lost to a WiFi hiccup costs those lines and nothing else. That is the
+        right trade for output: the alternative is a reassembly buffer whose
+        failure mode is a console that goes permanently blank.
+        """
+        robot_id = msg.get("from") or msg.get("robot_id")
+        if not robot_id:
+            return None
+        lines = msg.get("lines") or []
+        watch = msg.get("watch") or {}
+        if not lines and not watch:
+            return None
+        with self._lock:
+            st = self._ensure(robot_id)
+            if lines:
+                st.console.extend(str(line) for line in lines)
+                if len(st.console) > SCRIPT_CONSOLE_MAX:
+                    del st.console[: len(st.console) - SCRIPT_CONSOLE_MAX]
+            if watch:
+                st.watch = dict(watch)
+            st.console_rev += 1
+        return robot_id
+
+    def clear_console(self, robot_id: str) -> None:
+        """Throw away a robot's console. The operator's own "clear" button, and
+        what a fresh run starts from — output from the last attempt sitting
+        above this one's is how a fixed bug looks unfixed."""
+        with self._lock:
+            st = self._ensure(robot_id)
+            st.console = []
+            st.watch = {}
+            st.console_rev += 1
+
+    def script_console(self) -> Dict[str, dict]:
+        """Every robot's script console, for the code editor's output pane."""
+        with self._lock:
+            return {
+                st.robot_id: {"lines": list(st.console), "watch": dict(st.watch),
+                              "rev": st.console_rev}
+                for st in self._robots.values()
+                if st.console_rev
+            }
+
+    def console_revs(self) -> Dict[str, int]:
+        with self._lock:
+            return {st.robot_id: st.console_rev for st in self._robots.values()}
 
     def documents(self) -> Dict[str, dict]:
         """Per-robot layout, routines and field descriptors, for the editors.
@@ -336,11 +418,15 @@ class FleetManager:
                     "routines": st.routines,
                     "routines_rev": st.routines_rev,
                     "routines_result": st.routines_result,
+                    "scripts": st.scripts,
+                    "scripts_rev": st.scripts_rev,
+                    "scripts_result": st.scripts_result,
                     "fields": st.fields,
                     "fields_rev": st.fields_rev,
                 }
                 for st in self._robots.values()
-                if st.layout_rev or st.routines_rev or st.fields_rev
+                if st.layout_rev or st.routines_rev or st.scripts_rev
+                or st.fields_rev
             }
 
     def doc_revs(self) -> Dict[str, tuple]:
@@ -348,7 +434,7 @@ class FleetManager:
         with self._lock:
             return {
                 st.robot_id: (st.config_rev, st.layout_rev, st.routines_rev,
-                              st.fields_rev, st.wifi_rev)
+                              st.scripts_rev, st.fields_rev, st.wifi_rev)
                 for st in self._robots.values()
             }
 
@@ -420,6 +506,7 @@ class FleetManager:
                     "shooter": st.shooter,
                     "mech": st.mech,
                     "routine": st.routine,
+                    "script": st.script,
                     "pid": st.pid,
                     "enc": st.enc,
                     "sonar": st.sonar,

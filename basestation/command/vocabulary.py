@@ -30,7 +30,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # Modes the robot's ControlManager arbitrates between. Mirrors the MODES list in
 # basestation-ui/src/components/ModeControls.tsx — if one grows, so does the
 # other, and tests/test_command_vocabulary.py asserts the overlap.
-MODES: Tuple[str, ...] = ("teleop", "object_align", "shooter_align", "waypoint", "routine")
+MODES: Tuple[str, ...] = ("teleop", "object_align", "shooter_align", "waypoint",
+                          "routine", "script")
 
 # How an operator actually says a mode out loud. The model is given these, and
 # the resolver accepts them, because nobody says "object underscore align".
@@ -57,7 +58,13 @@ MODE_ALIASES: Dict[str, str] = {
     "navigate": "waypoint",
     "routine": "routine",
     "sequence": "routine",
+    # "program" stays on `routine` rather than moving to `script`: it is the
+    # word people already used for the graphs, and re-pointing it would change
+    # what an existing spoken order does. A script is reached by "script".
     "program": "routine",
+    "script": "script",
+    "code": "script",
+    "python": "script",
 }
 
 # Spoken numbers, so "rover two" reaches rover2. Stops at twelve on purpose: a

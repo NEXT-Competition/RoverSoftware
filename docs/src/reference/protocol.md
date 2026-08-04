@@ -7,7 +7,7 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 // base station → robot
 {"type": "drive", "throttle": 0.5, "steer": -0.2, "to": "rover1"}   // arcade
 {"type": "drive", "left": 0.4, "right": 0.6, "to": "rover1"}        // direct tank
-{"type": "mode", "mode": "teleop", "to": "rover1"}                  // or object_align / waypoint / routine
+{"type": "mode", "mode": "teleop", "to": "rover1"}                  // or object_align / waypoint / routine / script
 {"type": "route", "waypoints": [[lat, lon], "..."], "to": "rover1"}
 {"type": "estop", "to": "rover1"}                                   // latch motors off
 {"type": "clear_estop", "to": "rover1"}
@@ -17,10 +17,13 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 // documents: structure rather than scalars, sent as numbered fragments
 {"type": "get_layout", "to": "rover1"}                              // what this build HAS
 {"type": "get_routines", "to": "rover1"}                            // its state machines
+{"type": "get_scripts", "to": "rover1"}                             // its Python scripts
 {"type": "put_layout", "txid": "B1", "seq": 0, "n": 3, "part": "{\"vers…", "to": "rover1"}
 {"type": "select_routine", "id": "collect", "to": "rover1"}
 {"type": "routine_cmd", "cmd": "start", "to": "rover1"}              // start | stop | restart
 {"type": "routine_event", "name": "go", "to": "rover1"}              // advance a "when I press" transition
+{"type": "select_script", "id": "collect", "to": "rover1"}
+{"type": "script_cmd", "cmd": "start", "to": "rover1"}               // start | stop | restart
 {"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}      // bench test, teleop only
 {"type": "mech_preset", "mech": "intake", "preset": "in", "to": "rover1"}  // a named state, from a bound button
 {"type": "restart", "to": "rover1"}                                  // stop cleanly; systemd starts a fresh process
@@ -44,6 +47,15 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 {"type": "layout_result", "from": "rover1", "ok": true, "errors": [], "restart_required": true}
 {"type": "routines_result", "from": "rover1", "ok": false,
  "errors": ["state 'shoot': unknown mechanism 'intak'"]}
+// The robot COMPILES a script before it stores it, so a typo is refused here
+// with its line number rather than discovered when somebody presses Run.
+{"type": "scripts_result", "from": "rover1", "ok": false,
+ "errors": ["script 'collect': line 12: expected ':'"]}
+// A running script's print output, and the values it asked to be watched.
+// WiFi ONLY — this is kilobytes of text, and the radio is carrying driving,
+// telemetry and the e-stop. Dropped rather than queued when there is no link.
+{"type": "script_output", "from": "rover1", "id": "collect",
+ "lines": ["stopped at 0.38 m"], "watch": {"ahead": 0.38}}
 {"type": "wifi", "from": "rover1", "ok": true, "ssid": "Venue-Guest",
  "ip": "10.0.0.9", "signal": 82}                                     // never carries a psk
 ```
@@ -79,9 +91,9 @@ reply to `get_config`, only the applied fields after a `set_config`. A full one
 is about 0.4 s of airtime at 57600 baud, which is why it is requested explicitly
 and never polled.
 
-A layout is a **tree**, and half a tree is a robot with one drive motor. Layouts
-and routines are sliced into numbered fragments and nothing is applied until
-every fragment arrives. The robot replies with a verdict and echoes the *stored*
+A layout is a **tree**, and half a tree is a robot with one drive motor. Layouts,
+routines and scripts are sliced into numbered fragments and nothing is applied
+until every fragment arrives. The robot replies with a verdict and echoes the *stored*
 copy back, since the validator clamps and what was saved is not always what was
 sent.
 

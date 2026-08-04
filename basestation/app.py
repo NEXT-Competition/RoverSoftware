@@ -200,8 +200,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     _doc_queue: "deque[tuple]" = deque(maxlen=512)
     _txid = {"n": 0}
 
+    _PUT = {"set_layout": "put_layout", "set_routines": "put_routines",
+            "set_scripts": "put_scripts"}
+
     def send_document(robot_id, action: str, doc: dict, save: bool) -> None:
-        mtype = "put_layout" if action == "set_layout" else "put_routines"
+        mtype = _PUT.get(action, "put_routines")
         if not robot_id:
             return
         if not _bulk_ready(robot_id):
@@ -350,6 +353,10 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # Marked dirty so the broadcaster pushes one settings frame instead of one
     # per edited field: a slider drag is dozens of updates a second.
     _settings_dirty = {"v": True}
+    # And for the script console, which the broadcaster otherwise pushes only
+    # when a robot's revision moves. Clearing it is a local act with no robot
+    # involved, so it needs a way to say "push this even though nothing arrived".
+    _console_dirty = {"v": False}
     # Outcome of the last set_settings, echoed once so the page can show what
     # was clamped or refused. Robot config results ride on the robot's own
     # entry (fleet.configs); this is the base station's equivalent.
@@ -407,10 +414,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             if isinstance(values, dict) and values:
                 deliver_or_report(rid, {"type": "set_config", "config": values,
                                         "save": bool(data.get("save", True))})
-        # ---- documents (hardware layout, FSM routines) ----
-        elif action in ("get_layout", "get_routines", "get_fields"):
+        # ---- documents (hardware layout, FSM routines, Python scripts) ----
+        elif action in ("get_layout", "get_routines", "get_scripts",
+                        "get_fields"):
             deliver_or_report(rid, {"type": action})
-        elif action in ("set_layout", "set_routines"):
+        elif action in ("set_layout", "set_routines", "set_scripts"):
             doc = data.get("doc")
             if isinstance(doc, dict):
                 send_document(rid, action, doc, bool(data.get("save", True)))
@@ -425,12 +433,21 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         elif action in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
             payload = {k: v for k, v in data.items() if k != "action"}
             dispatch_or_radio(rid, payload | {"type": action})
-        elif action in ("select_routine", "routine_cmd", "routine_event"):
-            # Pass-through: the robot owns every rule about what a routine may
-            # do. Duplicating any of it here would give two sources of truth,
-            # and the base station is the one that can be disconnected.
+        elif action in ("select_routine", "routine_cmd", "routine_event",
+                        "select_script", "script_cmd"):
+            # Pass-through: the robot owns every rule about what a routine or a
+            # script may do. Duplicating any of it here would give two sources
+            # of truth, and the base station is the one that can be
+            # disconnected. Over the radio like the mode switch beside it —
+            # "run this" is a driving command, not a document.
             dispatch(rid, {k: v for k, v in data.items() if k != "action"}
                      | {"type": action})
+        elif action == "clear_console":
+            # Purely local: the console lives on this base station, so clearing
+            # it is not something to spend airtime telling a rover about.
+            if rid:
+                fleet.clear_console(rid)
+                _console_dirty["v"] = True
         elif action == "restart_robot":
             # Over the radio, not the WiFi bulk path every other piece of
             # configuration takes: a rover worth restarting is often a rover
@@ -587,6 +604,12 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         # Config revisions we've already pushed; a change means a robot answered
         # a get_config/set_config and the open settings page should see it.
         seen_revs: dict = {}
+        # Script console revisions, tracked separately from the rest. A running
+        # script prints continuously, so folding this into the cold frame would
+        # re-send every config and every document alongside each new line — the
+        # console is a few hundred bytes and the frame it would have ridden on
+        # is kilobytes.
+        seen_console: dict = {}
         try:
             while True:
                 snap = fleet.snapshot(time.monotonic())
@@ -622,6 +645,17 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                 if _settings_dirty["v"]:
                     _settings_dirty["v"] = False
                     frame = settings_frame()
+                    for ws in list(clients):
+                        await send_to(ws, frame)
+
+                # Script console output. Its own frame and its own revision,
+                # so a script that logs every tick pushes a few hundred bytes
+                # rather than the whole cold channel.
+                console_revs = fleet.console_revs()
+                if console_revs != seen_console or _console_dirty["v"]:
+                    seen_console = console_revs
+                    _console_dirty["v"] = False
+                    frame = {"type": "console", "console": fleet.script_console()}
                     for ws in list(clients):
                         await send_to(ws, frame)
 

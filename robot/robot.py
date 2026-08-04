@@ -25,11 +25,14 @@ from .control.ballistics import Ballistics
 from .control.collision import CollisionGuard
 from .control.rangefinder import Rangefinder
 from .control.routine_controller import RoutineController
+from .control.script_controller import ScriptController
 from .control.shooter_align import ShooterAlignController
 from .control.teleop import TeleopController
 from .control.waypoint import WaypointController
 from .routine import schema as routine_schema
 from .routine import store as routine_store
+from .script import schema as script_schema
+from .script import store as script_store
 from .drive.drivetrain import build_drivetrain
 from .drive.mechanism import Mechanism, build_mechanism
 from .drive.shooter import Shooter
@@ -69,6 +72,12 @@ JOG_TIMEOUT_S = 0.4
 # walked out to it with a laptop. A distinctive code rather than 1 so the reason
 # is legible in `systemctl status`, which reports it verbatim.
 EXIT_RESTART = 42
+
+# How often script console output is forwarded, and how much of it goes in one
+# frame. A script printing every tick would otherwise put 50 frames a second
+# into the outbox; four a second reads as live to a human and costs nothing.
+SCRIPT_OUTPUT_PERIOD_S = 0.25
+SCRIPT_OUTPUT_LINES = 40
 
 
 def _pid(cfg: PIDConfig) -> PID:
@@ -128,6 +137,9 @@ class Robot:
             mech.bind(self._registry)
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
+        # The last command that actually reached the drivetrain, guard and all.
+        # Read by the script API; see _wire_script_controller.
+        self._last_command: Tuple[float, float] = (0.0, 0.0)
         # Multi-frame replies (a config snapshot, a layout, a routine set) wait
         # here for the WiFi link. Each entry is (frame, radio_ok), where the flag
         # marks the one kind of frame still allowed onto the radio. See _queue.
@@ -233,6 +245,14 @@ class Robot:
             # and until then it simply holds the robot still.
             controllers["routine"] = RoutineController(
                 controllers, self._registry, config.routines
+            )
+            # The other authoring mode: the operator's own Python, run on a
+            # worker thread against the API in robot/script/. Constructed with
+            # the same dict for the same reason the FSM is — a script that says
+            # `rover.hand_over("object_align")` must reach the instance whose
+            # providers get wired below.
+            controllers["script"] = ScriptController(
+                controllers, self._registry, config.scripts
             )
         self.manager = ControlManager(controllers, config.start_mode)
 
@@ -479,23 +499,121 @@ class Robot:
             # lets `spin_up` explain WHY it isn't spinning ("no max_rpm") rather
             # than the vaguer "this build has no ballistics config".
             self.routine_controller.set_ballistics(self.ballistics)
+
+        # A script's own sensing. Wider than the FSM's on purpose: a routine
+        # asks yes/no questions the controllers already answer, while a script
+        # does arithmetic on the readings, so it gets the numbers themselves —
+        # every one of them optional, so a build with no GPS, no camera or no
+        # ultrasonic still runs scripts with those readings simply absent.
+        self.script_controller: Optional[ScriptController] = next(
+            (c for c in controllers.values() if isinstance(c, ScriptController)), None
+        )
+        self._wire_script_controller(config)
+
         # Documents the base station has saved on this robot. A layout needs a
         # restart to take effect, so it is loaded in run_robot.py before the
-        # hardware is built; routines are just data, so they load here.
+        # hardware is built; routines and scripts are just data, so they load
+        # here.
         self._routine_doc: dict = routine_store.empty_doc()
         self._load_routines()
+        self._script_doc: dict = script_store.empty_doc()
+        self._load_scripts()
 
         # Reassembly buffers for chunked documents arriving off the radio, one
-        # per document type so a layout and a routine save can't interleave.
-        self._rx = {"put_layout": Reassembler(), "put_routines": Reassembler()}
+        # per document type so a layout, a routine and a script save can't
+        # interleave.
+        self._rx = {"put_layout": Reassembler(), "put_routines": Reassembler(),
+                    "put_scripts": Reassembler()}
         self._layout_rev = 0
         self._routine_rev = 0
+        self._script_rev = 0
+        # Script console output, forwarded over the bulk link rather than the
+        # radio: it is kilobytes of text and nothing about it is urgent. See
+        # _drain_script_output.
+        self._script_out_at = 0.0
         # Bench-jog failsafe; see _jog.
         self._jog_mech = ""
         self._jog_until = 0.0
         # Set by a restart asked for over the radio; read by run() on the way
         # out to decide what to tell the supervisor. See _request_restart.
         self._restarting = False
+
+    def _wire_script_controller(self, config: RobotConfig) -> None:
+        """Hand the script mode its view of this particular robot.
+
+        Every provider is a plain callable rather than the sensor itself, the
+        same rule the routine layer follows: `robot/script/` must stay testable
+        against stubs on a laptop, and nothing in it imports `sensors/`. It is
+        also what makes "this build has no GPS" a missing key in a snapshot
+        rather than a branch in the API.
+        """
+        script = self.script_controller
+        if script is None:
+            return
+        if self.pose_provider is not None:
+            script.set_pose_provider(self.pose_provider)
+        script.set_estop_provider(lambda: self.manager.estop)
+        script.set_command_provider(lambda: self._last_command)
+        if self.gps is not None:
+            script.set_gps_provider(self.gps.telemetry)
+        if self.imu is not None:
+            # Paired with the fused heading rather than the raw one, and gated
+            # on freshness for the reason telemetry gates it: a calibration
+            # level beside a heading the sensor stopped reporting is the
+            # dashboard being reassuring about a dead sensor.
+            script.set_imu_provider(
+                lambda: {
+                    "heading": self.imu.heading() if self.imu.fresh() else None,
+                    "calib": self.imu.calibration() if self.imu.fresh() else None,
+                }
+            )
+        if self.ultrasonic is not None:
+            script.set_sonar_provider(self.ultrasonic.distance_m)
+        if self.detector is not None:
+            script.set_vision_provider(self._vision_summary)
+        if self.drive is not None:
+            script.set_encoder_provider(self._wheel_speeds)
+        if config.vision.enabled:
+            script.set_vision_config(config.vision)
+        # Unconditional, like the routine controller's: an uncalibrated model
+        # declines every shot on its own, and handing it over anyway is what
+        # lets `spin_for` explain WHY it isn't spinning rather than the vaguer
+        # "this build has no ballistics config".
+        script.set_ballistics(self.ballistics)
+
+    def _vision_summary(self) -> dict:
+        """What the detector sees, with the range estimate folded in.
+
+        The same summary telemetry carries — deliberately, so a script and the
+        operator watching the dashboard are reading one number, not two that
+        were derived slightly differently and disagree by the time anybody
+        notices.
+        """
+        if self.detector is None:
+            return {}
+        summary = self.detector.telemetry()
+        detection = self.detector.detection()
+        distance = self.rangefinder.distance_for(detection)
+        if distance is not None:
+            summary = {**summary, "dist": round(distance, 2)}
+        return summary
+
+    def _wheel_speeds(self) -> Optional[dict]:
+        """Measured track speed, per actuator and per side.
+
+        Per side as well as per actuator because that is the number a script
+        actually steers on — "how fast is the left track going" — while the
+        per-actuator names are what you read to find the one wheel dragging.
+        None on a build with no encoders, which is most of them.
+        """
+        status = self.drive.status()
+        if status is None:
+            return None
+        side_rpm = getattr(self.drive, "side_rpm", None)
+        roles = getattr(self.cfg.drive, "roles", None)
+        if side_rpm is None or roles is None:
+            return status
+        return {**status, "l": side_rpm(roles.left), "r": side_rpm(roles.right)}
 
     def _min_standoff(self) -> float:
         """The nearest an approach can actually finish, given the guard.
@@ -570,7 +688,9 @@ class Robot:
                 self._send_doc("layout", layout.to_doc(self.cfg), self._layout_rev)
             elif mtype == "get_routines":
                 self._send_doc("routines", self._routine_doc, self._routine_rev)
-            elif mtype in ("put_layout", "put_routines"):
+            elif mtype == "get_scripts":
+                self._send_doc("scripts", self._script_doc, self._script_rev)
+            elif mtype in ("put_layout", "put_routines", "put_scripts"):
                 self._receive_doc(mtype, msg)
             # WiFi. Handled here for the same reason config is — it reaches past
             # every controller — and worked off-thread because nmcli blocks for
@@ -609,6 +729,15 @@ class Robot:
                 routine = self.manager.controllers.get("routine")
                 if routine is not None:
                     routine.on_message(msg)
+            # And the same for scripts, for exactly the same reason: which
+            # program runs next is not something the thing currently driving
+            # should get a vote on, and routing `select_script` through the
+            # active controller is how an operator ends up watching a different
+            # script drive away than the one they pressed.
+            elif mtype in ("select_script", "script_cmd"):
+                script = self.manager.controllers.get("script")
+                if script is not None:
+                    script.on_message(msg)
             else:
                 self.manager.handle_message(msg)
 
@@ -906,10 +1035,13 @@ class Robot:
             if reassembler.error:
                 self._queue(self._result_frame(mtype, False, [reassembler.error]))
             return
+        save = bool(msg.get("save", True))
         if mtype == "put_layout":
-            self._apply_layout(doc, bool(msg.get("save", True)))
+            self._apply_layout(doc, save)
+        elif mtype == "put_scripts":
+            self._apply_scripts(doc, save)
         else:
-            self._apply_routines(doc, bool(msg.get("save", True)))
+            self._apply_routines(doc, save)
 
     def _result_frame(self, mtype: str, ok: bool, errors, warnings=(), **extra) -> dict:
         return {
@@ -1007,6 +1139,90 @@ class Robot:
         )
         if result.ok:
             self._send_doc("routines", doc, self._routine_rev)
+
+    def _apply_scripts(self, doc: dict, save: bool) -> None:
+        """Validate scripts and install them. These DO take effect now.
+
+        Like routines and unlike a layout: a script is text the runner compiles,
+        so there is nothing to reconstruct. And like routines, a document that
+        fails validation is not installed AT ALL — the robot keeps the last set
+        that was good, which is the difference between a rejected edit and a
+        rover with nothing left to run.
+
+        The validator compiles every script (robot/script/schema.py), so a
+        missing colon is refused here, with a line number, rather than at the
+        moment somebody presses Run at the field.
+        """
+        result = script_schema.parse(doc)
+        error = None
+        if result.ok:
+            self._script_doc = doc
+            self._script_rev += 1
+            if self.script_controller is not None:
+                self.script_controller.set_scripts(result.scripts)
+            if save:
+                error = script_store.save(doc)
+                if error:
+                    print(f"[Robot] scripts applied but NOT saved: {error}")
+            print(f"[Robot] scripts accepted: {len(result.scripts)} "
+                  f"(rev {self._script_rev})")
+        for message in result.errors:
+            print(f"[Robot] scripts rejected: {message}")
+        self._queue(
+            self._result_frame(
+                "put_scripts",
+                result.ok,
+                result.errors,
+                result.warnings,
+                rev=self._script_rev,
+                save_error=error,
+            )
+        )
+        if result.ok:
+            self._send_doc("scripts", doc, self._script_rev)
+
+    def _load_scripts(self) -> None:
+        doc = script_store.load()
+        if doc is None:
+            return
+        result = script_schema.parse(doc)
+        if result.ok:
+            self._script_doc = doc
+            if self.script_controller is not None:
+                self.script_controller.set_scripts(result.scripts)
+            print(f"[Robot] scripts: {len(result.scripts)} loaded from "
+                  f"{script_store.scripts_path()}")
+        else:
+            for message in result.errors:
+                print(f"[Robot] scripts REJECTED at boot: {message}")
+
+    def _drain_script_output(self, now: float) -> None:
+        """Forward console output to the base station over the bulk link.
+
+        NOT over the radio, and that is the whole design of this: a script's
+        `print` is kilobytes of text on a channel that carries driving,
+        telemetry and the e-stop. It goes over WiFi or it is dropped, exactly
+        like a config snapshot — see `_queue`. A dropped console line costs a
+        debugging convenience; a dropped telemetry frame costs the operator's
+        picture of a moving robot.
+
+        Paced rather than sent per tick, because a script printing in a 50 Hz
+        loop would otherwise put fifty frames a second into the outbox.
+        """
+        script = self.script_controller
+        if script is None or now - self._script_out_at < SCRIPT_OUTPUT_PERIOD_S:
+            return
+        self._script_out_at = now
+        lines, watched = script.take_output()
+        if not lines and not watched:
+            return
+        self._queue({
+            "type": "script_output",
+            "from": self.cfg.robot_id,
+            "id": script.selected,
+            "lines": lines[-SCRIPT_OUTPUT_LINES:],
+            "watch": watched,
+        })
 
     def _load_routines(self) -> None:
         doc = routine_store.load()
@@ -1404,6 +1620,13 @@ class Robot:
         # state highlight that lags by a second is worse than none.
         if isinstance(active, RoutineController):
             t["routine"] = active.status()
+        # Whether the operator's script is still going, and why it stopped if
+        # it isn't. A handful of bytes on the hot frame, deliberately: the
+        # console it printed rides the bulk link and may not arrive at all, so
+        # this is the half that has to survive a rover on the far side of a
+        # field with no WiFi.
+        if isinstance(active, ScriptController):
+            t["script"] = active.status()
         # Whatever closed loops the active mode is running: setpoint, error,
         # output and the P/I/D split, so a gain can be tuned against a picture
         # of what it did rather than by watching the rover and guessing.
@@ -1505,6 +1728,11 @@ class Robot:
                 # modes and every routine at once. Untouched command on a build
                 # with no ultrasonic. See control/collision.py.
                 cmd = self.collision.apply(cmd)
+                # What the drivetrain is ACTUALLY about to be given, after the
+                # guard. Kept for the script API's `rover.commanded`, which is
+                # the only way a script can tell that its own full-throttle
+                # request was cut back by something in front of the rover.
+                self._last_command = (cmd.left, cmd.right)
                 # Unconditional, and deliberately outside the controller: a mode
                 # switch or an e-stop mid-shot stops update() from being called,
                 # and the servo must still retract instead of stalling against
@@ -1526,6 +1754,7 @@ class Robot:
                 ):
                     self._last_telem = now
                     self.link.send(self._telemetry(cmd))
+                self._drain_script_output(now)
                 self._drain_outbox()
                 t4 = time.monotonic()
 

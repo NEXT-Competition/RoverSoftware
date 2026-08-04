@@ -1,4 +1,4 @@
-# 8 · Command it by voice, by typing, or from an AI
+# 9 · Command it by voice, by typing, or from an AI
 
 *One whitelist, one confirmation gate, one audit log — whoever is asking.*
 

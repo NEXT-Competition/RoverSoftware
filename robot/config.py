@@ -852,6 +852,35 @@ class RoutineConfig:
 
 
 @dataclass
+class ScriptConfig:
+    """Policy for operator-written Python (see robot/script/).
+
+    The scripts themselves live in scripts.json, not here — this is only the
+    handful of knobs that decide what a script is ALLOWED to do, and how long
+    it is allowed to do it for.
+    """
+
+    # Whether this robot will run a script at all. On by default: refusing them
+    # outright is what `start_mode` and simply not writing one already do, and a
+    # rover that silently ignores the Run button is worse than one that says no.
+    enabled: bool = True
+    # Wall-clock ceiling on one run. A script with a bug in its loop condition
+    # is the ordinary failure here, and it looks exactly like a rover that has
+    # stopped taking orders — so every run ends, whatever it thinks. Generous
+    # next to any autonomous period; well short of a battery.
+    max_runtime: float = 300.0
+    # Ceiling on what a script may command the tracks. 1.0 is no limit, which
+    # is the right default for a knob nobody has thought about — the same
+    # throttle the operator's own stick can reach. Turn it down while bringing
+    # a new script up on a bench and full throttle becomes a crawl, WITHOUT
+    # changing the arc it drives (see ScriptController._limited).
+    drive_limit: float = 1.0
+    # How many console lines are kept for the dashboard. A ring buffer, so a
+    # chatty script costs a bounded amount of memory rather than a growing one.
+    output_lines: int = 400
+
+
+@dataclass
 class AlignConfig:
     # Behaviour of the object_align / shooter_align state machine. The geometry
     # it reasons about (standoff_size, hfov_deg, search_speed) stays in
@@ -969,6 +998,11 @@ class RobotConfig:
     # Empty on a stock build, which is why nothing above changes shape.
     mechanisms: Dict[str, MechanismConfig] = field(default_factory=dict)
     routines: RoutineConfig = field(default_factory=RoutineConfig)
+    # And the other way to author autonomy: real Python, in the dashboard.
+    # Alongside routines rather than replacing them — a graph is the better
+    # shape for a sequence of states, and code is the better shape for anything
+    # with arithmetic in it.
+    scripts: ScriptConfig = field(default_factory=ScriptConfig)
     # Control loop rate. This is the rate the motors are actually updated at, so
     # it sets both the floor on teleop latency (a command waits up to 1/loop_hz
     # before anything looks at it) and the granularity of the slew limiter, which

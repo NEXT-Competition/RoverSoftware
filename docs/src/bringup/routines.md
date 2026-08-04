@@ -146,3 +146,12 @@ to confirm; stopping never does.
 
 Routines **Export** to a JSON file and **Import** back, which is how you move one
 between rovers or keep last season's in the repo.
+
+> **When a graph is the wrong shape**
+>
+> A canvas is good at a sequence of states and bad at arithmetic. The moment a
+> step wants a real loop, a computed throttle, or a number worked out from a
+> measurement, it is trying to be a program — and [the Code
+> tab](scripts.md) is the same rover, the same sensors and the same delegation,
+> reached from Python instead. They sit side by side on purpose; most teams end
+> up with some of each.

@@ -50,4 +50,4 @@ installs two systemd services rather than one.
 >
 > Everything in this book works against the simulator. Read it with
 > `./start-basestation.sh` running in a terminal and click along — nothing here
-> needs a rover until [step 9](bringup/deploy.md).
+> needs a rover until [step 10](bringup/deploy.md).

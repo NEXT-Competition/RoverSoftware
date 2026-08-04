@@ -4077,3 +4077,407 @@ input[type="checkbox"]:disabled {
   cursor: pointer;
   font-size: 0;
 }
+
+/* ==========================================================================
+   Code tab — the editor, its API panel, and the script console
+   --------------------------------------------------------------------------
+   Two columns like the Routines tab, and for the same reason: the thing being
+   authored gets the room, and the thing that explains it is fixed-width beside
+   it because prose reads badly stretched. The console sits UNDER the editor
+   rather than beside it — output is read after a run, the API while writing,
+   and putting both in the right rail would make each of them half as tall as
+   it needs to be.
+   ========================================================================== */
+
+.code-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.code-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.code-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.code-name .field-input {
+  max-width: 320px;
+}
+/* The id, shown but not editable. It is what the log lines and the spoken
+   commands use, and it is derived from the name at creation — so it has to be
+   visible without inviting an edit that would orphan a running script. */
+.code-id {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* --- the editor ---------------------------------------------------------- */
+/* Three layers, all sharing one font metric: gutter, highlight, textarea. Any
+   difference in font, size, letter-spacing or line-height between the last two
+   shows up as text drifting away from the caret further down the file, so the
+   shared values live on the container and are inherited rather than repeated. */
+.code-editor {
+  display: flex;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  height: 52vh;
+  min-height: 300px;
+}
+
+.code-gutter {
+  flex: 0 0 auto;
+  padding: 12px 8px 12px 12px;
+  text-align: right;
+  color: var(--faint);
+  background: var(--well);
+  border-right: 1px solid var(--hairline);
+  overflow: hidden;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-lineno {
+  font-size: 12px;
+  line-height: 1.55;
+  /* Matches .code-input's line box exactly; a rounded difference here is what
+     makes line numbers slide out of step in a long file. */
+  height: calc(13px * 1.55);
+  opacity: 0.6;
+}
+
+/* The line the ROBOT refused. Not a guess from a parser in the browser — the
+   rover compiles every script when it lands and answers with a line number. */
+.code-lineno.bad {
+  color: var(--danger);
+  opacity: 1;
+  font-weight: 700;
+  background: rgba(var(--danger-rgb), 0.14);
+  border-radius: 3px;
+}
+
+.code-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.code-highlight,
+.code-input {
+  margin: 0;
+  padding: 12px 14px;
+  border: 0;
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: normal;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+.code-highlight {
+  position: absolute;
+  inset: 0;
+  color: var(--text);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Transparent text over the highlighted layer, but NOT a transparent caret:
+   `caret-color` is the one thing that has to stay opaque, and it is the reason
+   this technique works at all. */
+.code-input {
+  position: relative;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--accent);
+  resize: none;
+  outline: none;
+}
+.code-input::selection {
+  background: rgba(var(--accent-rgb), 0.28);
+  color: transparent;
+}
+.code-input:focus-visible {
+  outline: none;
+}
+.code-editor:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+/* Token colours. Comments are deliberately low-contrast and strings are the
+   data hue: in a rover script the string literals are mostly detector labels
+   and mechanism names, which are the values you scan for. */
+.tok-kw { color: var(--chart-1); font-weight: 600; }
+.tok-str { color: var(--data); }
+.tok-com { color: var(--faint); font-style: italic; }
+.tok-num { color: var(--chart-3); }
+.tok-const { color: var(--chart-2); }
+.tok-builtin { color: var(--muted); }
+.tok-api { color: var(--accent); }
+.tok-rover { color: var(--accent-lift); font-weight: 650; }
+
+/* --- the API panel ------------------------------------------------------- */
+.api-panel {
+  flex: 0 0 400px;
+  min-width: 0;
+  max-height: 78vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.api-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--panel-solid);
+  border-bottom: 1px solid var(--hairline);
+}
+.api-head .field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.api-group + .api-group {
+  border-top: 1px solid var(--hairline);
+}
+
+.api-group-head {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.api-chevron {
+  color: var(--faint);
+  font-size: 11px;
+}
+.api-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.api-group-body {
+  padding: 0 14px 12px;
+}
+.api-note {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.api-entry + .api-entry {
+  margin-top: 9px;
+}
+
+/* The signature is a button because clicking it types the call. It is also the
+   most-scanned text on the panel, so it gets the full-width hit area rather
+   than a separate "insert" affordance beside it. */
+.api-sig {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  margin-left: -6px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-inner);
+  cursor: pointer;
+  text-align: left;
+}
+.api-sig:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.09);
+}
+.api-sig:disabled {
+  cursor: default;
+}
+.api-sig code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  word-break: break-word;
+}
+
+/* "waits" — the one property of a call an operator has to know before writing
+   the line after it. */
+.api-blocks {
+  flex: 0 0 auto;
+  font-family: var(--font-ui);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.api-help {
+  margin: 2px 0 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* --- the console --------------------------------------------------------- */
+.script-console {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.console-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--panel-solid);
+}
+.console-err {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* Watched values: a row of cells that CHANGE, above a log that GROWS. The two
+   halves answer different questions and a shared scroll would bury the live
+   one under the history. */
+.console-watch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--well);
+}
+.watch-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 68px;
+}
+.watch-name {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.watch-value {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.console-log {
+  height: 22vh;
+  min-height: 120px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.console-log .hint {
+  font-family: var(--font-ui);
+}
+.console-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.console-line.bad {
+  color: var(--danger);
+}
+
+/* --- the rest ------------------------------------------------------------ */
+.template-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* The escape hatch from the template grid, played down so it does not compete
+   with the five cards that actually teach the API. */
+.template-card.blank {
+  background: none;
+  border-style: dashed;
+}
+
+.run-hint {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+/* A finished run's error, on the driving rail. Wraps rather than truncating:
+   it is already only the last line of the traceback, and half of that is not
+   worth the row it costs. */
+.script-error {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--danger);
+}
+
+/* Narrow and portrait: the panel goes under the editor rather than beside it.
+   Same breakpoint the routines canvas uses, so the two tabs reflow together. */
+@media (max-width: 1100px), (orientation: portrait) {
+  .code-body {
+    flex-direction: column;
+  }
+  .api-panel {
+    flex: 1 1 auto;
+    width: 100%;
+    max-height: 44vh;
+  }
+  .code-editor {
+    height: 44vh;
+  }
+}
