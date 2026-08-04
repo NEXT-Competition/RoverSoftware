@@ -308,11 +308,18 @@ export interface WaitSpec {
  *  into preset behaviour and zeroes the rest.
  *
  *  `seconds` is a MINIMUM dwell, not a duration: the step ends once the dwell
- *  has passed AND `wait_for` is satisfied. */
+ *  has passed AND `wait_for` is satisfied.
+ *
+ *  `ramp` answers the other question — not how long the step holds, but how
+ *  long the actuators take to ARRIVE. 0 writes the targets at once (what every
+ *  step did before it existed); above 0 walks each named actuator from where it
+ *  actually was to its target, which is also how a spin-DOWN is expressed. It
+ *  counts toward the dwell, so a step never hands over mid-travel. */
 export interface SequenceStepSpec {
   name?: string;
   values: Record<string, number>;
   seconds?: number;
+  ramp?: number;
   wait_for?: WaitSpec;
   timeout?: number; // 0/absent = the mechanism's step_timeout
   on_timeout?: "abort" | "advance";

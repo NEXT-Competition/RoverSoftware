@@ -150,6 +150,16 @@ function StepRow(
 
       <div class="doc-grid tight">
         <NumberField
+          label="Ramp over"
+          unit="s"
+          value={step.ramp ?? 0}
+          min={0}
+          max={60}
+          step={0.05}
+          onChange={(v) => setStepField(mech.name, index, "ramp", v)}
+          hint="How long the actuators take to ARRIVE. 0 writes the value at once; above 0 eases into it, and a lower target eases down."
+        />
+        <NumberField
           label="Hold for at least"
           unit="s"
           value={step.seconds ?? 0}
@@ -159,6 +169,9 @@ function StepRow(
           onChange={(v) => setStepField(mech.name, index, "seconds", v)}
           hint="A floor, not a duration: the step also waits for the condition below."
         />
+      </div>
+
+      <div class="doc-grid tight">
         <SelectField
           label="Then wait for"
           value={wait?.kind ?? ""}

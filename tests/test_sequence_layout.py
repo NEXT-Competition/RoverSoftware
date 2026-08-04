@@ -249,3 +249,62 @@ def test_a_normal_dwell_and_timeout_pair_is_not_warned_about():
 def test_looping_one_step_with_no_cooldown_is_a_warning():
     result = check(loop=True, steps=[{"values": {"belt": 1.0}, "seconds": 0}])
     assert any("every tick" in w for w in result.warnings)
+
+
+# --- ramp ---------------------------------------------------------------------
+
+def test_a_ramp_is_read_off_a_step():
+    result = check(steps=[{"name": "spin up", "values": {"flywheel": 1.0},
+                           "ramp": 1.2, "seconds": 0.3}])
+    assert result.errors == []
+    assert result.mechanisms["launcher"].steps[0].ramp == 1.2
+
+
+def test_a_step_with_no_ramp_defaults_to_none():
+    """Unchanged behaviour for every layout written before ramping existed."""
+    result = check(steps=THREE_STEPS)
+    assert [s.ramp for s in result.mechanisms["launcher"].steps] == [0.0, 0.0, 0.0]
+
+
+def test_a_ramp_is_clamped_rather_than_refused():
+    """Same contract as `seconds` and `timeout`: an out-of-range number is
+    pulled into range, not turned into a red line over a typo."""
+    result = check(steps=[{"values": {"flywheel": 1.0}, "ramp": 900.0}])
+    assert result.errors == []
+    assert result.mechanisms["launcher"].steps[0].ramp == 60.0
+
+
+def test_a_ramp_that_is_not_a_number_is_refused():
+    result = check(steps=[{"values": {"flywheel": 1.0}, "ramp": "slowly"}])
+    assert "ramp must be a number" in problems(result)
+
+
+def test_a_ramp_survives_a_round_trip_through_the_document():
+    steps = [{"name": "spin up", "values": {"flywheel": 1.0},
+              "ramp": 1.2, "seconds": 0.3}]
+    cfg = check(steps=steps)
+    from robot.config import RobotConfig
+    robot_cfg = RobotConfig()
+    robot_cfg.mechanisms = cfg.mechanisms
+    doc = to_doc(robot_cfg)
+    assert doc["mechanisms"][0]["steps"][0]["ramp"] == 1.2
+    again = validate({**layout(), "mechanisms": doc["mechanisms"]})
+    assert again.errors == []
+    assert again.mechanisms["launcher"].steps[0].ramp == 1.2
+
+
+def test_a_ramp_with_nothing_to_move_is_warned_about():
+    result = check(steps=[{"values": {}, "ramp": 1.0, "seconds": 0.5}])
+    assert result.errors == []
+    assert any("ramp has nothing to travel" in w or "just a wait" in w
+               for w in result.warnings)
+
+
+def test_a_ramp_longer_than_its_gate_timeout_is_warned_about():
+    """The ramp counts toward the dwell, so a gate behind a long ramp gets one
+    look — the same trap `seconds` already warns about."""
+    result = check(steps=[{"values": {"flywheel": 1.0}, "ramp": 3.0,
+                           "timeout": 2.0,
+                           "wait_for": {"kind": "rpm", "actuator": "flywheel",
+                                        "at_least": 3000}}])
+    assert any("no time to come true" in w for w in result.warnings)

@@ -564,3 +564,130 @@ def test_the_encoders_are_built_from_the_actuators_that_declare_pins():
         steps=[step(values={"fly": 1.0}, seconds=0.1)])
     m = build_mechanism(cfg)
     assert set(m.encoders) == {"fly"}
+
+
+# --- ramping: how it gets there, not how long it holds ------------------------
+
+def test_a_step_without_a_ramp_still_jumps_straight_to_its_value():
+    """The default is unchanged behaviour: `ramp` 0 writes the target at once,
+    which is what every step did before ramping existed."""
+    m = shooter([step(values={"flywheel": 1.0}, seconds=0.2)])
+    m.activate()
+    assert throttle(m, "flywheel") == 1.0
+
+
+def test_a_ramp_walks_the_actuator_across_instead_of_slamming_it():
+    m = shooter([step(values={"flywheel": 1.0}, ramp=1.0)])
+    m.activate()
+    assert throttle(m, "flywheel") == 0.0      # nothing written yet at t=0
+    age(m, 0.25)
+    m.update()
+    assert throttle(m, "flywheel") == pytest.approx(0.25, abs=0.01)
+    age(m, 0.25)                                # 0.5s in total
+    m.update()
+    assert throttle(m, "flywheel") == pytest.approx(0.5, abs=0.01)
+
+
+def test_a_ramp_lands_on_the_target_exactly():
+    """The final write must be the target itself, not a hair short: that value
+    is what the NEXT step ramps away from, so an error here accumulates."""
+    m = shooter([step(values={"flywheel": 1.0}, ramp=1.0),
+                 step(values={"belt": 0.5}, seconds=0.1)])
+    m.activate()
+    age(m, 1.0)
+    m.update()
+    assert throttle(m, "flywheel") == 1.0
+
+
+def test_a_servo_ramps_in_degrees_from_where_it_was_parked():
+    """Two units in one mechanism, and the ramp has to respect them: a feeder
+    starts at the rest angle and travels in degrees, not throttle."""
+    m = shooter([step(values={"feeder": 40.0}, ramp=1.0)])
+    assert angle(m, "feeder") == -30.0          # parked at rest_angle
+    m.activate()
+    age(m, 0.5)
+    m.update()
+    assert angle(m, "feeder") == pytest.approx(5.0, abs=0.5)   # halfway -30 -> 40
+
+
+def test_the_step_cannot_end_while_its_actuators_are_still_travelling():
+    """The ramp is part of the dwell. Handing over mid-travel would leave the
+    next step ramping away from a value this one never reached."""
+    m = shooter([step(values={"flywheel": 1.0}, ramp=1.0, seconds=0.1),
+                 step(values={"belt": 0.8}, seconds=0.1)])
+    m.activate()
+    age(m, 0.5)                                  # past `seconds`, mid-ramp
+    m.update()
+    assert m.step_index == 0
+    assert throttle(m, "belt") == 0.0
+    age(m, 0.5)
+    m.update()
+    assert m.step_index == 1
+
+
+def test_a_ramp_down_is_how_deceleration_is_expressed():
+    """Decel is a step with a lower target, not a special case: the same linear
+    walk runs in either direction."""
+    m = shooter([step(values={"flywheel": 1.0}, seconds=0.1),
+                 step(values={"flywheel": 0.0}, ramp=1.0)])
+    m.activate()
+    age(m, 0.1)
+    m.update()
+    assert m.step_index == 1
+    age(m, 0.5)
+    m.update()
+    assert throttle(m, "flywheel") == pytest.approx(0.5, abs=0.01)
+
+
+def test_an_unnamed_actuator_is_still_left_alone_while_another_ramps():
+    """The contract that makes a shooter work: the flywheel spun up in step 1
+    keeps spinning while the feeder ramps into it in step 2."""
+    m = shooter([step(values={"flywheel": 1.0}, seconds=0.1),
+                 step(values={"feeder": 40.0}, ramp=1.0)])
+    m.activate()
+    age(m, 0.1)
+    m.update()
+    age(m, 0.5)
+    m.update()
+    assert throttle(m, "flywheel") == 1.0
+
+
+def test_stop_stays_instant_mid_ramp():
+    """The e-stop path. A mechanism that eased itself down over a second would
+    be one that ignores the button for a second."""
+    m = shooter([step(values={"flywheel": 1.0}, ramp=5.0)])
+    m.activate()
+    age(m, 1.0)
+    m.update()
+    assert throttle(m, "flywheel") == pytest.approx(0.2, abs=0.01)
+    m.stop()
+    assert throttle(m, "flywheel") == 0.0
+    assert angle(m, "feeder") == -30.0
+    assert m.state == "rest"
+
+
+def test_a_ramp_abandoned_by_stop_does_not_keep_writing():
+    """Whatever was travelling is dropped, so a later tick cannot resurrect it."""
+    m = shooter([step(values={"flywheel": 1.0}, ramp=5.0)])
+    m.activate()
+    age(m, 1.0)
+    m.update()
+    m.stop()
+    for _ in range(5):
+        m.update()
+    assert throttle(m, "flywheel") == 0.0
+
+
+def test_a_second_run_ramps_from_rest_again():
+    """`stop` parks, so the next activation starts its ramp from the rest value
+    rather than from wherever the last run was interrupted."""
+    m = shooter([step(values={"flywheel": 1.0}, ramp=1.0)])
+    m.activate()
+    age(m, 0.5)
+    m.update()
+    m.stop()
+    m._last_activation = -1e9
+    m.activate()
+    age(m, 0.5)
+    m.update()
+    assert throttle(m, "flywheel") == pytest.approx(0.5, abs=0.01)

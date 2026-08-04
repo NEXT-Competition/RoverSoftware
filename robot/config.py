@@ -744,6 +744,25 @@ class SequenceStep:
         {"kind": "rpm", "actuator": "fly", "at_least": 3000, "at_most": 0}
         {"kind": "mech_ready", "mech": "launcher"}
 
+    `ramp` is the other half of "when": how long the actuators take to GET to
+    `values`, rather than how long they hold once there. 0 (the default) writes
+    the target immediately, which is what every step did before this existed.
+    Above 0, each named actuator is walked linearly from where it actually was
+    when the step began to its target over that many seconds — a flywheel eased
+    up to speed instead of slammed there, a feeder arm that arrives at the ball
+    instead of hitting it.
+
+    It is a per-step field rather than a per-mechanism one because a shooter
+    wants both in the same cycle: a long, gentle spin-up and then a feeder that
+    must move NOW, before the wheel bleeds speed. A mechanism-wide slew rate
+    would force one number onto both.
+
+    The ramp is served before the step can end: the effective dwell floor is
+    max(seconds, ramp), so a step cannot advance while its own actuators are
+    still travelling. `seconds` therefore keeps meaning what it meant — extra
+    hold AFTER arriving is `ramp + seconds` only if you want it that way; a
+    plain `seconds` shorter than `ramp` is simply absorbed.
+
     `timeout` bounds the gate, because a gate that cannot be satisfied is a
     mechanism that never returns to rest. 0 means "use the mechanism's
     step_timeout". Reaching it runs `on_timeout`:
@@ -759,6 +778,7 @@ class SequenceStep:
     name: str = ""            # what the dashboard calls this leg; "" => "step N"
     values: Dict[str, float] = field(default_factory=dict)
     seconds: float = 0.0      # minimum dwell before the step may end
+    ramp: float = 0.0         # seconds to travel to `values`; 0 = jump there
     wait_for: Dict[str, Any] = field(default_factory=dict)
     timeout: float = 0.0      # 0 => inherit the mechanism's step_timeout
     on_timeout: str = "abort"  # abort | advance
