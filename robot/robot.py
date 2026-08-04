@@ -44,6 +44,7 @@ from .sensors.gps import GPS
 from .sensors.imx500 import IMX500Detector, resolve_backend
 from .sensors.pose import PoseEstimator
 from .sensors.ultrasonic import build_ultrasonic
+from .sensors.imu import IMU
 
 # Log a warning if a control tick's work (excluding the sleep) exceeds this. A
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
@@ -522,8 +523,11 @@ class Robot:
         # Reassembly buffers for chunked documents arriving off the radio, one
         # per document type so a layout, a routine and a script save can't
         # interleave.
-        self._rx = {"put_layout": Reassembler(), "put_routines": Reassembler(),
-                    "put_scripts": Reassembler()}
+        self._rx = {
+            "put_layout": Reassembler(),
+            "put_routines": Reassembler(),
+            "put_scripts": Reassembler(),
+        }
         self._layout_rev = 0
         self._routine_rev = 0
         self._script_rev = 0
@@ -1164,8 +1168,10 @@ class Robot:
                 error = script_store.save(doc)
                 if error:
                     print(f"[Robot] scripts applied but NOT saved: {error}")
-            print(f"[Robot] scripts accepted: {len(result.scripts)} "
-                  f"(rev {self._script_rev})")
+            print(
+                f"[Robot] scripts accepted: {len(result.scripts)} "
+                f"(rev {self._script_rev})"
+            )
         for message in result.errors:
             print(f"[Robot] scripts rejected: {message}")
         self._queue(
@@ -1190,8 +1196,10 @@ class Robot:
             self._script_doc = doc
             if self.script_controller is not None:
                 self.script_controller.set_scripts(result.scripts)
-            print(f"[Robot] scripts: {len(result.scripts)} loaded from "
-                  f"{script_store.scripts_path()}")
+            print(
+                f"[Robot] scripts: {len(result.scripts)} loaded from "
+                f"{script_store.scripts_path()}"
+            )
         else:
             for message in result.errors:
                 print(f"[Robot] scripts REJECTED at boot: {message}")
@@ -1216,13 +1224,15 @@ class Robot:
         lines, watched = script.take_output()
         if not lines and not watched:
             return
-        self._queue({
-            "type": "script_output",
-            "from": self.cfg.robot_id,
-            "id": script.selected,
-            "lines": lines[-SCRIPT_OUTPUT_LINES:],
-            "watch": watched,
-        })
+        self._queue(
+            {
+                "type": "script_output",
+                "from": self.cfg.robot_id,
+                "id": script.selected,
+                "lines": lines[-SCRIPT_OUTPUT_LINES:],
+                "watch": watched,
+            }
+        )
 
     def _load_routines(self) -> None:
         doc = routine_store.load()
