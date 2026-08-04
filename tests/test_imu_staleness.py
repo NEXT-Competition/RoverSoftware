@@ -219,6 +219,10 @@ def rover(monkeypatch, tmp_path):
     cfg.gps.enabled = False
     cfg.camera.enabled = cfg.vision.enabled = False
     cfg.drive.arm_seconds = 0.0
+    # Pinned to I2C: this is about a CALIBRATION LEVEL reaching the dashboard,
+    # and UART-RVC has none to report (tests/test_imu_rvc.py covers what that
+    # looks like instead).
+    cfg.imu.mode = "i2c"
     from robot.robot import Robot
     return Robot(cfg)
 

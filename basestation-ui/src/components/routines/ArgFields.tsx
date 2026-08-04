@@ -49,6 +49,25 @@ export function ArgFields(
           );
         }
 
+        if (arg.kind === "enum") {
+          // No blank option, unlike the menus below it: those name things a
+          // build may not have, while these are a closed set the Python side
+          // always accepts one of. An empty choice would only ever be a
+          // document the robot rejects.
+          return (
+            <label key={arg.key} class="arg">
+              <span>{arg.label}</span>
+              <select
+                class="field-select tiny"
+                value={String(value)}
+                onChange={(e) => onChange({ [arg.key]: (e.target as HTMLSelectElement).value })}
+              >
+                {(arg.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+          );
+        }
+
         if (arg.kind === "mech") {
           return (
             <label key={arg.key} class="arg">

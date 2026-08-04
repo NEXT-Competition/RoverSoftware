@@ -42,7 +42,10 @@ from time import monotonic, sleep
 # when run as `python tools/imu_monitor.py`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from robot.config import IMUConfig
 from robot.sensors.bno085 import IMU, adafruit_bno08x
+from robot.sensors.bno085_rvc import RVCIMU
+from robot.sensors.imu import build_imu
 
 # Length in bytes of each SH-2 report we might see, INCLUDING its id byte. This
 # is not the full SH-2 catalogue — it is what a BNO085 configured the way this
@@ -295,6 +298,11 @@ def _payload_of(packet) -> bytes:
 
 def main():
     p = argparse.ArgumentParser(description="BNO085 IMU live monitor / calibration")
+    p.add_argument("--mode", default=IMUConfig.mode, choices=["i2c", "uart_rvc"],
+                   help="how the sensor is read — follow the board's PS0/PS1 "
+                        "strapping (default: this build's configured mode)")
+    p.add_argument("--port", default=IMUConfig.port,
+                   help="serial port for uart_rvc (not the GPS's /dev/ttyAMA0)")
     p.add_argument("--address", type=lambda x: int(x, 0), default=0x4A,
                    help="I2C address (default 0x4a; 0x4b if DI/AD0 high)")
     p.add_argument("--offset", type=float, default=0.0,
@@ -315,7 +323,8 @@ def main():
                         "bus that drops packets)")
     args = p.parse_args()
 
-    if adafruit_bno08x is None:
+    rvc = args.mode == "uart_rvc"
+    if not rvc and adafruit_bno08x is None:
         print("adafruit_bno08x not found — install on the Pi: "
               "pip install adafruit-circuitpython-bno08x\n"
               "(nothing to monitor on a dev laptop without the sensor libraries)")
@@ -325,22 +334,37 @@ def main():
     # itself, so anything installed afterwards would miss the first packets —
     # and on a bus that only goes wrong occasionally, missed packets are the
     # difference between a rate and an anecdote.
+    #
+    # I2C only. The RVC transport has its own integrity check built into every
+    # frame, which is the entire reason to be on it, so the equivalent number
+    # comes off the reader itself rather than out of a hook.
     audit = PacketAudit()
-    if not audit.install():
+    if not rvc and not audit.install():
         print("note: this adafruit_bno08x does not expose the internals the "
               "packet audit hooks, so only heading/calibration are shown.\n")
 
-    imu = IMU(i2c_address=args.address, heading_offset_deg=args.offset,
-              invert=args.invert, min_calib=args.min_calib,
-              persist_calibration=not args.no_save,
-              # Staleness is the robot's safety rule, not a diagnostic one. Here
-              # it would blank the readout during exactly the dropouts you are
-              # trying to watch, so it is off unless asked for.
-              sample_timeout=args.timeout)
+    imu = build_imu(IMUConfig(
+        mode=args.mode, port=args.port, i2c_address=args.address,
+        heading_offset_deg=args.offset, invert=args.invert,
+        min_calib=args.min_calib, persist_calibration=not args.no_save,
+        # Staleness is the robot's safety rule, not a diagnostic one. Here it
+        # would blank the readout during exactly the dropouts you are trying to
+        # watch, so it is off unless asked for.
+        sample_timeout=args.timeout))
     imu.start()
     dest = "off" if args.no_save else "BNO085 flash"
-    print(f"Move the rover in figure-8s until the calibration level reaches 3 "
-          f"(auto-save -> {dest}). Ctrl-C to stop.")
+    if rvc:
+        print("UART-RVC reports no calibration level, so there is nothing to "
+              "watch converge\nhere — calibrate over I2C once (--mode i2c) and "
+              "the chip keeps it in flash.")
+        print("What to check instead: point the rover at a landmark, note the "
+              "heading, drive\nit around, come back, and see whether the "
+              "heading returns to the same number.\nIf it has drifted tens of "
+              "degrees, this mode's yaw is not a compass heading and\nthis "
+              "build should stay on heading_source=gps.")
+    else:
+        print(f"Move the rover in figure-8s until the calibration level reaches "
+              f"3 (auto-save -> {dest}). Ctrl-C to stop.")
     if audit.installed:
         print("Counting packets as they arrive; the driver prints any it cannot "
               "parse and\nthis tool adds a diagnosis underneath. Summary on the "
@@ -354,18 +378,54 @@ def main():
             heading = imu.heading()
             rate = imu.yaw_rate()
             calib = imu.calibration()
-            h = f"{heading:6.1f}°" if heading is not None else "  --   (uncalibrated -> GPS fallback)"
+            h = f"{heading:6.1f}°" if heading is not None else "  --   (no heading -> GPS fallback)"
             r = f"{rate:+6.1f}°/s" if rate is not None else "  --  "
-            line = f"heading={h}  yaw_rate={r}  calib={calib}/3"
+            line = f"heading={h}  yaw_rate={r}"
+            # None means the transport has no such number, which is a different
+            # statement from 0 and is worth not flattening into one.
+            line += f"  calib={calib}/3" if calib is not None else "  calib=n/a"
             if audit.installed:
                 line += f"  pkt {audit.ok}/{audit.ok + audit.bad}"
+            elif isinstance(imu, RVCIMU):
+                seen, bad = imu.frame_counts()
+                line += f"  frames {seen - bad}/{seen}"
             print(line)
             sleep(period)
     except KeyboardInterrupt:
         pass
     finally:
         imu.stop()
-    print(f"\n{audit.summary()}")
+    print(f"\n{_verdict(imu, audit)}")
+
+
+def _verdict(imu, audit: PacketAudit) -> str:
+    """The bus health summary, in whichever terms this transport has.
+
+    Same question either way — how much of what the sensor sent actually
+    arrived — but the two transports answer it differently. I2C has no
+    per-packet integrity check, so the audit has to infer corruption from what
+    the driver choked on; an RVC frame carries a checksum, so the reader simply
+    counts the ones that failed it.
+    """
+    if not isinstance(imu, RVCIMU):
+        return audit.summary()
+    seen, bad = imu.frame_counts()
+    if seen == 0:
+        return ("No frames at all. Nothing is arriving on that port: check it "
+                "is the right\none (`ls /dev/ttyAMA*`; the GPS owns ttyAMA0), "
+                "that the sensor's TX reaches the\nPi's RX, and that the board "
+                "is strapped for UART-RVC rather than I2C.")
+    if not bad:
+        return (f"frames {seen} ok, 0 rejected — a clean line.\n"
+                f"Every one of those carried a checksum, which is what this "
+                f"transport buys:\nthe corruption that reached the heading over "
+                f"I2C cannot get past this.")
+    return (f"frames {seen - bad} ok, {bad} rejected "
+            f"(1 in {seen // bad}, {100.0 * bad / seen:.2f}%)\n"
+            f"Rejected means the checksum failed, so those never became a "
+            f"heading — which is\nthe point. A few per thousand is a working "
+            f"line; percent-level means the wiring\nor the baud rate is wrong, "
+            f"and the heading is being updated that much less often.")
 
 
 if __name__ == "__main__":

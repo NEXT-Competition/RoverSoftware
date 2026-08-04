@@ -62,11 +62,35 @@ Order is meaning: put "gave up" below "succeeded".
 | Group | Conditions |
 |---|---|
 | timing | after a delay · immediately · never (hold here) |
-| vision | when the camera sees a target · when lined up · when at the standoff distance |
+| vision | when the camera sees a target · when lined up · when at the standoff distance · **when the object is at a distance** |
 | navigation | when the route is finished · when pointing a direction · when near a saved place |
 | mechanism | after N shots · when a mechanism is ready |
 | logic | ALL of · ANY of · NOT · after this has happened N times |
 | operator | when I press a button · when the e-stop is latched |
+
+**"When the object is at a distance"** is the one to reach for when *at the
+standoff distance* is nearly right but not quite. They are different questions:
+the standoff belongs to whichever align mode is driving and fires when that mode
+decides it has arrived, while this one is a number in metres you name, tested
+whatever is driving — so a state can hand over at 2 m on the way in, before any
+approach finishes.
+
+It measures one of two things, and picking the wrong one is how a routine stops
+at the wrong object:
+
+- **target** — how far away the *detected* object is. Measured by the ultrasonic
+  while the target is centred in its beam, and read off the bounding box past
+  that. Needs a detection.
+- **ahead** — how far away the nearest thing *straight ahead* is, from the
+  ultrasonic alone. Needs no model at all, which makes it the one for "creep
+  forward until something is close" — and the wrong one for "until the bucket is
+  close" in a room with a chair in it.
+
+Fill in *within* to close in, *no nearer than* to wait until something is far
+enough away, or both for a band. It is never true while the distance is unknown,
+so a state waiting on one waits rather than proceeding on a number nobody has.
+Take care asking for less than the collision guard's stop distance: the rover
+halts there, and the transition never fires.
 
 Every condition can additionally be required to **hold continuously** for a
 number of seconds before it counts. That one field is the difference between a

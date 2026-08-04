@@ -235,6 +235,49 @@ survive a restart:
 Switch either half off under **Settings → Vision** (*Range from the ultrasonic*,
 *Learn the range constant*). A build with no ultrasonic is unaffected by both.
 
+## The IMU: which wire it is on
+
+The BNO085 can be read two ways, and the board is **strapped** for one of them
+(PS0/PS1). It is a wiring decision that `imu.mode` records, not a preference
+software can change on its own.
+
+| | `i2c` | `uart_rvc` |
+|---|---|---|
+| Wires | SDA, SCL, shared bus | one: sensor TX → a Pi RX |
+| Integrity | none per packet | **checksum on every frame** |
+| Calibration level | 0–3, enforced by *Min calibration* | none — cannot be enforced |
+| Yaw rate | measured gyro | differentiated from yaw |
+| Commands to the chip | yes (calibration save) | none |
+
+**The default is `uart_rvc`**, because the failure it prevents is one this rover
+actually had: a single flipped bit on the I²C bus turning a valid report into an
+unrecognised one, with nothing in SHTP able to notice. An RVC frame carries a
+checksum, so a corrupted frame is dropped instead of becoming a heading.
+
+```bash
+# it needs its own UART — the GPS holds /dev/ttyAMA0
+ls /dev/ttyAMA*                       # after enabling a spare uart in config.txt
+python tools/imu_monitor.py --mode uart_rvc --port /dev/ttyAMA1 --seconds 60
+```
+
+`frames 5992 ok, 0 rejected` is a clean line. A percent-level rejection rate
+means the wiring or the baud rate is wrong — those frames never became a
+heading, which is the point, but the heading is updating that much less often.
+
+**Calibrate over I²C first, once.** RVC reports no accuracy level, so nothing
+can tell you the magnetometer has converged — but the chip keeps its calibration
+in its own flash, across power cycles *and* across a change of mode. So: strap
+for I²C, `python tools/imu_monitor.py --mode i2c`, figure-8s until the level
+reaches 3 (it saves itself), then restrap for RVC.
+
+**Then verify the yaw is a compass heading.** This is the one check not to skip,
+because everything downstream assumes an absolute heading — the waypoint
+controller will pivot in place on it. Point the rover at a landmark, note the
+heading, drive it around for a few minutes, bring it back to the same spot and
+read again. A few degrees of difference is fine. Tens of degrees means the yaw
+is dead-reckoning rather than magnetometer-referenced, and this build should
+stay on `heading_source=gps` or go back to `i2c`.
+
 ## The tools
 
 | Tool | What it is for |
@@ -245,7 +288,7 @@ Switch either half off under **Settings → Vision** (*Range from the ultrasonic
 | `ultrasonic_monitor.py` | Ultrasonic bring-up, and the stop-distance calibration |
 | `xbee_monitor.py` | Watch and inject XBee frames to prove the link |
 | `gps_monitor.py` | GPS bring-up: fix quality, track angle |
-| `imu_monitor.py` | BNO085 heading and calibration status, and an I²C bus audit (`--seconds 60`) |
+| `imu_monitor.py` | BNO085 heading and calibration, on either transport, plus a bus audit (`--seconds 60`) |
 | `imu_selftest.py` | Confirms the IMU answers and calibrates |
 | `detector_selftest.py` | Vision bring-up and standoff calibration, either backend |
 | `fetch_tiles.py` | Build an offline `.mbtiles` cache before you lose signal |

@@ -641,9 +641,28 @@ export const ROBOT_GROUPS: Group[] = [
         help: "Let the BNO08x save its converged calibration to its own flash.",
       }),
       b("imu.enabled", "IMU enabled", { live: false }),
+      e("imu.mode", "Read mode", ["i2c", "uart_rvc"], {
+        live: false,
+        help:
+          "Follows the board's PS0/PS1 strapping — a wiring fact, not a " +
+          "preference. uart_rvc is checksummed and one-way, so corruption is " +
+          "dropped instead of becoming a heading; the price is no calibration " +
+          "level (this list's Min calibration cannot be enforced), no measured " +
+          "gyro, and no calibration save. Calibrate over i2c once first.",
+      }),
       i("imu.i2c_address", "I²C address", 0x08, 0x77, {
         live: false,
-        help: "0x4a by default; 0x4b if DI/AD0 is pulled high.",
+        help: "0x4a by default; 0x4b if DI/AD0 is pulled high. i2c mode only.",
+      }),
+      t("imu.port", "Serial port", {
+        live: false,
+        help:
+          "uart_rvc mode only, and NOT the GPS's port — the IMU needs its own " +
+          "UART. Check `ls /dev/ttyAMA*` on the robot.",
+      }),
+      i("imu.baud", "Baud", 1200, 921600, {
+        live: false,
+        help: "115200 is fixed by the chip in RVC mode; only an adapter in between would differ.",
       }),
     ],
   },

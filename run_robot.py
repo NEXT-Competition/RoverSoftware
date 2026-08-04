@@ -9,7 +9,7 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_ROBOT_ID, RS_XBEE_PORT, RS_XBEE_BAUD, RS_BASE_HOST, RS_BASE_PORT,
     RS_START_MODE, RS_LOOP_HZ,
     RS_TELEMETRY_HZ, RS_GPS_ENABLED/PORT/BAUD/RATE_MS, RS_HEADING_SOURCE,
-    RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
+    RS_IMU_ENABLED/MODE/PORT/BAUD/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/BACKEND/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
     RS_VISION_RANGE_AT_M/RANGE_SIZE,
@@ -198,6 +198,17 @@ def main():
                         choices=["auto", "gps", "imu"],
                         help="which sensor gives heading: auto (IMU, else the GPS "
                              "track angle), gps (track angle only), imu (no fallback)")
+    parser.add_argument("--imu-mode",
+                        default=os.environ.get("RS_IMU_MODE", cfg.imu.mode),
+                        choices=["i2c", "uart_rvc"],
+                        help="how the BNO085 is read. This follows the board's "
+                             "PS0/PS1 strapping — it is a wiring fact, not a "
+                             "preference. uart_rvc is checksummed and one-way; "
+                             "i2c carries a calibration level and a real gyro")
+    parser.add_argument("--imu-port",
+                        default=os.environ.get("RS_IMU_PORT", cfg.imu.port),
+                        help="serial port for uart_rvc. NOT the GPS's "
+                             "/dev/ttyAMA0 — the IMU needs its own UART")
     parser.add_argument("--imu-address", type=lambda x: int(x, 0),
                         default=int(os.environ.get("RS_IMU_ADDRESS", hex(cfg.imu.i2c_address)), 0),
                         help="BNO085 I2C address (default 0x4a; 0x4b if DI/AD0 high)")
@@ -266,6 +277,9 @@ def main():
     cfg.gps.update_rate_ms = args.gps_rate
     cfg.heading_source = args.heading_source
     cfg.imu.enabled = args.imu
+    cfg.imu.mode = args.imu_mode
+    cfg.imu.port = args.imu_port
+    cfg.imu.baud = int(os.environ.get("RS_IMU_BAUD", cfg.imu.baud))
     cfg.imu.i2c_address = args.imu_address
     cfg.imu.heading_offset_deg = args.imu_offset
     cfg.imu.persist_calibration = args.imu_save_calib
@@ -381,7 +395,14 @@ def main():
 
     motors = "MOCK" if args.mock_motors else "real"
     gps = f"{cfg.gps.port}@{cfg.gps.baud}" if cfg.gps.enabled else "off"
-    imu = f"0x{cfg.imu.i2c_address:02x}" if cfg.imu.enabled else "off"
+    # Which WIRE, not just which address: on a rover that has been converted to
+    # UART-RVC, "imu=0x4a" in the journal would describe a bus nothing is on.
+    if not cfg.imu.enabled:
+        imu = "off"
+    elif cfg.imu.mode == "uart_rvc":
+        imu = f"rvc:{cfg.imu.port}"
+    else:
+        imu = f"i2c:0x{cfg.imu.i2c_address:02x}"
     if not cfg.vision.enabled:
         vision = "off"
     elif args.mock_detector:

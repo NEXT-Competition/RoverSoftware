@@ -33,6 +33,11 @@ class RoutineContext:
     # work out a shot. Optional: a build with no launcher has none, and the
     # conditions and actions that want it say so rather than failing to load.
     ballistics: Optional[Any] = None
+    # Metres to whatever is straight ahead, from the ultrasonic — no idea what
+    # it is looking at, but it needs no camera and no calibration. Optional: a
+    # build with no ultrasonic never sets it, and the conditions that want it
+    # answer False rather than failing to load. See sensors/ultrasonic.py.
+    sonar: Optional[Callable[[], Optional[float]]] = None
     estop: Callable[[], bool] = lambda: False
     # Re-read on every arm attempt rather than captured, so turning the switch
     # off stops the routine that is already running — the only direction a
@@ -125,6 +130,72 @@ def _in_range(spec) -> Predicate:
             return False
         return bool(ctx.ballistics.in_range(align.distance_m()))
     return check
+
+
+def _target_distance(spec) -> Predicate:
+    """True while the thing in front is within (or beyond) a named distance.
+
+    The plain distance question, in metres, which `arrived` and `in_range` are
+    both NOT:
+
+        arrived    the aligning controller has stopped at ITS OWN standoff. It
+                   only means anything while that controller is driving, and the
+                   distance it refers to is the one that controller was told.
+        in_range   the ballistics model says a shot has a solution — which can
+                   be false because the target is too NEAR as well as too far.
+        this       a number you named, tested against the measured range,
+                   whatever is currently driving. That is what lets a state fire
+                   at 2 m on the way in, or hand over to another mode before the
+                   approach ever finishes.
+
+    Two things it can measure the distance TO, because the robot has two ways of
+    knowing and they answer different questions:
+
+        target ("source": "target", the default)
+                   how far away the DETECTED OBJECT is: measured by the
+                   ultrasonic when the target is centred in its beam and in
+                   range, and inferred from the bounding box otherwise. Needs a
+                   detection, so it is unknown when nothing is in view.
+                   See control/rangefinder.py.
+        ahead  ("source": "ahead")
+                   how far away the nearest thing STRAIGHT AHEAD is, from the
+                   ultrasonic alone. Needs no model and no calibration, and
+                   knows nothing about what it is looking at — which makes it
+                   the one to use for "creep forward until something is close",
+                   and the wrong one for "until the bucket is close" in a room
+                   with a chair in it.
+
+    False whenever the distance is unknown — nothing detected, no calibration,
+    no ultrasonic fitted, an echo that never came back. That is the same
+    direction `in_range` fails in and for the same reason: a state that waits
+    for a distance should wait, not proceed on a number nobody has.
+    """
+    if "at_most" not in spec and "at_least" not in spec:
+        raise ValueError("needs 'at_most', 'at_least', or both (metres)")
+    at_most = _num(spec, "at_most") if "at_most" in spec else None
+    at_least = _num(spec, "at_least") if "at_least" in spec else None
+    source = str(spec.get("source", "target")).strip() or "target"
+    if source not in ("target", "ahead"):
+        raise ValueError(f"unknown 'source' {source!r} (expected target or ahead)")
+
+    def check(ctx):
+        distance = _range_to(ctx, source)
+        if distance is None:
+            return False
+        if at_most is not None and distance > at_most:
+            return False
+        if at_least is not None and distance < at_least:
+            return False
+        return True
+    return check
+
+
+def _range_to(ctx: RoutineContext, source: str) -> Optional[float]:
+    """Metres to the thing this condition is asking about, or None."""
+    if source == "ahead":
+        return ctx.sonar() if ctx.sonar is not None else None
+    align = ctx.align()
+    return align.distance_m() if align is not None else None
 
 
 def _route_done(spec) -> Predicate:
@@ -240,6 +311,11 @@ BUILDERS: Dict[str, Tuple[Callable[[dict], Predicate], Tuple[str, ...]]] = {
     "aligned": (_aligned, ()),
     "arrived": (_arrived, ()),
     "in_range": (_in_range, ()),
+    # Neither bound is listed as required: the builder demands at least ONE of
+    # them and raises a ValueError naming both, which compile_condition already
+    # turns into a document error. A `required` tuple could not express "one of
+    # these two", and demanding both would rule out the common case.
+    "target_distance": (_target_distance, ()),
     "route_done": (_route_done, ()),
     "shots": (_shots, ("at_least",)),
     "mech_ready": (_mech_ready, ("mech",)),

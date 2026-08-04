@@ -11,6 +11,9 @@ export interface ArgSpec {
   kind:
     | "number"
     | "text"
+    // A fixed set of words the Python side will accept and nothing else, so it
+    // is a menu rather than a field somebody can typo into a rejected document.
+    | "enum"
     | "mech"
     | "preset"
     | "actuator"
@@ -26,6 +29,10 @@ export interface ArgSpec {
   max?: number;
   step?: number;
   unit?: string;
+  /** `enum` only: the words on offer. They must be exactly what the Python
+   *  builder accepts — it rejects anything else, and a menu offering a word the
+   *  robot refuses is a document that fails to load with no clue why. */
+  choices?: string[];
   fallback?: number | string;
 }
 
@@ -90,6 +97,41 @@ export const CONDITIONS: VerbSpec[] = [
     help:
       "Not a distance — it asks whether the launcher can actually reach the target from where it is, at the angle it is set to. Too far is out of range because the flywheel would have to spin faster than it can; too NEAR can be too, because a fixed launch angle cannot throw a short high arc. False whenever the range is unknown, so a shot gated on this holds fire rather than firing blind.",
     args: [],
+  },
+  {
+    key: "target_distance",
+    group: "vision",
+    label: "when the object is at a distance",
+    chip: "distance",
+    help:
+      "A distance you name, in metres, tested against what the robot measures — " +
+      "unlike 'at the standoff distance', which only means anything while an " +
+      "align mode is driving and refers to that mode's own standoff. Fill in " +
+      "'within' for closing in, 'no nearer than' for a band, or both.\n\n" +
+      "Measuring the OBJECT needs a detection: the ultrasonic answers when the " +
+      "target is centred in its beam, and the bounding box answers past that. " +
+      "Measuring AHEAD uses the ultrasonic alone — no model, no calibration, " +
+      "and no idea what it is looking at, so it is the one for 'creep until " +
+      "something is close' and the wrong one for 'until the bucket is close' " +
+      "in a room with a chair in it.\n\n" +
+      "Never true while the distance is unknown, so a state waiting on one " +
+      "waits rather than proceeding on a number nobody has. Careful asking for " +
+      "less than the collision guard's stop distance: the rover will halt there " +
+      "and the transition will never fire.",
+    args: [
+      {
+        key: "source",
+        label: "measure",
+        kind: "enum",
+        choices: ["target", "ahead"],
+        fallback: "target",
+      },
+      { key: "at_most", label: "within", kind: "number", min: 0, max: 20, step: 0.05, unit: "m", fallback: 1 },
+      // 0 is the off position rather than a value: a lower bound of zero is
+      // satisfied by every distance there is, so leaving it alone means "within
+      // X" and raising it turns the test into a band.
+      { key: "at_least", label: "no nearer than", kind: "number", min: 0, max: 20, step: 0.05, unit: "m", fallback: 0 },
+    ],
   },
   { key: "route_done", group: "navigation", label: "when the route is finished", chip: "route done", args: [] },
   {

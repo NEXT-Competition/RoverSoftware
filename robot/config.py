@@ -314,7 +314,31 @@ class IMUConfig:
     # old sensor). Strap PS0/PS1 for I2C mode. Verify with tools/imu_selftest.py.
     # See packaging/robot.env.
     enabled: bool = True
+    # How the chip is read, which is a WIRING decision the board is strapped for
+    # (PS0/PS1) — it cannot be changed without moving wires.
+    #
+    #   i2c       SHTP on the I2C bus: everything the chip can say, including a
+    #             calibration accuracy level, a measured gyro, and commands back
+    #             to it. No per-packet checksum, so a corrupted byte arrives as
+    #             an unrecognised report — or, worse, a plausible heading.
+    #   uart_rvc  19-byte checksummed frames at 100 Hz, output only, on one
+    #             wire (the sensor's TX into a Pi RX). Corruption is DETECTED
+    #             and the frame dropped, which is the whole argument on a noisy
+    #             chassis. The price is real: no calibration level (so
+    #             `min_calib` cannot be enforced), no measured gyro (yaw rate is
+    #             differentiated from the yaw) and no way to save calibration.
+    #             Calibrate over I2C once first — the chip keeps it in flash.
+    #             See sensors/bno085_rvc.py, including the two-minute check for
+    #             whether this mode's yaw is a compass heading or a drifting one.
+    mode: str = "uart_rvc"
     i2c_address: int = 0x4A  # BNO085 default; 0x4B if the DI/AD0 pin is pulled high
+    # uart_rvc only. NOT /dev/ttyAMA0 — the GPS has that one — so this needs a
+    # spare UART enabled in config.txt, or a USB-TTL adapter. Check
+    # `ls /dev/ttyAMA*` after a reboot; the numbering depends on which you
+    # enabled. 115200 is fixed by the chip in RVC mode; it is a setting only
+    # because an adapter in between might not be.
+    port: str = "/dev/ttyAMA1"
+    baud: int = 115200
     # Rotation applied to the sensor's raw yaw to align it with the robot's
     # forward axis and true North (0 = North, CW positive). Tune during bring-up.
     heading_offset_deg: float = 0.0

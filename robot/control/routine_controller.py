@@ -80,6 +80,20 @@ class RoutineController(Controller):
     def set_estop_provider(self, provider) -> None:
         self._ctx.estop = provider
 
+    def set_sonar_provider(self, provider) -> None:
+        """Metres to whatever is straight ahead, for `target_distance: ahead`.
+
+        A plain callable rather than the sensor, the same way every other
+        provider here is one: the routine layer must stay testable against stubs
+        on a laptop, and nothing in `routine/` imports `sensors/`.
+
+        Optional. A build with no ultrasonic never calls this, and the condition
+        answers False rather than the document failing to load — a routine
+        written on a rover that has one still loads on a rover that does not,
+        and simply never takes that transition.
+        """
+        self._ctx.sonar = provider
+
     def set_ballistics(self, ballistics) -> None:
         """The distance -> flywheel-speed model, for states that work out a shot.
 

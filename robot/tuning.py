@@ -337,7 +337,14 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("imu.sample_timeout", 0, 30),
     _b("imu.persist_calibration"),
     _b("imu.enabled", live=False),
+    # How the chip is read. live=False and more so than most: this is not really
+    # a software setting at all — the board is STRAPPED for one mode or the
+    # other (PS0/PS1), so changing it without moving wires gets you a reader
+    # talking to a chip that is not listening.
+    _e("imu.mode", ("i2c", "uart_rvc"), live=False),
     _i("imu.i2c_address", 0x08, 0x77, live=False),
+    _t("imu.port", live=False),
+    _i("imu.baud", 1200, 921600, live=False),
 
     # --- routines (the FSM engine; the documents live in routines.json) ---
     _f("routines.state_timeout_default", 1, 600),

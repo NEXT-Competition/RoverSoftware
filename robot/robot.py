@@ -32,7 +32,7 @@ from .routine import store as routine_store
 from .drive.drivetrain import build_drivetrain
 from .drive.mechanism import Mechanism, build_mechanism
 from .drive.shooter import Shooter
-from .sensors.bno085 import IMU
+from .sensors.imu import build_imu
 from .sensors.camera import Camera
 from .sensors.detector import MockDetector, ObjectDetector
 from .sensors.fpv import FPVStreamer
@@ -240,15 +240,13 @@ class Robot:
 
         # BNO085 IMU supplies an absolute, standstill-valid heading (which the
         # GPS track angle is not). Reads on its own thread; heading() is a cheap
-        # cached lookup. Disabled/uncalibrated -> heading falls back to the track
-        # angle (see heading_source).
-        self.imu: Optional[IMU] = (
-            IMU(config.imu.i2c_address, config.imu.heading_offset_deg,
-                config.imu.invert, config.imu.min_calib,
-                config.imu.persist_calibration,
-                sample_timeout=config.imu.sample_timeout)
-            if config.imu.enabled else None
-        )
+        # cached lookup. Disabled/uncalibrated/silent -> heading falls back to
+        # the track angle (see heading_source).
+        #
+        # Which transport it is read on — SHTP over I2C, or checksummed UART-RVC
+        # frames — is `imu.mode`, and nothing below this line can tell: both
+        # answer the same four questions (sensors/imu_common.py).
+        self.imu = build_imu(config.imu)
 
         # Ultrasonic rangefinder: how far away the thing straight ahead is.
         # Pings on its own thread; distance_m() is a cached lookup, so a ping
@@ -379,6 +377,13 @@ class Robot:
             if self.pose_provider is not None:
                 self.routine_controller.set_pose_provider(self.pose_provider)
             self.routine_controller.set_estop_provider(lambda: self.manager.estop)
+            # Metres to whatever is straight ahead, so a state can transition on
+            # "something is close" with no model involved — see the
+            # `target_distance` condition. Only on a build that has one; without
+            # it the condition simply never fires, and the document still loads.
+            if self.ultrasonic is not None:
+                self.routine_controller.set_sonar_provider(
+                    self.ultrasonic.distance_m)
             # What a state aligns to. The config object, shared by reference
             # with the detector, so a state's target takes effect on the frame
             # after it is set and is put back when the state is left.
@@ -1091,8 +1096,13 @@ class Robot:
             self.imu.heading_offset_deg = cfg.imu.heading_offset_deg
             self.imu.invert = cfg.imu.invert
             self.imu.min_calib = cfg.imu.min_calib
-            self.imu.persist_calibration = cfg.imu.persist_calibration
             self.imu.sample_timeout = cfg.imu.sample_timeout
+            # I2C only. UART-RVC has no channel back to the chip, so there is
+            # nothing for this to mean there — and quietly creating the
+            # attribute anyway would leave a setting that reads back as applied
+            # while doing nothing at all.
+            if hasattr(self.imu, "persist_calibration"):
+                self.imu.persist_calibration = cfg.imu.persist_calibration
         if self.gps is not None:
             self.gps.fix_timeout = cfg.gps.fix_timeout
             self.gps.min_move_mps = cfg.gps.min_move_mps
