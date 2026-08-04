@@ -341,6 +341,9 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # for when a rover on a noisy bus is flapping between heading sources, which
     # is a thing you diagnose while it is happening. 0 disables the check.
     _f("imu.sample_timeout", 0, 30),
+    _e("imu.transport", ("i2c", "uart_rvc"), live=False),
+    _t("imu.serial_port", live=False),
+    _i("imu.serial_baud", 1200, 921600, live=False),
     _b("imu.persist_calibration"),
     _b("imu.enabled", live=False),
     _i("imu.i2c_address", 0x08, 0x77, live=False),

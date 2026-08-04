@@ -337,6 +337,13 @@ class IMUConfig:
     # heading than on a GPS course), so flapping on every bus hiccup would be
     # its own bug. See sensors/bno085.py::DEFAULT_SAMPLE_TIMEOUT.
     sample_timeout: float = 2.0
+    # Which IMU transport to use. The default I2C implementation matches the
+    # existing BNO085 driver; `uart_rvc` targets the UART-RVC parser used by the
+    # BNO08x sensor in RVC mode.
+    transport: str = "i2c"
+    # UART-RVC settings when transport is "uart_rvc".
+    serial_port: str = "/dev/serial0"
+    serial_baud: int = 115200
     # Run the sensor's dynamic calibration and save it to the BNO08x's own flash
     # once it converges, so the board boots calibrated. The chip persists this
     # itself — there is no offsets file to manage (the BNO055 needed one because it
