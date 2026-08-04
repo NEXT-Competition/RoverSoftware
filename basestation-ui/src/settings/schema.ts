@@ -462,6 +462,11 @@ export const ROBOT_GROUPS: Group[] = [
         help: "Too short and the servo never arrives; too long and it stalls against the stop.",
       }),
       f("shooter.retract_seconds", "Retract", 0.05, 5, 0.05, { unit: "s" }),
+      f("shooter.target_rpm", "Flywheel target", 0, 20000, 50, {
+        unit: "rpm",
+        live: false,
+        help: "0 = this is a servo launcher and the angles above are what it does. Above 0 = this is a flywheel: the shooter holds this speed instead, and the spin button toggles it. Needs a restart.",
+      }),
       f("shooter.dwell", "Dwell", 0, 10, 0.05, {
         unit: "s",
         help: "Hold the alignment this long before firing. The most important accuracy knob: one centred frame is not evidence.",
@@ -762,6 +767,11 @@ export const AXIS_FIELDS: Field[] = [
   i("controller.axis_steer", "Steer axis", 0, 15),
   i("controller.axis_r2", "Forward trigger axis", 0, 15),
   i("controller.axis_l2", "Reverse trigger axis", 0, 15),
+  // -1 rather than UNBOUND: that const is declared further down this module,
+  // so naming it here would read it inside its own temporal dead zone.
+  i("controller.axis_throttle", "Throttle axis (stick)", -1, 15, {
+    help: "Leave unbound to drive on the triggers. Set it to a stick axis for arcade drive on one stick, which frees both triggers to be ordinary buttons.",
+  }),
 ];
 
 /** Buttons the mapping can bind, in the order the editor lists them. */
@@ -774,6 +784,11 @@ export const BUTTON_FIELDS: { path: string; label: string; help?: string }[] = [
   { path: "controller.btn_waypoint", label: "Mode: waypoint" },
   { path: "controller.btn_arm_shooter", label: "Arm shooter" },
   { path: "controller.btn_fire", label: "Fire" },
+  {
+    path: "controller.btn_shooter_spin",
+    label: "Shooter spin / shot",
+    help: "Works the launcher by hand while driving. On a flywheel build (shooter.target_rpm > 0) it toggles the wheel; on a servo launcher it fires one shot. Unlike Fire it carries none of the align/dwell policy.",
+  },
 ];
 
 /** How many buttons may be bound to a routine. Mirrors
@@ -828,7 +843,16 @@ export const FEEL_FIELDS: Field[] = [
   f("controller.steer_gain", "Steering authority", 0.1, 1, 0.05, {
     help: "Lower it for a chassis that darts.",
   }),
+  f("controller.throttle_expo", "Throttle expo", 0, 1, 0.05, {
+    help: "Bends the middle of the travel down and leaves full stick alone — the knob for “too sensitive”. Unlike authority it costs no top speed. 0 is linear.",
+  }),
+  f("controller.steer_expo", "Steering expo", 0, 1, 0.05, {
+    help: "Same curve for steering. At 0.6, half stick gives 0.28 instead of 0.5, while full stick still gives 1.0.",
+  }),
   b("controller.invert_steer", "Invert steering"),
+  b("controller.invert_throttle", "Invert throttle stick", {
+    help: "Only applies to a stick throttle. Sticks report up as negative, so this is on by default; triggers are unaffected.",
+  }),
 ];
 
 /** Index used by a binding that is deliberately unassigned. */

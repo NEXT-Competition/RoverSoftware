@@ -94,6 +94,16 @@ except Exception:
     BNO_REPORT_ROTATION_VECTOR = None
     BNO_REPORT_GYROSCOPE = None
 
+try:  # pragma: no cover - UART backend optional on a dev laptop
+    import serial
+except Exception:
+    serial = None
+
+try:  # pragma: no cover - UART backend optional on a dev laptop
+    from adafruit_bno08x_rvc import BNO08x_RVC
+except Exception:
+    BNO08x_RVC = None
+
 _RAD_TO_DEG = 180.0 / 3.141592653589793
 
 # How often the reader polls the chip's calibration accuracy. Each poll is a
@@ -134,6 +144,9 @@ class IMU(HeadingSource):
         persist_calibration: bool = True,
         update_hz: float = 40.0,
         sample_timeout: float = DEFAULT_SAMPLE_TIMEOUT,
+        transport: str = "i2c",
+        serial_port: str = "/dev/serial0",
+        serial_baud: int = 115200,
     ):
         # The cache, its clock and the four accessors every consumer uses live
         # in HeadingSource, shared with the UART-RVC reader — so "a stale
@@ -150,13 +163,35 @@ class IMU(HeadingSource):
         # BNO055's saved offsets.
         self.persist_calibration = persist_calibration
         self._period = 1.0 / update_hz if update_hz > 0 else 0.025
+        self.transport = (transport or "i2c").strip().lower()
+        self.serial_port = serial_port
+        self.serial_baud = serial_baud
 
         self._sensor = None
+        self._serial = None
         self._i2c = None
         self._calib_saved = False      # save the chip's calibration once per session
+<<<<<<< HEAD
         # Unlike RVC, this transport does report an accuracy level, and 0 is a
         # meaningful value for it (uncalibrated) rather than "no such number".
         self._calib = 0
+=======
+        # When each quantity was last actually measured. Two stamps, not one:
+        # the quaternion and the gyro are separate reports, and a read that
+        # returns one but not the other must not refresh both.
+        # -inf, not 0.0, means "never measured": these hold `time.monotonic()`,
+        # which is time since boot, so 0.0 is a REACHABLE reading rather than a
+        # sentinel — overloading it makes an early sample indistinguishable from
+        # no sample at all.
+        self._heading_at = -math.inf
+        self._rate_at = -math.inf
+        # Read-error bookkeeping, so a bad bus costs one log line per interval
+        # rather than five a second, and so the handover to the GPS course is
+        # announced once rather than never.
+        self._errors = 0
+        self._last_error_log = 0.0
+        self._stale = False
+>>>>>>> a44f5bfa99df5806350b69d66afd263b700da2c7
 
     def start(self) -> None:
         """Begin reading on a background thread; the sensor is opened there.
@@ -169,6 +204,18 @@ class IMU(HeadingSource):
         the promise the module docstring makes — a bad IMU degrades to GPS-course
         heading — for a HANG, not just for an exception.
         """
+        if self.transport == "uart_rvc":
+            if serial is None or BNO08x_RVC is None:
+                print("[IMU] pyserial / adafruit-circuitpython-bno08x-rvc not installed — "
+                      "IMU disabled (heading falls back to GPS course).")
+                return
+            self._running = True
+            self._thread = threading.Thread(target=self._run, name="imu-rx", daemon=True)
+            self._thread.start()
+            print(f"[IMU] opening BNO085 UART-RVC on {self.serial_port} "
+                  f"@ {self.serial_baud} baud (background; heading uses GPS course until it's up)")
+            return
+
         if board is None or busio is None or adafruit_bno08x is None:
             print("[IMU] adafruit-circuitpython-bno08x / blinka not installed — IMU "
                   "disabled (heading falls back to GPS course). "
@@ -188,20 +235,23 @@ class IMU(HeadingSource):
         self._read_loop()
 
     def _open(self) -> bool:
-        """Open the I2C device and subscribe to the reports. True on success.
+        """Open the sensor backend and subscribe to the reports. True on success."""
+        if self.transport == "uart_rvc":
+            try:
+                self._serial = serial.Serial(self.serial_port,
+                                             baudrate=self.serial_baud,
+                                             timeout=1)
+                self._sensor = BNO08x_RVC(self._serial)
+            except Exception as e:
+                print(f"[IMU] could not open BNO085 UART-RVC on {self.serial_port}: {e} — IMU "
+                      "disabled (heading falls back to GPS course)")
+                self._serial = None
+                self._sensor = None
+                return False
+            print(f"[IMU] reading BNO085 UART-RVC from {self.serial_port} "
+                  f"({self.serial_baud} baud)")
+            return True
 
-        Ordering matters here. begin_calibration() blocks until the chip
-        acknowledges the ME-calibrate command, and the adafruit driver waits for
-        that ack by draining EVERY queued packet — an inner `while
-        self._data_ready:` loop with no packet cap, so its outer timeout is only
-        re-checked once the queue runs dry. Enable the 20 Hz rotation-vector and
-        gyro reports first and the queue never runs dry on a slow bus (the
-        classic case: a leftover `dtparam=i2c_arm_baudrate=10000` from the
-        BNO055, where reports arrive faster than 10 kHz can drain them) — the
-        call then hangs forever instead of timing out. Calibrating BEFORE
-        subscribing means nothing is streaming yet, which is also the order
-        Adafruit's own calibration example uses.
-        """
         try:
             self._i2c = busio.I2C(board.SCL, board.SDA)
             self._sensor = BNO08X_I2C(self._i2c, address=self.i2c_address)
@@ -228,6 +278,22 @@ class IMU(HeadingSource):
         return True
 
     def _read_loop(self) -> None:
+        if self.transport == "uart_rvc":
+            while self._running:
+                t0 = time.monotonic()
+                try:
+                    heading = self._sensor.heading
+                except Exception as e:  # keep the reader alive across transient UART glitches
+                    self._note_read_error(e)
+                    time.sleep(_ERROR_BACKOFF_S if isinstance(e, _TRANSPORT_ERRORS)
+                               else self._period)
+                    continue
+                self._consume_uart_heading(heading)
+                sleep_for = self._period - (time.monotonic() - t0)
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+            return
+
         next_calib = 0.0
         while self._running:
             t0 = time.monotonic()
@@ -264,13 +330,38 @@ class IMU(HeadingSource):
         The base class owns the throttling and the handover announcement, which
         are the same on any wire; this is the sentence that is not.
         """
-        super()._note_read_error(
-            error,
-            "A bare number is an SHTP report id the driver does not know, i.e. "
-            "a corrupted or desynchronised stream — not a missing sensor. Usual "
-            "causes: a second process on the I2C bus (a monitor tool running "
-            "against the service), wiring or noise, or a stale "
-            "dtparam=i2c_arm_baudrate. Measure it: tools/imu_monitor.py --seconds 60.")
+        now = time.monotonic()
+        with self._lock:
+            self._errors += 1
+            errors = self._errors
+            last_good = max(self._heading_at, self._rate_at)
+            due = (now - self._last_error_log) >= _ERROR_LOG_INTERVAL
+            if due:
+                self._last_error_log = now
+            went_stale = (not self._stale and math.isfinite(last_good)
+                          and not self._fresh_locked(last_good))
+            if went_stale:
+                self._stale = True
+        if due:
+            print(f"[IMU] read error: {error} ({errors} since start)"
+                  + ("\n  A bare number is an SHTP report id the driver does "
+                     "not know, i.e. a corrupted or desynchronised stream — not "
+                     "a missing sensor. Usual causes: a second process on the "
+                     "I2C bus (a monitor tool running against the service), "
+                     "wiring or noise, or a stale dtparam=i2c_arm_baudrate."
+                     if errors == 1 else ""))
+        if went_stale:
+            print(f"[IMU] no valid sample for {self.sample_timeout:.1f}s — the "
+                  f"heading is no longer being reported, so navigation falls "
+                  f"back to the GPS course until it recovers")
+
+    def _fresh_locked(self, stamp: float) -> bool:
+        """Is a sample taken at `stamp` still an answer? Call under the lock."""
+        if not math.isfinite(stamp):
+            return False            # nothing has ever been measured
+        if self.sample_timeout <= 0:
+            return True             # the check is switched off
+        return (time.monotonic() - stamp) <= self.sample_timeout
 
     def _consume(self, quat, gyro, calib) -> None:
         """Fold one BNO085 sample into the cached heading / yaw-rate / calibration."""
@@ -293,7 +384,115 @@ class IMU(HeadingSource):
             rate_cw = -gyro[2] * _RAD_TO_DEG
             yaw_rate = -rate_cw if self.invert else rate_cw
 
-        self._publish(heading, yaw_rate, calib)
+       now = time.monotonic()
+        with self._lock:
+            if calib is not None:
+                self._calib = int(calib)
+            if heading is not None:
+                self._heading = heading
+                self._heading_at = now
+                self._have_reading = True
+            if yaw_rate is not None:
+                self._yaw_rate = yaw_rate
+                self._rate_at = now
+            # Recovered. Announced because the handover was: an operator told
+            # the heading had gone needs telling when it came back, or the next
+            # thing they do is go and look for a fault that has fixed itself.
+            recovered = self._stale and (heading is not None or yaw_rate is not None)
+            if recovered:
+                self._stale = False
+        if recovered:
+            print(f"[IMU] reading again after {self._errors} read error(s); "
+                  f"the heading is back")
+
+    def _consume_uart_heading(self, heading_data) -> None:
+        """Fold one UART-RVC heading tuple into the cached absolute heading."""
+        heading = None
+        if isinstance(heading_data, (tuple, list)) and len(heading_data) >= 1:
+            try:
+                yaw = float(heading_data[0])
+            except (TypeError, ValueError):
+                yaw = None
+            if yaw is not None:
+                raw_heading = yaw % 360.0
+                head = -raw_heading if self.invert else raw_heading
+                heading = (head + self.heading_offset_deg) % 360.0
+
+        now = time.monotonic()
+        with self._lock:
+            self._calib = 3 if heading is not None else self._calib
+            if heading is not None:
+                self._heading = heading
+                self._heading_at = now
+                self._have_reading = True
+            self._yaw_rate = None
+            self._rate_at = now if heading is not None else self._rate_at
+
+    def _calibrated(self) -> bool:
+        """True once the fused-orientation calibration level meets min_calib.
+
+        The rotation-vector heading is only absolute once the magnetometer fusion
+        has converged; the BNO08x reports that as a single 0-3 accuracy level.
+        """
+        return self._calib >= self.min_calib
+
+    def heading(self) -> Optional[float]:
+        """Latest absolute heading in degrees (0 = North, CW+), or None.
+
+        Three ways this is None, and they are one rule: we only answer with a
+        heading we currently believe. Nothing has arrived yet; calibration is
+        below min_calib, so the number is not absolute; or the last sample is
+        older than `sample_timeout`, so it is not current. Each of them hands
+        heading back to the GPS course, which is the honest fallback — see the
+        note on DEFAULT_SAMPLE_TIMEOUT for why the last one has to exist.
+        """
+        with self._lock:
+            if not self._have_reading or not self._calibrated():
+                return None
+            if not self._fresh_locked(self._heading_at):
+                return None
+            return self._heading
+
+    def yaw_rate(self) -> Optional[float]:
+        """Latest yaw rate in deg/s (CW+), or None if there isn't a current one.
+
+        Used as the derivative-on-measurement term for the heading PID. Not
+        gated on min_calib (the gyro is good immediately), but gated on
+        freshness for a sharper reason than the heading is: a frozen rate is fed
+        to a D term as though it were happening, so the loop keeps damping a
+        rotation that stopped seconds ago.
+        """
+        with self._lock:
+            if not self._have_reading or not self._fresh_locked(self._rate_at):
+                return None
+            return self._yaw_rate
+
+    def calibration(self) -> int:
+        """Raw fused-orientation calibration accuracy level, 0-3.
+
+        Deliberately NOT gated on freshness — it is the raw diagnostic, and a
+        caller asking what the chip last said should get what the chip last
+        said. Anything reporting it to a human should pair it with `fresh()`,
+        because three calibration pips beside a heading that stopped updating is
+        a dashboard telling a comfortable lie. `Robot._telemetry` does.
+        """
+        with self._lock:
+            return self._calib
+
+    def fresh(self) -> bool:
+        """True when a sample has arrived recently enough to still be an answer.
+
+        Independent of calibration: this is "is the sensor talking to us", which
+        is a different question from "is what it says absolute yet".
+        """
+        with self._lock:
+            return self._fresh_locked(max(self._heading_at, self._rate_at))
+
+    def has_heading(self) -> bool:
+        """True once a valid, calibrated, CURRENT absolute heading is available."""
+        with self._lock:
+            return (self._have_reading and self._calibrated()
+                    and self._fresh_locked(self._heading_at))
 
     # --- Calibration persistence -------------------------------------------------
     # The BNO08x stores its calibration in on-chip flash, so unlike the BNO055 we
@@ -320,7 +519,14 @@ class IMU(HeadingSource):
             self._calib_saved = True
 
     def stop(self) -> None:
-        super().stop()          # clears _running and joins the reader thread
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            except Exception:
+                pass
         if self._i2c is not None:
             try:
                 self._i2c.deinit()

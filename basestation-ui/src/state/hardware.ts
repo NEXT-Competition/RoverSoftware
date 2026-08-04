@@ -18,6 +18,8 @@ import type {
   DrivetrainSpec,
   LayoutDoc,
   MechanismSpec,
+  SequenceStepSpec,
+  WaitSpec,
 } from "../net/types.ts";
 import { robotDocuments, send } from "../net/ws.ts";
 import { targetRobot } from "./settings.ts";
@@ -371,9 +373,15 @@ export function setActuatorField<K extends keyof ActuatorSpec>(
 
 // --- mechanisms --------------------------------------------------------------
 
-export function addMechanism(kind: "power" | "pulse"): void {
+const STEM: Record<string, string> = {
+  pulse: "launcher",
+  sequence: "launcher",
+  power: "intake",
+};
+
+export function addMechanism(kind: "power" | "pulse" | "sequence"): void {
   edit((doc) => {
-    const name = uniqueName(allNames(doc), kind === "pulse" ? "launcher" : "intake");
+    const name = uniqueName(allNames(doc), STEM[kind] ?? "intake");
     const mech: MechanismSpec = {
       name,
       kind,
@@ -382,6 +390,15 @@ export function addMechanism(kind: "power" | "pulse"): void {
     };
     if (kind === "power") {
       mech.presets = { on: {}, off: {} };
+    }
+    if (kind === "sequence") {
+      // One empty step rather than none: an empty queue is legal (the robot
+      // warns rather than refusing) but it gives the operator nothing to edit,
+      // and "add a mechanism, then find the second button" is a worse first
+      // five seconds than one row already on screen.
+      mech.steps = [{ name: "", values: {}, seconds: 0.5 }];
+      mech.step_timeout = 5;
+      mech.rest_angle = -30;
     }
     doc.mechanisms.push(mech);
   });
@@ -446,6 +463,90 @@ export function removePreset(mech: string, name: string): void {
   edit((doc) => {
     const owner = doc.mechanisms.find((m) => m.name === mech);
     if (owner?.presets) delete owner.presets[name];
+  });
+}
+
+// --- sequence steps ----------------------------------------------------------
+//
+// A step is edited in place by index rather than by name: steps are ORDERED and
+// may legitimately share a name (or have none), so the index is the only stable
+// identity while the operator is still moving them around.
+
+function steps(doc: LayoutDoc, mech: string): SequenceStepSpec[] | undefined {
+  const owner = doc.mechanisms.find((m) => m.name === mech);
+  if (!owner) return undefined;
+  owner.steps = owner.steps ?? [];
+  return owner.steps;
+}
+
+export function addStep(mech: string): void {
+  edit((doc) => {
+    steps(doc, mech)?.push({ name: "", values: {}, seconds: 0.5 });
+  });
+}
+
+export function removeStep(mech: string, index: number): void {
+  edit((doc) => {
+    const list = steps(doc, mech);
+    if (list) list.splice(index, 1);
+  });
+}
+
+/** Move a step one place up or down. The order IS the behaviour, so this is
+ *  the single most-used control on the card — spinning the flywheel after
+ *  feeding the ball is a different (and jammed) machine. */
+export function moveStep(mech: string, index: number, by: -1 | 1): void {
+  edit((doc) => {
+    const list = steps(doc, mech);
+    const to = index + by;
+    if (!list || to < 0 || to >= list.length) return;
+    const [step] = list.splice(index, 1);
+    list.splice(to, 0, step);
+  });
+}
+
+export function setStepField<K extends keyof SequenceStepSpec>(
+  mech: string,
+  index: number,
+  key: K,
+  value: SequenceStepSpec[K],
+): void {
+  edit((doc) => {
+    const step = steps(doc, mech)?.[index];
+    if (step) step[key] = value;
+  });
+}
+
+/** One actuator's value inside one step. Deleting on 0 rather than storing it
+ *  is what keeps "this step does not mention the belt" (leave it alone)
+ *  distinct from "this step sets the belt to 0" (stop it) — the two mean
+ *  opposite things, and only the second should survive a save. */
+export function setStepValue(
+  mech: string,
+  index: number,
+  actuator: string,
+  value: number | null,
+): void {
+  edit((doc) => {
+    const step = steps(doc, mech)?.[index];
+    if (!step) return;
+    if (value === null) delete step.values[actuator];
+    else step.values[actuator] = value;
+  });
+}
+
+export function setStepWait(mech: string, index: number, wait: WaitSpec | null): void {
+  edit((doc) => {
+    const step = steps(doc, mech)?.[index];
+    if (!step) return;
+    if (wait === null) {
+      delete step.wait_for;
+      delete step.timeout;
+      delete step.on_timeout;
+    } else {
+      step.wait_for = wait;
+      step.on_timeout = step.on_timeout ?? "abort";
+    }
   });
 }
 

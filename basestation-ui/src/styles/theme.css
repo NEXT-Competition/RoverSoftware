@@ -3271,6 +3271,55 @@ input[type="checkbox"]:disabled {
   margin-top: 10px;
 }
 
+/* --- sequence steps ---
+   Numbered and boxed rather than laid out like presets: the ORDER is the
+   behaviour here, so the step number and the move controls have to be the
+   things the eye lands on. */
+
+.sequence-editor {
+  margin-top: 12px;
+}
+
+.step-row {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-head .field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-index {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 20px;
+  text-align: center;
+  opacity: 0.7;
+}
+
+.step-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: 6px 0 10px;
+}
+
+.step-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .jog-row {
   display: flex;
   align-items: center;

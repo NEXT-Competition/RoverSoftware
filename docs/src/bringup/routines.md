@@ -101,12 +101,22 @@ be sure — it is the `0.3` on the wire out of `line_up` above.
 
 | Group | Actions |
 |---|---|
-| mechanism | set a mechanism to a preset · run one at a power · stop one · pulse one once · fire · arm / disarm the launcher |
+| mechanism | set a mechanism to a preset · run one at a power · stop one · pulse one once · **start a sequence** · fire · arm / disarm the launcher |
 | navigation | load a GPS route (from saved places) |
 | logic | count this · reset a counter |
 
 None of them drive. That is the state's `drive` source, which is what guarantees
 exactly one thing commands the motors at any moment.
+
+**Start a sequence** is worth a note, because it is how a routine drives a
+multi-stage mechanism without spelling the stages out as states. It kicks off
+the queue the [layout already
+describes](hardware.md#3a--sequence-a-mechanism-whose-parts-move-in-turn) —
+flywheel, then feeder, then belt — and returns at once, so the state carries on
+ticking. Asking again while it runs does nothing, which makes it safe in *every
+tick*. To wait for the end of one, transition on **when a mechanism is ready**:
+a sequence answers "not ready" for exactly as long as it is running, and the
+same is true if it aborts, so the wait ends either way rather than hanging.
 
 ## Running it
 

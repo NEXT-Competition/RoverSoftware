@@ -18,6 +18,7 @@ from .comms.xbee_link import XBeeLink
 from .comms import wifi
 from .control.controller import Controller
 from .control.manager import ControlManager
+from .control.ball_intake import BallIntakeController
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
 from .control.ballistics import Ballistics
@@ -71,8 +72,9 @@ EXIT_RESTART = 42
 
 
 def _pid(cfg: PIDConfig) -> PID:
-    return PID(kp=cfg.kp, ki=cfg.ki, kd=cfg.kd,
-               out_limit=cfg.out_limit, i_limit=cfg.i_limit)
+    return PID(
+        kp=cfg.kp, ki=cfg.ki, kd=cfg.kd, out_limit=cfg.out_limit, i_limit=cfg.i_limit
+    )
 
 
 def _retune(pid: PID, cfg: PIDConfig) -> None:
@@ -86,7 +88,9 @@ def _retune(pid: PID, cfg: PIDConfig) -> None:
 
 
 class Robot:
-    def __init__(self, config: RobotConfig, controllers: Optional[Dict[str, Controller]] = None):
+    def __init__(
+        self, config: RobotConfig, controllers: Optional[Dict[str, Controller]] = None
+    ):
         self.cfg = config
         # Whichever drivetrain this robot's layout describes. Tank on a stock
         # build; the command interface is identical either way, which is why
@@ -108,7 +112,8 @@ class Robot:
         # RS_SHOOTER_* vars and its own firing policy.
         self.mechanisms: Dict[str, Mechanism] = {
             name: build_mechanism(mech)
-            for name, mech in config.mechanisms.items() if mech.enabled
+            for name, mech in config.mechanisms.items()
+            if mech.enabled
         }
         # Everything that can be told to move or stop, including the launcher.
         # Built once and shared by reference, because the routine controller
@@ -117,13 +122,18 @@ class Robot:
         self._registry: Dict[str, Mechanism] = dict(self.mechanisms)
         if self.shooter is not None:
             self._registry["shooter"] = self.shooter
+        # Hand every mechanism the same registry, so a sequence step can wait on
+        # another mechanism being ready. By reference, for the reason above.
+        for mech in self.mechanisms.values():
+            mech.bind(self._registry)
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
         # Multi-frame replies (a config snapshot, a layout, a routine set) wait
         # here for the WiFi link. Each entry is (frame, radio_ok), where the flag
         # marks the one kind of frame still allowed onto the radio. See _queue.
         self._outbox: "collections.deque[Tuple[dict, bool]]" = collections.deque(
-            maxlen=OUTBOX_MAX)
+            maxlen=OUTBOX_MAX
+        )
 
         # Bounding box -> metres, so an aligning controller can be told to stop
         # a distance away rather than at a box height. ONE of them, shared: it
@@ -135,12 +145,14 @@ class Robot:
         # such frame is a free calibration pair that teaches the box-height
         # constant for that label (see control/rangefinder.py). The sonar
         # provider is wired below, once the sensor exists.
-        self.rangefinder = Rangefinder(config.vision.range_at_m,
-                                       config.vision.range_size,
-                                       hfov_deg=config.vision.hfov_deg,
-                                       min_samples=config.vision.range_samples,
-                                       learn=config.vision.auto_range,
-                                       prefer_sonar=config.vision.sonar_range)
+        self.rangefinder = Rangefinder(
+            config.vision.range_at_m,
+            config.vision.range_size,
+            hfov_deg=config.vision.hfov_deg,
+            min_samples=config.vision.range_samples,
+            learn=config.vision.auto_range,
+            prefer_sonar=config.vision.sonar_range,
+        )
 
         # Metres -> flywheel speed, the other half of the same idea: the
         # rangefinder says how far away the bucket is, this says how hard to
@@ -186,6 +198,25 @@ class Robot:
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
                 ),
+                # Ball collection. The intake mechanism is attached below,
+                # if the layout declares one - the controller drives and steers
+                # without it, it just cannot collect.
+                "ball_intake": BallIntakeController(
+                    target_label=config.ball_intake.target_label,
+                    intake_power=config.ball_intake.intake_power,
+                    collect_line=config.ball_intake.collect_line,
+                    chase_speed=config.ball_intake.chase_speed,
+                    collect_speed=config.ball_intake.collect_speed,
+                    push_speed=config.ball_intake.push_speed,
+                    pivot_threshold=config.ball_intake.pivot_threshold,
+                    collect_push_s=config.ball_intake.collect_push_s,
+                    intake_hold_s=config.ball_intake.intake_hold_s,
+                    search_spin_s=config.ball_intake.search_spin_s,
+                    search_advance_s=config.ball_intake.search_advance_s,
+                    search_spin_speed=config.ball_intake.search_spin_speed,
+                    search_advance_speed=config.ball_intake.search_advance_speed,
+                    pid=_pid(config.ball_intake.pid),
+                ),
                 "waypoint": WaypointController(
                     arrive_radius_m=config.nav.arrive_radius_m,
                     cruise_speed=config.nav.cruise_speed,
@@ -201,7 +232,8 @@ class Robot:
             # that would see nothing. It holds no routines until one is loaded,
             # and until then it simply holds the robot still.
             controllers["routine"] = RoutineController(
-                controllers, self._registry, config.routines)
+                controllers, self._registry, config.routines
+            )
         self.manager = ControlManager(controllers, config.start_mode)
 
         # Messages arrive on the XBee reader thread; process them on the main
@@ -217,9 +249,14 @@ class Robot:
         # tuning.BOOTSTRAP_PATHS and _retarget_ip_link. Inbound frames join the
         # SAME inbox, so _drain_inbox can't tell how one arrived.
         self.ip_link: Optional[IPLink] = (
-            IPLink(config.comms.base_host, config.comms.base_port,
-                   self._inbox.put, config.robot_id)
-            if config.comms.base_host else None
+            IPLink(
+                config.comms.base_host,
+                config.comms.base_port,
+                self._inbox.put,
+                config.robot_id,
+            )
+            if config.comms.base_host
+            else None
         )
         self._running = False
         # One WiFi request at a time (see _wifi_command). Plain bool rather than
@@ -232,21 +269,37 @@ class Robot:
         # cached lookup for the control loop. Disabled -> no position, and
         # waypoint mode holds position.
         self.gps: Optional[GPS] = (
-            GPS(config.gps.port, config.gps.baud,
-                config.gps.fix_timeout, config.gps.min_move_mps,
-                config.gps.update_rate_ms)
-            if config.gps.enabled else None
+            GPS(
+                config.gps.port,
+                config.gps.baud,
+                config.gps.fix_timeout,
+                config.gps.min_move_mps,
+                config.gps.update_rate_ms,
+            )
+            if config.gps.enabled
+            else None
         )
 
         # BNO085 IMU supplies an absolute, standstill-valid heading (which the
         # GPS track angle is not). Reads on its own thread; heading() is a cheap
-        # cached lookup. Disabled/uncalibrated/silent -> heading falls back to
-        # the track angle (see heading_source).
-        #
-        # Which transport it is read on — SHTP over I2C, or checksummed UART-RVC
-        # frames — is `imu.mode`, and nothing below this line can tell: both
-        # answer the same four questions (sensors/imu_common.py).
-        self.imu = build_imu(config.imu)
+
+        # cached lookup. Disabled/uncalibrated -> heading falls back to the track
+        # angle (see heading_source).
+        self.imu: Optional[IMU] = (
+            IMU(
+                config.imu.i2c_address,
+                config.imu.heading_offset_deg,
+                config.imu.invert,
+                config.imu.min_calib,
+                config.imu.persist_calibration,
+                sample_timeout=config.imu.sample_timeout,
+                transport=config.imu.transport,
+                serial_port=config.imu.serial_port,
+                serial_baud=config.imu.serial_baud,
+            )
+            if config.imu.enabled
+            else None
+        )
 
         # Ultrasonic rangefinder: how far away the thing straight ahead is.
         # Pings on its own thread; distance_m() is a cached lookup, so a ping
@@ -262,7 +315,8 @@ class Robot:
         # (see run()), so every mode gets it rather than each one re-deciding.
         self.collision = CollisionGuard(
             config.ultrasonic,
-            self.ultrasonic.distance_m if self.ultrasonic is not None else None)
+            self.ultrasonic.distance_m if self.ultrasonic is not None else None,
+        )
 
         # The second thing the ultrasonic is good for: telling the camera how
         # far away things actually are. `stamped_m` rather than `distance_m`
@@ -276,16 +330,21 @@ class Robot:
         # () -> (lat, lon, heading_deg)), so telemetry and the waypoint controller
         # get the best heading without knowing which sensor produced it.
         self.pose_estimator = PoseEstimator(self.gps, self.imu, config.heading_source)
-        self.pose_provider: Optional[Callable[[], Optional[Tuple[float, float, Optional[float]]]]] = (
-            self.pose_estimator.pose if (self.gps is not None) else None
-        )
+        self.pose_provider: Optional[
+            Callable[[], Optional[Tuple[float, float, Optional[float]]]]
+        ] = self.pose_estimator.pose if (self.gps is not None) else None
         self._last_telem = 0.0
 
         # One camera, shared by every frame consumer (the detector and the FPV
         # streamer) — a V4L2/CSI device can't be opened twice. Only spun up if
         # something actually wants frames; it reads on its own thread so the
         # 50 Hz loop never touches the device.
-        mock_det = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in ("1", "true", "yes", "on")
+        mock_det = os.environ.get("RS_MOCK_DETECTOR", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         # Constructing a Camera opens nothing — start() does, on its own thread —
         # so one is built whenever the robot has a camera configured, even if
         # nothing wants frames yet. That is what lets FPV be switched on from the
@@ -297,7 +356,10 @@ class Robot:
         # mock, which touches no hardware.
         self.vision_backend = (
             resolve_backend(config.vision, config.camera)
-            if (config.vision.enabled and not mock_det) else "mock" if mock_det else "off"
+            if (config.vision.enabled and not mock_det)
+            else "mock"
+            if mock_det
+            else "off"
         )
         self.camera: Optional[Camera] = (
             Camera(config.camera, config.vision) if config.camera.enabled else None
@@ -328,7 +390,8 @@ class Robot:
         # streamer that only existed when it was already running would make
         # `fpv.enabled` a restart-only setting for no reason but this line.
         self.fpv: Optional[FPVStreamer] = FPVStreamer(
-            config.fpv, self.camera, config.robot_id)
+            config.fpv, self.camera, config.robot_id
+        )
         overlays = getattr(self.detector, "overlays", None)
         if self.fpv is not None and overlays is not None:
             self.fpv.set_overlay_provider(overlays)
@@ -357,6 +420,29 @@ class Robot:
                 if isinstance(c, ObjectAlignController):
                     c.set_detection_provider(self.detector.detection)
                     c.set_rate_provider(self.pose_estimator.heading_rate)
+                elif isinstance(c, BallIntakeController):
+                    # Same perception, no rate provider: this loop steers on the
+                    # detection alone and has no heading to hold. It also needs
+                    # the vision config, so the detector filters to balls BEFORE
+                    # picking its one box per frame — see set_vision_config.
+                    c.set_detection_provider(self.detector.detection)
+                    if config.vision.enabled:
+                        c.set_vision_config(config.vision)
+
+        # And its actuator, if the layout declares one. A build with no intake
+        # still gets a controller that drives and steers - it simply collects
+        # nothing - rather than a mode that fails to construct.
+        for c in controllers.values():
+            if isinstance(c, BallIntakeController):
+                mech = self.mechanisms.get(config.ball_intake.mechanism)
+                if mech is not None:
+                    c.set_intake(mech)
+                elif config.ball_intake.mechanism:
+                    print(
+                        f"[ball_intake] no mechanism named "
+                        f"{config.ball_intake.mechanism!r} in the layout - "
+                        f"will chase balls but not collect them"
+                    )
 
         # How near an approach is allowed to get, whatever it was asked for: the
         # collision guard clamps the command these controllers return, so a
@@ -371,8 +457,8 @@ class Robot:
         # state (aligned, arrived, route_done) rather than re-deriving any of
         # it, so this is only what no controller owns: position and the latch.
         self.routine_controller: Optional[RoutineController] = next(
-            (c for c in controllers.values() if isinstance(c, RoutineController)),
-            None)
+            (c for c in controllers.values() if isinstance(c, RoutineController)), None
+        )
         if self.routine_controller is not None:
             if self.pose_provider is not None:
                 self.routine_controller.set_pose_provider(self.pose_provider)
@@ -382,8 +468,7 @@ class Robot:
             # `target_distance` condition. Only on a build that has one; without
             # it the condition simply never fires, and the document still loads.
             if self.ultrasonic is not None:
-                self.routine_controller.set_sonar_provider(
-                    self.ultrasonic.distance_m)
+                self.routine_controller.set_sonar_provider(self.ultrasonic.distance_m)
             # What a state aligns to. The config object, shared by reference
             # with the detector, so a state's target takes effect on the frame
             # after it is set and is put back when the state is left.
@@ -433,8 +518,9 @@ class Robot:
         """
         if self.detector is None or self.ultrasonic is None:
             return
-        self.rangefinder.observe(self.detector.detection(),
-                                 throttle=(cmd.left + cmd.right) / 2.0)
+        self.rangefinder.observe(
+            self.detector.detection(), throttle=(cmd.left + cmd.right) / 2.0
+        )
 
     def _all_mechanisms(self) -> Dict[str, Mechanism]:
         """Layout mechanisms plus the built-in launcher, keyed by name."""
@@ -498,6 +584,10 @@ class Robot:
             # named state, not an instruction to whatever is currently driving.
             elif mtype == "mech_preset":
                 self._mech_preset(msg)
+            # Working the shooter by hand is the same kind of thing, and for the
+            # same reason it does not go through the active controller.
+            elif mtype == "shooter_spin":
+                self._toggle_shooter(msg)
             # Restarting is the one command that ends this loop, so it is
             # handled here rather than by any controller.
             elif mtype == "restart":
@@ -581,8 +671,11 @@ class Robot:
         A `False` from send_bulk means the radio has no airtime this tick, not
         that the frame is gone, so it keeps its place in the queue.
         """
-        ip = self.ip_link if (self.ip_link is not None
-                              and self.ip_link.is_connected()) else None
+        ip = (
+            self.ip_link
+            if (self.ip_link is not None and self.ip_link.is_connected())
+            else None
+        )
         dropped = 0
         while self._outbox:
             msg, radio_ok = self._outbox[0]
@@ -599,9 +692,11 @@ class Robot:
             self._outbox.popleft()
             dropped += 1
         if dropped:
-            print(f"[Robot] dropped {dropped} bulk frame(s): no link to "
-                  f"{self.cfg.comms.base_host or '(no base_host set)'} "
-                  f"— config and documents do not go over the radio")
+            print(
+                f"[Robot] dropped {dropped} bulk frame(s): no link to "
+                f"{self.cfg.comms.base_host or '(no base_host set)'} "
+                f"— config and documents do not go over the radio"
+            )
 
     def _set_config(self, msg: dict) -> None:
         requested = msg.get("config") or {}
@@ -626,14 +721,19 @@ class Robot:
                 print(f"[Robot] config applied but NOT saved: {error}")
         restart = tuning.needs_restart(applied, tuning.by_path_for(self.cfg))
         if applied:
-            print(f"[Robot] config: {len(applied)} applied"
-                  + (f", {len(rejected)} rejected" if rejected else "")
-                  + (f", {len(restart)} need a restart" if restart else ""))
+            print(
+                f"[Robot] config: {len(applied)} applied"
+                + (f", {len(rejected)} rejected" if rejected else "")
+                + (f", {len(restart)} need a restart" if restart else "")
+            )
         for path, why in rejected.items():
             print(f"[Robot] config rejected {path}: {why}")
-        self._queue(self._config_frame(
-            applied, rejected=rejected, restart=restart, save_error=error),
-            radio_ok=bootstrap)
+        self._queue(
+            self._config_frame(
+                applied, rejected=rejected, restart=restart, save_error=error
+            ),
+            radio_ok=bootstrap,
+        )
 
     # --- WiFi ---------------------------------------------------------------
 
@@ -652,13 +752,17 @@ class Robot:
         still changing.
         """
         if self._wifi_busy:
-            self._queue(self._wifi_frame(
-                {"ok": False, "error": "still working on the last WiFi request"}),
-                radio_ok=True)
+            self._queue(
+                self._wifi_frame(
+                    {"ok": False, "error": "still working on the last WiFi request"}
+                ),
+                radio_ok=True,
+            )
             return
         self._wifi_busy = True
-        threading.Thread(target=self._wifi_task, args=(msg,),
-                         name="wifi", daemon=True).start()
+        threading.Thread(
+            target=self._wifi_task, args=(msg,), name="wifi", daemon=True
+        ).start()
 
     def _wifi_task(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -673,15 +777,22 @@ class Robot:
                 country_error = None
                 if msg.get("country"):
                     country_error = wifi.set_country(str(msg["country"]))
-                result = wifi.connect(str(msg.get("ssid") or ""),
-                                      str(msg.get("psk") or ""),
-                                      bool(msg.get("hidden")))
+                result = wifi.connect(
+                    str(msg.get("ssid") or ""),
+                    str(msg.get("psk") or ""),
+                    bool(msg.get("hidden")),
+                )
                 if country_error and result.get("ok"):
                     result["error"] = country_error
             elif mtype == "forget_wifi":
                 result = wifi.forget(str(msg.get("ssid") or ""))
-                result.update({k: v for k, v in wifi.status().items()
-                               if k in ("ssid", "ip", "signal")})
+                result.update(
+                    {
+                        k: v
+                        for k, v in wifi.status().items()
+                        if k in ("ssid", "ip", "signal")
+                    }
+                )
             else:
                 result = wifi.status()
         except Exception as e:  # nothing about a WiFi button may take a robot down
@@ -701,8 +812,11 @@ class Robot:
     def _wifi_frame(self, result: dict) -> dict:
         """The reply. Never carries a credential — only what a scanner standing
         next to the rover could see anyway."""
-        return {"type": "wifi", "from": self.cfg.robot_id,
-                **{k: v for k, v in result.items() if k != "psk"}}
+        return {
+            "type": "wifi",
+            "from": self.cfg.robot_id,
+            **{k: v for k, v in result.items() if k != "psk"},
+        }
 
     def _redial_ip_link(self) -> None:
         """Rebuild the bulk link on the same address after the network changed.
@@ -769,13 +883,15 @@ class Robot:
         something the browser already has.
         """
         fields = tuning.descriptors(self.cfg)
-        for frame in split({"fields": fields}, "fields", self.cfg.robot_id,
-                           txid=f"F{self._layout_rev}"):
+        for frame in split(
+            {"fields": fields}, "fields", self.cfg.robot_id, txid=f"F{self._layout_rev}"
+        ):
             self._queue(frame)
 
     def _send_doc(self, mtype: str, doc: dict, rev: int) -> None:
-        for frame in split(doc, mtype, self.cfg.robot_id,
-                           txid=f"{mtype[0].upper()}{rev}", rev=rev):
+        for frame in split(
+            doc, mtype, self.cfg.robot_id, txid=f"{mtype[0].upper()}{rev}", rev=rev
+        ):
             self._queue(frame)
 
     def _receive_doc(self, mtype: str, msg: dict) -> None:
@@ -795,11 +911,15 @@ class Robot:
         else:
             self._apply_routines(doc, bool(msg.get("save", True)))
 
-    def _result_frame(self, mtype: str, ok: bool, errors, warnings=(),
-                      **extra) -> dict:
-        return {"type": f"{mtype[4:]}_result", "from": self.cfg.robot_id,
-                "ok": ok, "errors": list(errors), "warnings": list(warnings),
-                **extra}
+    def _result_frame(self, mtype: str, ok: bool, errors, warnings=(), **extra) -> dict:
+        return {
+            "type": f"{mtype[4:]}_result",
+            "from": self.cfg.robot_id,
+            "ok": ok,
+            "errors": list(errors),
+            "warnings": list(warnings),
+            **extra,
+        }
 
     def _apply_layout(self, doc: dict, save: bool) -> None:
         """Validate a layout and store it. It does NOT take effect now.
@@ -810,8 +930,11 @@ class Robot:
         contract every `live=False` tuning field already has.
         """
         result = layout.validate(
-            doc, {self.cfg.shooter.channel: "the built-in shooter"}
-            if self.cfg.shooter.enabled else {})
+            doc,
+            {self.cfg.shooter.channel: "the built-in shooter"}
+            if self.cfg.shooter.enabled
+            else {},
+        )
         error = None
         if result.ok and save:
             error = layout.save(doc)
@@ -819,13 +942,23 @@ class Robot:
                 print(f"[Robot] layout valid but NOT saved: {error}")
         if result.ok:
             self._layout_rev += 1
-            print(f"[Robot] layout accepted (rev {self._layout_rev}); "
-                  "restart the service to apply it")
+            print(
+                f"[Robot] layout accepted (rev {self._layout_rev}); "
+                "restart the service to apply it"
+            )
         for message in result.errors:
             print(f"[Robot] layout rejected: {message}")
-        self._queue(self._result_frame(
-            "put_layout", result.ok, result.errors, result.warnings,
-            rev=self._layout_rev, save_error=error, restart_required=result.ok))
+        self._queue(
+            self._result_frame(
+                "put_layout",
+                result.ok,
+                result.errors,
+                result.warnings,
+                rev=self._layout_rev,
+                save_error=error,
+                restart_required=result.ok,
+            )
+        )
         if result.ok:
             # Echo the stored document back, the same reason _set_config echoes
             # the values it applied rather than the ones it was asked for: the
@@ -843,8 +976,9 @@ class Robot:
         all: the robot keeps running the last set that was good, which is the
         difference between a rejected edit and a rover that stops mid-field.
         """
-        result = routine_schema.parse(doc, self.cfg.routines,
-                                      tuple(self.manager.controllers))
+        result = routine_schema.parse(
+            doc, self.cfg.routines, tuple(self.manager.controllers)
+        )
         error = None
         if result.ok:
             self._routine_doc = doc
@@ -855,13 +989,22 @@ class Robot:
                 error = routine_store.save(doc)
                 if error:
                     print(f"[Robot] routines applied but NOT saved: {error}")
-            print(f"[Robot] routines accepted: {len(result.routines)} "
-                  f"(rev {self._routine_rev})")
+            print(
+                f"[Robot] routines accepted: {len(result.routines)} "
+                f"(rev {self._routine_rev})"
+            )
         for message in result.errors:
             print(f"[Robot] routines rejected: {message}")
-        self._queue(self._result_frame(
-            "put_routines", result.ok, result.errors, result.warnings,
-            rev=self._routine_rev, save_error=error))
+        self._queue(
+            self._result_frame(
+                "put_routines",
+                result.ok,
+                result.errors,
+                result.warnings,
+                rev=self._routine_rev,
+                save_error=error,
+            )
+        )
         if result.ok:
             self._send_doc("routines", doc, self._routine_rev)
 
@@ -869,14 +1012,17 @@ class Robot:
         doc = routine_store.load()
         if doc is None:
             return
-        result = routine_schema.parse(doc, self.cfg.routines,
-                                      tuple(self.manager.controllers))
+        result = routine_schema.parse(
+            doc, self.cfg.routines, tuple(self.manager.controllers)
+        )
         if result.ok:
             self._routine_doc = doc
             if self.routine_controller is not None:
                 self.routine_controller.set_routines(result.routines)
-            print(f"[Robot] routines: {len(result.routines)} loaded from "
-                  f"{routine_store.routines_path()}")
+            print(
+                f"[Robot] routines: {len(result.routines)} loaded from "
+                f"{routine_store.routines_path()}"
+            )
         else:
             for message in result.errors:
                 print(f"[Robot] routines REJECTED at boot: {message}")
@@ -901,8 +1047,9 @@ class Robot:
             print("[Robot] jog refused: e-stop is latched")
             return
         if self.manager.mode != "teleop":
-            print(f"[Robot] jog refused: only in teleop (mode is "
-                  f"{self.manager.mode!r})")
+            print(
+                f"[Robot] jog refused: only in teleop (mode is {self.manager.mode!r})"
+            )
             return
 
         mech = self._registry.get(name)
@@ -947,8 +1094,10 @@ class Robot:
             print("[Robot] preset refused: e-stop is latched")
             return
         if self.manager.mode == "routine":
-            print(f"[Robot] preset refused: a routine is running and owns the "
-                  f"mechanisms (switch to teleop to take {name!r} back)")
+            print(
+                f"[Robot] preset refused: a routine is running and owns the "
+                f"mechanisms (switch to teleop to take {name!r} back)"
+            )
             return
 
         mech = self._registry.get(name)
@@ -971,6 +1120,57 @@ class Robot:
         if self._jog_mech == name:
             self._jog_mech = ""
         print(f"[Robot] {name} -> {preset}")
+
+    def _toggle_shooter(self, msg: dict) -> None:
+        """Spin the flywheel up or down, or pulse a servo launcher.
+
+        Which one happens is decided by `shooter.target_rpm`: above zero this is
+        a flywheel and the command toggles it between that speed and stopped;
+        at zero it is a servo launcher and this fires one shot. That keeps a
+        single gamepad button meaning "work the shooter" on either build.
+
+        Distinct from the `fire` message on purpose. That one belongs to
+        ShooterAlignController and carries its whole safety policy — arming,
+        dwell, alignment, magazine. This is the manual teleop equivalent and
+        claims none of that, so it is gated the way `mech_preset` is: refused
+        under a latched e-stop, and refused in `routine` mode, where a routine
+        owns the mechanisms and a press would either be undone a tick later or
+        fight a state machine for the channel. Firing rules for autonomous shots
+        are unchanged and still live in that controller.
+
+        Idempotent when told explicitly (`{"on": true}`) so a repeated frame
+        cannot invert the wheel; a bare message toggles from the state the robot
+        is actually in, which is what the base station sends — it keeps no
+        shadow copy of mechanism state, and one would go stale the first time an
+        e-stop stopped the wheel from underneath it.
+        """
+        shooter = self.shooter
+        if shooter is None:
+            print(
+                "[Robot] shooter_spin refused: no shooter on this robot "
+                "(RS_SHOOTER_ENABLED=0)"
+            )
+            return
+        if self.manager.estop:
+            print("[Robot] shooter_spin refused: e-stop is latched")
+            return
+        if self.manager.mode == "routine":
+            print(
+                "[Robot] shooter_spin refused: a routine is running and owns "
+                "the mechanisms (switch to teleop to take the shooter back)"
+            )
+            return
+
+        if float(getattr(self.cfg.shooter, "target_rpm", 0.0)) <= 0.0:
+            shooter.fire()  # servo launcher: one shot, it owns its own cycle
+            return
+
+        want = bool(msg["on"]) if "on" in msg else not shooter.spinning
+        shooter.spin(want)
+        print(
+            f"[Robot] shooter flywheel -> "
+            f"{f'{self.cfg.shooter.target_rpm:.0f} rpm' if want else 'stop'}"
+        )
 
     def _request_restart(self) -> None:
         """Come back on a fresh process, asked for from the base station.
@@ -995,8 +1195,10 @@ class Robot:
         that exists on a Pi whether or not this process is a service.
         """
         if not os.environ.get("INVOCATION_ID"):
-            print("[Robot] restart refused: not running under systemd, so "
-                  "nothing would start me again (try `just restart`)")
+            print(
+                "[Robot] restart refused: not running under systemd, so "
+                "nothing would start me again (try `just restart`)"
+            )
             return
         print("[Robot] restart requested; stopping cleanly")
         self._restarting = True
@@ -1027,8 +1229,9 @@ class Robot:
         # The hand-set pair, plus the lens it is a claim about. Learned fits are
         # NOT dropped by this: they are measurements, and the pair is only the
         # fallback for labels that have none.
-        self.rangefinder.calibrate(cfg.vision.range_at_m, cfg.vision.range_size,
-                                   hfov_deg=cfg.vision.hfov_deg)
+        self.rangefinder.calibrate(
+            cfg.vision.range_at_m, cfg.vision.range_size, hfov_deg=cfg.vision.hfov_deg
+        )
         self.rangefinder.learn = cfg.vision.auto_range
         self.rangefinder.prefer_sonar = cfg.vision.sonar_range
         self.rangefinder.min_samples = cfg.vision.range_samples
@@ -1097,12 +1300,10 @@ class Robot:
             self.imu.invert = cfg.imu.invert
             self.imu.min_calib = cfg.imu.min_calib
             self.imu.sample_timeout = cfg.imu.sample_timeout
-            # I2C only. UART-RVC has no channel back to the chip, so there is
-            # nothing for this to mean there — and quietly creating the
-            # attribute anyway would leave a setting that reads back as applied
-            # while doing nothing at all.
-            if hasattr(self.imu, "persist_calibration"):
-                self.imu.persist_calibration = cfg.imu.persist_calibration
+
+            self.imu.transport = cfg.imu.transport
+            self.imu.serial_port = cfg.imu.serial_port
+            self.imu.serial_baud = cfg.imu.serial_baud
         if self.gps is not None:
             self.gps.fix_timeout = cfg.gps.fix_timeout
             self.gps.min_move_mps = cfg.gps.min_move_mps
@@ -1175,8 +1376,11 @@ class Robot:
                 # "0.80 m" divided out of a constant somebody typed are
                 # different claims, and an operator deciding whether to believe
                 # one needs to know which they are looking at.
-                t["vision"].update(self.rangefinder.status(
-                    detection.label if detection is not None else ""))
+                t["vision"].update(
+                    self.rangefinder.status(
+                        detection.label if detection is not None else ""
+                    )
+                )
         # Distance to whatever is straight ahead, and what the collision guard
         # is doing about it. Only on a build that has an ultrasonic, and tiny —
         # a rounded distance and one short state word. `state` is the half that
@@ -1226,7 +1430,16 @@ class Robot:
     def start(self) -> None:
         print("[Robot] arming ESCs (holding neutral)...")
         self.drive.arm()
-        print(f"[Robot] opening XBee link on {self.cfg.comms.port} @ {self.cfg.comms.baud}...")
+        # After the drivetrain, which is what actually holds the ESCs at neutral
+        # for arm_seconds: a mechanism's encoders want claiming against the same
+        # known standstill, and none of them can be turning before this point.
+        # Layout mechanisms only — the built-in launcher is not one of these
+        # objects (it keeps its own ShooterConfig) and has no GPIO to claim.
+        for mech in self.mechanisms.values():
+            mech.start()
+        print(
+            f"[Robot] opening XBee link on {self.cfg.comms.port} @ {self.cfg.comms.baud}..."
+        )
         self.link.start()
         # Opportunistic, and started after the radio on purpose: the radio is the
         # link the robot cannot run without, this one only makes bulk transfers
@@ -1268,7 +1481,9 @@ class Robot:
         signal.signal(signal.SIGTERM, self._on_signal)
 
         last = time.monotonic()
-        print(f"[Robot] running at {self.cfg.loop_hz:.0f} Hz, start mode '{self.manager.mode}'")
+        print(
+            f"[Robot] running at {self.cfg.loop_hz:.0f} Hz, start mode '{self.manager.mode}'"
+        )
         try:
             while self._running:
                 # Read every tick, not once: loop_hz is tunable from the base
@@ -1305,7 +1520,10 @@ class Robot:
                 self._learn_range(cmd)
                 t3 = time.monotonic()
 
-                if self.cfg.telemetry_hz > 0 and (now - self._last_telem) >= 1.0 / self.cfg.telemetry_hz:
+                if (
+                    self.cfg.telemetry_hz > 0
+                    and (now - self._last_telem) >= 1.0 / self.cfg.telemetry_hz
+                ):
                     self._last_telem = now
                     self.link.send(self._telemetry(cmd))
                 self._drain_outbox()
@@ -1316,9 +1534,11 @@ class Robot:
                 # up in the journal instead of being silent.
                 work = t4 - now
                 if work > SLOW_TICK_S:
-                    print(f"[Robot] slow tick {work*1e3:.0f}ms "
-                          f"(inbox={(t1-now)*1e3:.0f} update={(t2-t1)*1e3:.0f} "
-                          f"drive={(t3-t2)*1e3:.0f} send={(t4-t3)*1e3:.0f})")
+                    print(
+                        f"[Robot] slow tick {work * 1e3:.0f}ms "
+                        f"(inbox={(t1 - now) * 1e3:.0f} update={(t2 - t1) * 1e3:.0f} "
+                        f"drive={(t3 - t2) * 1e3:.0f} send={(t4 - t3) * 1e3:.0f})"
+                    )
 
                 sleep_for = period - (time.monotonic() - now)
                 if sleep_for > 0:
@@ -1344,6 +1564,11 @@ class Robot:
         # cocked, and leaving an intake powered is worse.
         for mech in self._all_mechanisms().values():
             mech.stop()
+        # Then their encoder pins, after the motors are at rest and after
+        # drive.shutdown() above — which owns closing the shared GPIO backend,
+        # so this only hands back what each mechanism claimed.
+        for mech in self.mechanisms.values():
+            mech.shutdown()
         # Stop the frame consumers, then the camera they read from. The detector
         # owns a subprocess, so stopping it early also halts inference promptly.
         if self.fpv is not None:

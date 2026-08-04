@@ -106,7 +106,10 @@ class XBeeLink:
 
     def _dump_stats(self):
         while self._running:
-            print(str(self._stats))
+            # flush=True because stdout is block-buffered when it is a journal
+            # rather than a tty: without it these lines surface in ~45s batches
+            # and a live link reads as a dead one.
+            print(str(self._stats), flush=True)
             time.sleep(1)
 
     def _read_loop(self) -> None:
@@ -114,41 +117,53 @@ class XBeeLink:
         st = self._stats
         last_line = None
         while self._running:
-            t0 = time.perf_counter_ns()
+            # Nothing a single frame can do may kill this thread. It is the only
+            # path by which a drive command or an e-stop reaches the robot, and
+            # the process survives its death: telemetry keeps streaming from the
+            # control-loop thread, so the base station still shows the rover
+            # healthy while it has in fact stopped listening to anyone. That
+            # failure is silent, unrecoverable without a restart, and it takes
+            # the e-stop with it. One corrupt byte off the radio is not allowed
+            # to cost that, so the whole body is guarded.
             try:
-                chunk = self._serial.readline()
+                t0 = time.perf_counter_ns()
+                try:
+                    chunk = self._serial.readline()
+                except Exception as e:
+                    print(f"[XBeeLink] read error: {e}")
+                    continue
+                t1 = time.perf_counter_ns()
+                st.wait.append(t1 - t0)
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                if not chunk.endswith(b"\n"):
+                    st.partials += 1
+                    continue
+                line = bytes(buf)
+                buf.clear()
+
+                t2 = time.perf_counter_ns()
+                msg = protocol.decode(line)
+                t3 = time.perf_counter_ns()
+                st.decode.append(t3 - t2)
+                if msg is None:
+                    st.drops += 1
+                    continue
+
+                try:
+                    self.on_message(msg)
+                except Exception as e:
+                    print(f"[XBeeLink] handler error: {e}")
+                st.handler.append(time.perf_counter_ns() - t3)
+
+                if last_line is not None:
+                    st.gap.append(t3 - last_line)
+                last_line = t3
             except Exception as e:
-                print(f"[XBeeLink] read error: {e}")
-                continue
-            t1 = time.perf_counter_ns()
-            st.wait.append(t1 - t0)
-            if not chunk:
-                continue
-            buf.extend(chunk)
-            if not chunk.endswith(b"\n"):
-                st.partials += 1
-                continue
-            line = bytes(buf)
-            buf.clear()
-
-            t2 = time.perf_counter_ns()
-            msg = protocol.decode(line)
-            print(msg)
-            t3 = time.perf_counter_ns()
-            st.decode.append(t3 - t2)
-            if msg is None:
-                st.drops += 1
-                continue
-
-            try:
-                self.on_message(msg)
-            except Exception as e:
-                print(f"[XBeeLink] handler error: {e}")
-            st.handler.append(time.perf_counter_ns() - t3)
-
-            if last_line is not None:
-                st.gap.append(t3 - last_line)
-            last_line = t3
+                # Never re-raise: see above. Drop the partial frame and carry on.
+                print(f"[XBeeLink] rx loop error: {e!r}", flush=True)
+                buf.clear()
 
     def send(self, message: dict) -> bool:
         """Put a realtime frame on the radio now. True if it went out.

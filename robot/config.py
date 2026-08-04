@@ -23,7 +23,7 @@ the endpoints/clamps; whichever is closer to neutral sets the usable throw.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -361,6 +361,13 @@ class IMUConfig:
     # heading than on a GPS course), so flapping on every bus hiccup would be
     # its own bug. See sensors/bno085.py::DEFAULT_SAMPLE_TIMEOUT.
     sample_timeout: float = 2.0
+    # Which IMU transport to use. The default I2C implementation matches the
+    # existing BNO085 driver; `uart_rvc` targets the UART-RVC parser used by the
+    # BNO08x sensor in RVC mode.
+    transport: str = "i2c"
+    # UART-RVC settings when transport is "uart_rvc".
+    serial_port: str = "/dev/serial0"
+    serial_baud: int = 115200
     # Run the sensor's dynamic calibration and save it to the BNO08x's own flash
     # once it converges, so the board boots calibrated. The chip persists this
     # itself — there is no offsets file to manage (the BNO055 needed one because it
@@ -631,6 +638,20 @@ class ShooterConfig:
     fire_seconds: float = 0.35
     retract_seconds: float = 0.35  # settle at rest before another shot may start
 
+    # --- flywheel launcher (closed-loop RPM path in drive/shooter.py) ---
+    # 0 = this is a servo launcher: {"type":"shooter_spin"} does a pulse shot and
+    # the RPM controller never runs. Above 0 = this is a flywheel: the same
+    # command toggles the wheel between this speed and stopped, and the pulse
+    # state machine is not used.
+    #
+    # On a build with no tachometer the loop is fed a MODELLED rpm (see
+    # Shooter._estimated_rpm) rather than a measured one, so it behaves as
+    # feed-forward: it holds the commanded speed, but it cannot see or correct
+    # for battery sag, ball drag or a stalling wheel. Wire an encoder to
+    # set_measured_rpm() and it becomes genuinely closed-loop with no other
+    # change.
+    target_rpm: float = 0.0
+
     # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
     # Hold the alignment this long before firing. This is the single most
     # important safety/accuracy knob: the detector is noisy and a single centered
@@ -686,11 +707,70 @@ class BallisticsConfig:
 
 
 @dataclass
+class SequenceStep:
+    """One leg of a `sequence` mechanism: what to move, and when to move on.
+
+    --- what `values` means ---
+    Actuator name -> what that actuator should be doing for this step, read in
+    the units of the actuator's own `kind`:
+
+        esc    throttle, -1..1        (ESCMotor.set_throttle)
+        servo  degrees, -90..90       (ESCMotor.set_angle)
+
+    Two units in one map is a real cost, and it buys the thing this whole
+    mechanism exists for: a step reads "put the feeder arm at 40 degrees" and
+    "hold the flywheel at 0.9", which is how the build is actually described by
+    the people who wired it. The alternative — throttle everywhere, as
+    PowerMechanism does — means expressing a feeder's travel as a fraction of a
+    symmetric throw about neutral, and getting a number nobody can check against
+    the arm in front of them.
+
+    AN UNNAMED ACTUATOR IS LEFT EXACTLY AS IT WAS. This is the single most
+    important difference from `presets`, which zero what they do not mention.
+    A preset describes the whole mechanism at one instant; a step describes a
+    CHANGE, and the flywheel spun up in step 1 has to still be spinning while
+    step 2 runs the feeder into it. `clear: true` opts a step back into
+    preset behaviour when what you want really is "everything else off".
+
+    --- when the step ends ---
+    `seconds` is a MINIMUM DWELL, not a duration: the step ends once both the
+    dwell has elapsed and `wait_for` is satisfied. Either half may be left out.
+    Both together is the common shooter shape — "give the ESC 0.2 s to even
+    react, then wait until the wheel is actually at speed".
+
+    `wait_for` is the "and other factor" half, one of:
+
+        {}                                                  no gate; time only
+        {"kind": "rpm", "actuator": "fly", "at_least": 3000, "at_most": 0}
+        {"kind": "mech_ready", "mech": "launcher"}
+
+    `timeout` bounds the gate, because a gate that cannot be satisfied is a
+    mechanism that never returns to rest. 0 means "use the mechanism's
+    step_timeout". Reaching it runs `on_timeout`:
+
+        abort    (default) stop the whole sequence and park at rest
+        advance  carry on to the next step anyway
+
+    `abort` is the default because the reason a shooter gates on RPM is that
+    feeding a ball into a flywheel that never reached speed jams the mechanism.
+    Advancing on timeout does the exact thing the gate was written to prevent.
+    """
+
+    name: str = ""            # what the dashboard calls this leg; "" => "step N"
+    values: Dict[str, float] = field(default_factory=dict)
+    seconds: float = 0.0      # minimum dwell before the step may end
+    wait_for: Dict[str, Any] = field(default_factory=dict)
+    timeout: float = 0.0      # 0 => inherit the mechanism's step_timeout
+    on_timeout: str = "abort"  # abort | advance
+    clear: bool = False       # zero the actuators this step does not name
+
+
+@dataclass
 class MechanismConfig:
     """One named non-drivetrain subsystem: an intake, an arm, a second launcher.
 
-    This is `ShooterConfig` generalized. Two shapes cover what a build actually
-    needs:
+    This is `ShooterConfig` generalized. Three shapes cover what a build
+    actually needs:
 
       power - hold a value. An intake spins at +1 to take a ball in, -1 to spit
               it out, 0 to stop. Several actuators move together, which is why
@@ -699,6 +779,11 @@ class MechanismConfig:
               return to `rest_angle`, settle for `recover_seconds`. Exactly the
               launcher's rest -> firing -> retracting machine (drive/shooter.py),
               and non-blocking for exactly the same reason.
+   sequence - an ordered queue of `steps`, one at a time: the servo, then one
+              motor, then another. The kind for a launcher whose actuators
+              CANNOT all move at once, which neither of the above can express —
+              `power` writes them together and `pulse` swings them together.
+              See SequenceStep above.
 
     The built-in launcher is deliberately NOT expressed here — it keeps its own
     `ShooterConfig` so the RS_SHOOTER_* env vars, the `shooter.*` tuning paths
@@ -709,7 +794,7 @@ class MechanismConfig:
 
     name: str = ""
     label: str = ""  # what the dashboard calls it; "" => derived from `name`
-    kind: str = "power"  # power | pulse
+    kind: str = "power"  # power | pulse | sequence
     enabled: bool = True
     actuators: Dict[str, MotorConfig] = field(default_factory=dict)
 
@@ -728,6 +813,23 @@ class MechanismConfig:
     recover_seconds: float = 0.35
     cooldown: float = 0.0  # minimum seconds between activations
     max_activations: int = 0  # magazine capacity; 0 = unlimited
+
+    # --- sequence ---
+    # An ordered queue of legs, run one at a time off the control tick. Shares
+    # `rest_angle`, `cooldown` and `max_activations` with `pulse`, which is not
+    # a coincidence: a sequence IS a pulse with more than one leg and a gate on
+    # each, and a build that outgrows `pulse` should not have to relearn the
+    # fields it already set.
+    steps: List[SequenceStep] = field(default_factory=list)
+    # A ceiling on any step that does not set its own `timeout`. A sequence is
+    # the one mechanism that can wait on something other than a clock, so it is
+    # also the one that can wait forever; this is the backstop that means it
+    # cannot. Never 0 in a validated layout.
+    step_timeout: float = 5.0
+    # Run the queue again from the top when it finishes, until `stop()`. For a
+    # feeder that should keep cycling while a routine holds a state, rather than
+    # one shot per activation.
+    loop: bool = False
 
 
 @dataclass
@@ -762,6 +864,39 @@ class AlignConfig:
     # Tuned for ~100-200 ms of perception dead time, which is what actually
     # limits stability here. Anything hotter oscillates: the robot steers on an
     # error it measured two frames ago. Start low, not high.
+    pid: PIDConfig = field(
+        default_factory=lambda: PIDConfig(kp=0.5, ki=0.0, kd=0.05, out_limit=0.8)
+    )
+
+
+@dataclass
+class BallIntakeConfig:
+    # Behaviour of the ball_intake autonomy mode (robot/control/ball_intake.py).
+    # Distinct from AlignConfig because the policy is the opposite: object_align
+    # stops SHORT at a standoff, this drives THROUGH the ball with the intake
+    # running. Sharing one config would mean one forward_speed for "creep up to
+    # a bucket" and "drive over a ball", which are not the same number.
+    mechanism: str = "intake"  # which layout mechanism to run; "" = none wired
+    target_label: str = "ball"  # detections with any other label are ignored
+    intake_power: float = 1.0  # +1 takes in, -1 spits (see PowerMechanism)
+    # error_y is normalized: 0 = frame centre, +1 = bottom edge. At or below
+    # this the ball is at the intake mouth.
+    collect_line: float = 0.4
+    chase_speed: float = 0.5  # throttle when the ball is far up the frame
+    collect_speed: float = 0.3  # creep once at the mouth
+    push_speed: float = 0.3  # blind, after the ball drops out of frame
+    pivot_threshold: float = 0.35  # |error_x| above this => turn in place
+    # Open-loop, because nothing on this robot can see under the intake. The
+    # intake timer is the longer of the two: a ball in the throat is still
+    # being collected after the robot has stopped moving. Stopwatch values.
+    collect_push_s: float = 1.0  # keep DRIVING this long after losing sight
+    intake_hold_s: float = 3.0  # keep the INTAKE turning this long
+    # Sweep in place, then step forward, and repeat. Spinning alone only ever
+    # searches one circle of the field.
+    search_spin_s: float = 5.0
+    search_advance_s: float = 1.0
+    search_spin_speed: float = 0.25
+    search_advance_speed: float = 0.3
     pid: PIDConfig = field(
         default_factory=lambda: PIDConfig(kp=0.5, ki=0.0, kd=0.05, out_limit=0.8)
     )
@@ -828,6 +963,7 @@ class RobotConfig:
     # see BallisticsConfig.
     ballistics: BallisticsConfig = field(default_factory=BallisticsConfig)
     align: AlignConfig = field(default_factory=AlignConfig)
+    ball_intake: BallIntakeConfig = field(default_factory=BallIntakeConfig)
     nav: NavConfig = field(default_factory=NavConfig)
     # Extra subsystems declared by the layout (intake, arm, a second launcher).
     # Empty on a stock build, which is why nothing above changes shape.
@@ -842,7 +978,8 @@ class RobotConfig:
     # step is 0.08 and motion is continuous. docs/ARCHITECTURE.md has always
     # specified 50 Hz.
     loop_hz: float = 50.0
-    start_mode: str = "teleop"  # teleop | object_align | waypoint | shooter_align
+    start_mode: str = "teleop"  # teleop | object_align | waypoint |
+    #                             shooter_align | ball_intake
     # Which sensor answers "which way am I facing" (see sensors/pose.py):
     #   auto - IMU when calibrated, else the GPS track angle (recommended)
     #   gps  - the GPS track angle only; no IMU needed for heading

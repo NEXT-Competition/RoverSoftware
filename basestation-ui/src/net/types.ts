@@ -49,12 +49,24 @@ export interface ShooterStatus {
 /** One layout mechanism's live state (robot/drive/mechanism.py::status).
  *  Absent on a build whose layout declares no mechanisms. */
 export interface MechStatus {
-  kind: "power" | "pulse" | (string & {});
+  kind: "power" | "pulse" | "sequence" | (string & {});
   values?: Record<string, number>; // power: actuator -> throttle
-  state?: string; // pulse: rest | active | recovering
-  count?: number; // pulse: activations so far
+  state?: string; // pulse: rest | active | recovering. sequence: rest | running
+  count?: number; // pulse/sequence: activations so far
   ready?: boolean;
   cool?: number;
+  /** sequence: which leg is running, 1-based, and how many there are. Absent
+   *  while the mechanism is at rest — there is no current step then. */
+  step?: number;
+  step_name?: string;
+  steps?: number;
+  /** sequence: why the last run ended early, absent if it didn't. A sequence
+   *  that aborted and one that finished both leave the mechanism at rest, so
+   *  this is the only thing that tells them apart on the dashboard. */
+  aborted?: string;
+  /** Measured speed of any actuator on this mechanism that has an encoder,
+   *  keyed by actuator name. Absent on a build that measures nothing. */
+  rpm?: Record<string, number>;
 }
 
 /** Measured wheel speed, and what the speed-matching loop did about it
@@ -257,20 +269,58 @@ export interface DrivetrainSpec {
   min_pivot_throttle?: number;
 }
 
+/** What a sequence step waits for beyond its own clock — the "and other
+ *  factor" half of a leg (robot/config.py::SequenceStep).
+ *
+ *  `rpm` reads the encoder on one of this mechanism's own actuators, which is
+ *  how "spin the flywheel up and only THEN feed" is expressed without guessing
+ *  at how long a spin-up takes on a half-flat battery. `mech_ready` waits for
+ *  another mechanism to be idle. */
+export interface WaitSpec {
+  kind: "rpm" | "mech_ready" | (string & {});
+  actuator?: string; // rpm: whose speed to read
+  at_least?: number; // rpm: floor, in RPM
+  at_most?: number; // rpm: ceiling, in RPM
+  mech?: string; // mech_ready: which mechanism
+}
+
+/** One leg of a sequence mechanism.
+ *
+ *  `values` is actuator -> what it should be doing, in the units of that
+ *  actuator's OWN kind: degrees for a servo, throttle for an ESC. An actuator
+ *  this step does not name is left exactly as it was, which is what lets the
+ *  flywheel started in step 1 keep spinning through step 2. `clear` opts back
+ *  into preset behaviour and zeroes the rest.
+ *
+ *  `seconds` is a MINIMUM dwell, not a duration: the step ends once the dwell
+ *  has passed AND `wait_for` is satisfied. */
+export interface SequenceStepSpec {
+  name?: string;
+  values: Record<string, number>;
+  seconds?: number;
+  wait_for?: WaitSpec;
+  timeout?: number; // 0/absent = the mechanism's step_timeout
+  on_timeout?: "abort" | "advance";
+  clear?: boolean;
+}
+
 export interface MechanismSpec {
   name: string;
   label?: string;
-  kind: "power" | "pulse";
+  kind: "power" | "pulse" | "sequence";
   enabled?: boolean;
   actuators: ActuatorSpec[];
   presets?: Record<string, Record<string, number>>; // power
   auto_stop_seconds?: number; // power
-  rest_angle?: number; // pulse
-  active_angle?: number;
+  rest_angle?: number; // pulse + sequence
+  active_angle?: number; // pulse
   active_seconds?: number;
   recover_seconds?: number;
-  cooldown?: number;
-  max_activations?: number;
+  cooldown?: number; // pulse + sequence
+  max_activations?: number; // pulse + sequence
+  steps?: SequenceStepSpec[]; // sequence
+  step_timeout?: number; // sequence: ceiling on a step with no timeout of its own
+  loop?: boolean; // sequence: run the queue again instead of finishing
 }
 
 export interface LayoutDoc {

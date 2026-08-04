@@ -293,6 +293,12 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("shooter.fire_angle", -90, 90),
     _f("shooter.fire_seconds", 0.05, 5),
     _f("shooter.retract_seconds", 0.05, 5),
+    # live=False: this decides WHICH launcher this build is (0 = servo pulse,
+    # above 0 = flywheel), and `Shooter._idle_angle` reads it to pick the angle
+    # it parks at — which for a flywheel is the neutral pulse that arms its ESC.
+    # Changing that under a constructed shooter would leave the wheel parked at
+    # a value for the shape it no longer is.
+    _f("shooter.target_rpm", 0, 20000, live=False),
     _f("shooter.dwell", 0, 10),
     _f("shooter.cooldown", 0, 60),
     _i("shooter.max_shots", 0, 999),
@@ -335,6 +341,9 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # for when a rover on a noisy bus is flapping between heading sources, which
     # is a thing you diagnose while it is happening. 0 disables the check.
     _f("imu.sample_timeout", 0, 30),
+    _e("imu.transport", ("i2c", "uart_rvc"), live=False),
+    _t("imu.serial_port", live=False),
+    _i("imu.serial_baud", 1200, 921600, live=False),
     _b("imu.persist_calibration"),
     _b("imu.enabled", live=False),
     # How the chip is read. live=False and more so than most: this is not really

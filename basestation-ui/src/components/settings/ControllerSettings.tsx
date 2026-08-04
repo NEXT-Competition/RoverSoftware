@@ -53,17 +53,41 @@ function derive(axes: number[]) {
   const span = 1 - rest;
   const trigger = (raw: number) =>
     span <= 0 ? 0 : Math.max(0, Math.min(1, (raw - rest) / span));
-  const deadzone = (v: number) => (Math.abs(v) < dz ? 0 : v);
+  // Rescales [dz, 1] onto [0, 1] rather than passing the value through, and
+  // expo bends the travel without moving the endpoints. Both mirror
+  // basestation/controller_input.py::_dz and ::_expo — this preview is only
+  // useful while it agrees with the server, so the two move together.
+  const deadzone = (v: number) =>
+    Math.abs(v) < dz || dz >= 1 ? 0 : (v > 0 ? v - dz : v + dz) / (1 - dz);
+  const expo = (v: number, e: number) =>
+    e <= 0 ? v : (1 - e) * v + e * v * v * v;
   const clamp1 = (v: number) => (v < -1 ? -1 : v > 1 ? 1 : v);
 
-  const r2 = trigger(axes[num("controller.axis_r2", 5)] ?? rest);
-  const l2 = trigger(axes[num("controller.axis_l2", 4)] ?? rest);
   const steerRaw = axes[num("controller.axis_steer", 2)] ?? 0;
   const invert = fieldValue("controller.invert_steer") === true;
+
+  // A bound throttle axis takes the drivetrain off the triggers entirely, same
+  // branch the server takes.
+  const throttleAxis = num("controller.axis_throttle", -1);
+  let throttleRaw: number;
+  if (throttleAxis >= 0) {
+    throttleRaw = axes[throttleAxis] ?? 0;
+    if (fieldValue("controller.invert_throttle") !== false) throttleRaw = -throttleRaw;
+  } else {
+    const r2 = trigger(axes[num("controller.axis_r2", 5)] ?? rest);
+    const l2 = trigger(axes[num("controller.axis_l2", 4)] ?? rest);
+    throttleRaw = r2 - l2;
+  }
+
   return {
-    throttle: clamp1(deadzone(r2 - l2) * num("controller.throttle_gain", 1)),
+    throttle: clamp1(
+      expo(deadzone(throttleRaw), num("controller.throttle_expo", 0)) *
+        num("controller.throttle_gain", 1),
+    ),
     steer: clamp1(
-      deadzone(steerRaw) * num("controller.steer_gain", 1) * (invert ? -1 : 1),
+      expo(deadzone(steerRaw), num("controller.steer_expo", 0)) *
+        num("controller.steer_gain", 1) *
+        (invert ? -1 : 1),
     ),
   };
 }

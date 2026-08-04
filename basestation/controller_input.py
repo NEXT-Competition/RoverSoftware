@@ -54,7 +54,34 @@ TRIGGER_REST = -1.0
 
 
 def _dz(v, dz=0.08):
-    return 0.0 if abs(v) < dz else v
+    """Dead zone that RESCALES [dz, 1] back onto [0, 1].
+
+    Passing v through unchanged above the threshold makes the output jump
+    straight from 0.0 to dz the moment the stick leaves centre — with the
+    default dead zone that is 8% of steering differential appearing in a single
+    frame, which on a skid-steer chassis is a visible twitch every time you
+    start a turn, and again every time you come back to centre.
+
+    Rescaling removes the step without narrowing what is reachable: full stick
+    still gives 1.0. It also means `deadzone` can be raised to cover a worn,
+    drifting stick without that making the twitch worse, which is the tuning
+    dead end the old version created.
+    """
+    if abs(v) < dz or dz >= 1.0:
+        return 0.0
+    return (v - dz if v > 0 else v + dz) / (1.0 - dz)
+
+
+def _expo(v: float, e: float) -> float:
+    """Bend an axis toward a cubic response, keeping the endpoints.
+
+    out = (1-e)*v + e*v^3. Odd in v, so the sign is preserved and -1/0/+1 are
+    fixed points: the curve only changes how much of the travel it takes to
+    reach a given output, never the range that is reachable.
+    """
+    if e <= 0.0:
+        return v
+    return (1.0 - e) * v + e * v * v * v
 
 
 def _clamp1(v):
@@ -216,11 +243,24 @@ class ControllerReader:
                 m = self._map  # one read: the mapping can be swapped mid-tick
                 naxes = self._js.get_numaxes()
                 self._publish(naxes)
-                r2 = self._r2.value(self._axis(m.axis_r2, naxes))
-                l2 = self._l2.value(self._axis(m.axis_l2, naxes))
-                # R2 forward, L2 reverse, both = cancel.
-                throttle = _dz(r2 - l2, m.deadzone) * m.throttle_gain
-                steer = _dz(self._axis(m.axis_steer, naxes), m.deadzone) * m.steer_gain
+                if m.axis_throttle is not None and m.axis_throttle >= 0:
+                    # Arcade drive on one stick. The mixing itself happens on
+                    # the robot (DriveCommand.arcade), same as it does for the
+                    # trigger path — this only decides where throttle comes
+                    # from, so both layouts speak the identical wire protocol.
+                    raw = self._axis(m.axis_throttle, naxes)
+                    if m.invert_throttle:
+                        raw = -raw
+                    throttle = _expo(_dz(raw, m.deadzone),
+                                     m.throttle_expo) * m.throttle_gain
+                else:
+                    r2 = self._r2.value(self._axis(m.axis_r2, naxes))
+                    l2 = self._l2.value(self._axis(m.axis_l2, naxes))
+                    # R2 forward, L2 reverse, both = cancel.
+                    throttle = _expo(_dz(r2 - l2, m.deadzone),
+                                     m.throttle_expo) * m.throttle_gain
+                steer = _expo(_dz(self._axis(m.axis_steer, naxes), m.deadzone),
+                              m.steer_expo) * m.steer_gain
                 if m.invert_steer:
                     steer = -steer
                 if self.on_drive:

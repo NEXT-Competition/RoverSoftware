@@ -50,7 +50,6 @@ def encode(message: dict) -> bytes:
 
 def decode(line: bytes) -> Optional[dict]:
     line = line.strip()
-    print(line.decode("utf-8"))
     if not line:
         return None
     try:
