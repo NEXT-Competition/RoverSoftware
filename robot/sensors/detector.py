@@ -45,7 +45,7 @@ import threading
 import time
 from typing import Optional
 
-from ..control.detection import Detection
+from ..control.detection import Detection, distance_m
 
 try:  # pragma: no cover - Linux/Pi-only dependency, absent on a dev laptop
     from edge_impulse_linux.image import ImageImpulseRunner
@@ -372,6 +372,12 @@ class ObjectDetector:
                     size=round(d.size, 3) if d.size is not None else None,
                     age=round(age, 2),
                 )
+                # Metres, only on a calibrated build — the key is absent (not
+                # null-padded) so an uncalibrated robot costs zero radio bytes.
+                dist = distance_m(d.size, self.cfg.focal_frac,
+                                  self.cfg.target_height_m)
+                if dist is not None:
+                    t["dist"] = round(dist, 2)
         return t
 
 

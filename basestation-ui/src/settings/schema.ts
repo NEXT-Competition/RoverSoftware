@@ -266,7 +266,11 @@ export const ROBOT_GROUPS: Group[] = [
         help: "Inference costs a core; cap it.",
       }),
       f("vision.standoff_size", "Standoff size", 0.05, 1, 0.01, {
-        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry.",
+        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry. Ignored while Standoff distance below is nonzero.",
+      }),
+      f("vision.standoff_m", "Standoff distance", 0, 10, 0.05, {
+        unit: "m",
+        help: "Stop this far short, in metres — overrides Standoff size above. Needs the robot range-calibrated (RS_VISION_FOCAL_FRAC / _TARGET_HEIGHT); 0 falls back to Standoff size. Also where shooter_align fires.",
       }),
       f("vision.hfov_deg", "Horizontal FOV", 10, 180, 1, {
         unit: "°",

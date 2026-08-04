@@ -126,7 +126,9 @@ class Robot:
                     aligned_tolerance=a.aligned_tolerance,
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
-                    standoff_size=v.standoff_size,
+                    # Resolved, not raw: vision.standoff_m (metres) wins here
+                    # when the robot is range-calibrated. See config.py.
+                    standoff_size=v.resolved_standoff_size(),
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
@@ -139,7 +141,10 @@ class Robot:
                     aligned_tolerance=a.aligned_tolerance,
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
-                    standoff_size=v.standoff_size,
+                    # Same standoff as object_align, so require_arrived gates
+                    # firing at the same metres without shooter_align needing
+                    # to know range exists at all.
+                    standoff_size=v.resolved_standoff_size(),
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
@@ -897,7 +902,10 @@ class Robot:
                 c.aligned_tolerance = cfg.align.aligned_tolerance
                 c.search_after = cfg.align.search_after
                 c.search_timeout = cfg.align.search_timeout
-                c.standoff_size = cfg.vision.standoff_size
+                # Resolved here too, or a live edit to standoff_m would take
+                # effect only on the next boot — and a live edit to
+                # standoff_size would silently override it.
+                c.standoff_size = cfg.vision.resolved_standoff_size()
                 c.search_speed = cfg.vision.search_speed
                 c.hfov_deg = cfg.vision.hfov_deg
                 _retune(c.pid, cfg.align.pid)

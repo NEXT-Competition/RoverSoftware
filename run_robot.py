@@ -12,6 +12,8 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/BACKEND/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
+    RS_VISION_TARGET_HEIGHT/FOCAL_FRAC (metric range; see detector_selftest.py),
+    RS_VISION_STANDOFF_M (stop this many metres short; needs the two above),
     RS_VISION_IMX500_MODEL/LABELS/IOU/MAX_DET,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
@@ -194,6 +196,16 @@ def main():
     cfg.vision.standoff_size = float(os.environ.get("RS_VISION_STANDOFF", cfg.vision.standoff_size))
     cfg.vision.hfov_deg = float(os.environ.get("RS_VISION_HFOV", cfg.vision.hfov_deg))
     cfg.vision.search_speed = float(os.environ.get("RS_VISION_SEARCH_SPEED", cfg.vision.search_speed))
+    # Metric range. Env-settable because it is calibrated in the field with a
+    # tape measure — a knob you can only change by editing source and rebuilding
+    # the .deb is a knob nobody calibrates.
+    cfg.vision.target_height_m = float(
+        os.environ.get("RS_VISION_TARGET_HEIGHT", cfg.vision.target_height_m))
+    cfg.vision.focal_frac = float(os.environ.get("RS_VISION_FOCAL_FRAC", cfg.vision.focal_frac))
+    # Stop distance in metres, converted to a size threshold at config time.
+    # Needs the two above; without them it is ignored and STANDOFF applies.
+    cfg.vision.standoff_m = float(
+        os.environ.get("RS_VISION_STANDOFF_M", cfg.vision.standoff_m))
     cfg.vision.imx500_labels = os.environ.get("RS_VISION_IMX500_LABELS", cfg.vision.imx500_labels)
     cfg.vision.imx500_iou = float(os.environ.get("RS_VISION_IMX500_IOU", cfg.vision.imx500_iou))
     cfg.vision.imx500_max_detections = int(

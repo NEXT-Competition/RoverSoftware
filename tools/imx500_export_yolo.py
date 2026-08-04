@@ -168,7 +168,14 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"    RS_VISION_BACKEND=imx500\n"
           f"    RS_VISION_IMX500_MODEL=/path/to/network/network.rpk\n"
           f"    RS_VISION_IMX500_LABELS=/path/to/labels.txt\n"
-          f"    RS_VISION_HFOV=66        # the AI Camera's real FOV, not a cropped one")
+          f"    RS_VISION_HFOV=66        # the AI Camera's real FOV, not a cropped one\n"
+          f"Then calibrate against THIS network — a focal_frac from another model\n"
+          f"or the edge_impulse backend does not carry over:\n"
+          f"    tools/detector_selftest.py --backend imx500 \\\n"
+          f"        --imx500-model /path/to/network/network.rpk \\\n"
+          f"        --imx500-labels /path/to/labels.txt \\\n"
+          f"        --target-height <target height, m> --distance <tape measure, m>\n"
+          f"    # -> prints RS_VISION_TARGET_HEIGHT / RS_VISION_FOCAL_FRAC")
     return 0
 
 
