@@ -55,19 +55,34 @@ class _SlewLimiter:
     way — including a steering servo, which is its own reason not to slam a
     linkage from lock to lock. One limiter per channel being limited, because
     they each need their own "where was I last time".
+
+    Accelerating and braking get their own rates, chosen per channel per tick by
+    whether the target is FURTHER from zero than where we are (pulling away) or
+    nearer to it (coming off). A zero crossing falls out of that comparison
+    rather than needing a case of its own: 0.5 -> -0.3 is nearer zero in
+    magnitude, so it brakes at the decel rate until it passes through, and the
+    magnitude then grows again under the accel rate. Which is what reversing
+    actually is.
     """
 
-    def __init__(self, rate: float, n: int):
+    def __init__(self, rate: float, n: int, decel_rate: float = 0.0):
         self.rate = rate
+        self.decel_rate = decel_rate
         self._current: List[float] = [0.0] * n
         self._last: float | None = None
+
+    def _rate_for(self, current: float, target: float) -> float:
+        """Which rate governs this step. `decel_rate` 0 means "same as accel"."""
+        if abs(target) > abs(current):
+            return self.rate
+        return self.decel_rate if self.decel_rate > 0 else self.rate
 
     def apply(self, targets: Iterable[float]) -> List[float]:
         targets = list(targets)
         now = time.monotonic()
         if self.rate > 0 and self._last is not None:
-            max_step = self.rate * (now - self._last)
-            targets = [_slew(cur, tgt, max_step)
+            dt = now - self._last
+            targets = [_slew(cur, tgt, self._rate_for(cur, tgt) * dt)
                        for cur, tgt in zip(self._current, targets)]
         self._last = now
         self._current = targets
@@ -222,7 +237,7 @@ class TankDrivetrain(Drivetrain):
 
     def __init__(self, config: DriveConfig):
         super().__init__(config)
-        self._limiter = _SlewLimiter(config.slew_rate, 2)
+        self._limiter = _SlewLimiter(config.slew_rate, 2, config.decel_rate)
         # Closed-loop wheel speed. Built whatever the mode, because the mode is
         # live-tunable from the dashboard and an operator switching it on should
         # not have to restart the rover to get an object that already exists.
@@ -244,6 +259,7 @@ class TankDrivetrain(Drivetrain):
     def drive(self, left: float, right: float) -> None:
         """Command normalized track speeds in [-1, 1]."""
         self._limiter.rate = self.cfg.slew_rate  # live-tunable
+        self._limiter.decel_rate = self.cfg.decel_rate
         left, right = self._limiter.apply((_clamp(left), _clamp(right)))
         # AFTER the slew limiter, on purpose. The limiter shapes the operator's
         # intent; the trim corrects what the hardware then actually did with it,
@@ -297,7 +313,7 @@ class SteeredDrivetrain(Drivetrain):
 
     def __init__(self, config: DriveConfig):
         super().__init__(config)
-        self._limiter = _SlewLimiter(config.slew_rate, 2)
+        self._limiter = _SlewLimiter(config.slew_rate, 2, config.decel_rate)
         self._warned_no_steer = False
 
     def drive(self, left: float, right: float) -> None:
@@ -319,6 +335,7 @@ class SteeredDrivetrain(Drivetrain):
             throttle = floor if throttle >= 0 else -floor
 
         self._limiter.rate = self.cfg.slew_rate
+        self._limiter.decel_rate = self.cfg.decel_rate
         throttle, steer = self._limiter.apply((throttle, steer))
 
         for motor in self._named(self.cfg.roles.throttle):
@@ -341,7 +358,7 @@ class SingleDrivetrain(Drivetrain):
 
     def __init__(self, config: DriveConfig):
         super().__init__(config)
-        self._limiter = _SlewLimiter(config.slew_rate, 1)
+        self._limiter = _SlewLimiter(config.slew_rate, 1, config.decel_rate)
         self._warned = False
 
     def drive(self, left: float, right: float) -> None:
@@ -352,6 +369,7 @@ class SingleDrivetrain(Drivetrain):
             print("[Drivetrain] 'single' layout has no steering; "
                   "steer commands are being ignored")
         self._limiter.rate = self.cfg.slew_rate
+        self._limiter.decel_rate = self.cfg.decel_rate
         (throttle,) = self._limiter.apply((throttle,))
         for motor in self._named(self.cfg.roles.throttle):
             motor.set_throttle(throttle)

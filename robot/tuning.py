@@ -174,6 +174,9 @@ _BASE_PARAMS: Tuple[Param, ...] = (
 
     # --- drive ---
     _f("drive.slew_rate", 0, 20),
+    # Braking, separate from the accelerator above. 0 = same as slew_rate,
+    # which is the symmetric limiting every build had before this existed.
+    _f("drive.decel_rate", 0, 20),
     _f("drive.arm_seconds", 0, 10, live=False),
 
     # --- closed-loop wheel speed (needs encoders; see control/rpm_trim.py) ---

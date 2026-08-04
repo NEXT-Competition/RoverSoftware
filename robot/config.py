@@ -212,7 +212,22 @@ class DriveConfig:
     actuators: Dict[str, MotorConfig] = field(default_factory=_default_drive_actuators)
     roles: DriveRoles = field(default_factory=DriveRoles)
     arm_seconds: float = 2.0  # Hold neutral this long so the ESCs arm on boot
-    slew_rate: float = 4.0  # Max throttle change per second (0 disables limiting)
+    # Max throttle change per second while the command is moving AWAY from zero,
+    # i.e. accelerating. 0 disables rate limiting entirely, in both directions.
+    slew_rate: float = 4.0
+    # The same, for a command moving TOWARD zero — braking. 0 means "use
+    # slew_rate", which is symmetric limiting and exactly what every layout
+    # written before this field existed already does.
+    #
+    # It is separate because one rate forces a bad trade. Slow enough to make
+    # pulling away gentle is also slow enough to make stopping sluggish, and of
+    # the two, the one you want crisp is stopping: releasing the stick should
+    # take the throttle off promptly. So the useful shape is a soft accelerator
+    # and a firm brake, which a single number cannot express.
+    #
+    # Note this is NOT what makes the e-stop immediate — that bypasses the
+    # limiter entirely (see Robot._apply_estop). This is about feel.
+    decel_rate: float = 0.0
     # servo_steer: how much of the steering servo's throw a full-scale steer
     # command uses. 1.0 = the whole throw.
     steer_gain: float = 1.0

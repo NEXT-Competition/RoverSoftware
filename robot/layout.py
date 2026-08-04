@@ -202,6 +202,7 @@ def to_doc(cfg: RobotConfig) -> dict:
             },
             "arm_seconds": d.arm_seconds,
             "slew_rate": d.slew_rate,
+            "decel_rate": d.decel_rate,
             "steer_gain": d.steer_gain,
             "min_pivot_throttle": d.min_pivot_throttle,
         },
@@ -756,6 +757,7 @@ def validate(doc: Any, reserved_channels: Optional[Dict[int, str]] = None) -> Va
     drive = DriveConfig(kind=kind, actuators=actuators)
     drive.roles = _validate_roles(kind, raw_drive.get("roles"), actuators, errors)
     for fname, lo, hi in (("arm_seconds", 0, 10), ("slew_rate", 0, 20),
+                          ("decel_rate", 0, 20),
                           ("steer_gain", 0, 2), ("min_pivot_throttle", 0, 1)):
         if fname in raw_drive:
             try:

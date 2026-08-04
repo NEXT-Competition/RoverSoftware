@@ -142,3 +142,61 @@ def test_mode_changes_are_not_gated_either(rig):
     controller.on_drive(1.0, 0.0)
     app.state.handle_action({"action": "mode", "mode": "waypoint"})
     assert {"type": "mode", "mode": "waypoint", "to": "rover1"} in link.sent
+
+
+# --- the e-stop is never rate-limited -----------------------------------------
+
+def test_estop_stops_the_drivetrain_now_not_over_the_decel_ramp(monkeypatch, tmp_path):
+    """The manager answers stopped() every tick once the latch is on, and that
+    goes through drive() and therefore the slew limiter. With a deceleration
+    rate configured, the button that exists to stop the rover would otherwise
+    ask it to ease off over the next second."""
+    monkeypatch.setenv("RS_MOCK_MOTORS", "1")
+    monkeypatch.setenv("RS_TUNING_FILE", str(tmp_path / "tuning.json"))
+    from robot.config import RobotConfig
+    from robot.robot import Robot
+
+    cfg = RobotConfig()
+    cfg.gps.enabled = cfg.camera.enabled = cfg.vision.enabled = False
+    cfg.imu.enabled = False
+    cfg.drive.arm_seconds = 0.0
+    cfg.drive.slew_rate = 1.0
+    cfg.drive.decel_rate = 0.5          # deliberately glacial
+    rover = Robot(cfg)
+
+    # Get the tracks genuinely moving first. One call is enough: the first
+    # command after construction is deliberately unlimited (there is no elapsed
+    # time to limit against yet).
+    rover.drive.drive(1.0, 1.0)
+    assert rover.drive.left.throttle > 0.5
+
+    rover._inbox.put({"type": "estop"})
+    rover._drain_inbox()
+    rover._apply_estop()
+
+    assert rover.drive.left.throttle == 0.0
+    assert rover.drive.right.throttle == 0.0
+
+
+def test_the_estop_resets_the_limiter_so_it_does_not_resume_at_speed(
+        monkeypatch, tmp_path):
+    """`Drivetrain.stop` resets the limiter, so its idea of "where I was" is
+    zero rather than the speed it was doing when the button went in."""
+    monkeypatch.setenv("RS_MOCK_MOTORS", "1")
+    monkeypatch.setenv("RS_TUNING_FILE", str(tmp_path / "tuning.json"))
+    from robot.config import RobotConfig
+    from robot.robot import Robot
+
+    cfg = RobotConfig()
+    cfg.gps.enabled = cfg.camera.enabled = cfg.vision.enabled = False
+    cfg.imu.enabled = False
+    cfg.drive.arm_seconds = 0.0
+    cfg.drive.slew_rate = 1.0
+    rover = Robot(cfg)
+    rover.drive.drive(1.0, 1.0)
+    assert rover.drive._limiter._current == [1.0, 1.0]
+
+    rover._inbox.put({"type": "estop"})
+    rover._drain_inbox()
+    rover._apply_estop()
+    assert rover.drive._limiter._current == [0.0, 0.0]

@@ -229,9 +229,13 @@ export const ROBOT_GROUPS: Group[] = [
   {
     title: "Drive",
     fields: [
-      f("drive.slew_rate", "Slew rate", 0, 20, 0.1, {
+      f("drive.slew_rate", "Acceleration", 0, 20, 0.1, {
         unit: "/s",
-        help: "Max throttle change per second. This is what smooths the base station's ~15 Hz drive frames; 0 disables limiting.",
+        help: "Max throttle change per second while pulling away. This is what smooths the base station's ~15 Hz drive frames; 0 disables limiting entirely.",
+      }),
+      f("drive.decel_rate", "Deceleration", 0, 20, 0.1, {
+        unit: "/s",
+        help: "The same, for coming back toward zero. 0 = match acceleration. Set it higher than acceleration for a soft accelerator and a firm brake. The e-stop is never rate-limited.",
       }),
       f("drive.arm_seconds", "Arm hold", 0, 10, 0.1, {
         unit: "s",

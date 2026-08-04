@@ -542,6 +542,15 @@ class Robot:
         """
         if self.manager.estop and not self._estop_latched:
             self._estop_latched = True
+            # The drivetrain too, and NOT by letting the loop command zero. The
+            # manager answers every tick with stopped() once the latch is on,
+            # but that goes through drive() and therefore through the slew
+            # limiter — so with any deceleration rate configured, the button
+            # that exists to stop the rover would instead ask it to ease off
+            # over the next second. `Drivetrain.stop` writes neutral to the
+            # motors directly and resets the limiter, so the zeros that follow
+            # are already at zero and nothing ramps.
+            self.drive.stop()
             for mech in self._all_mechanisms().values():
                 mech.stop()
         elif not self.manager.estop:
