@@ -89,7 +89,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">RoverSoftware</a></li><li class="chapter-item expanded affix "><a href="../shape.html">The shape of the system</a></li><li class="chapter-item expanded affix "><li class="part-title">Install</li><li class="chapter-item expanded "><a href="../install/apt.html">Install from apt</a></li><li class="chapter-item expanded "><a href="../install/packages.html">What each package puts where</a></li><li class="chapter-item expanded affix "><li class="part-title">Bring-up</li><li class="chapter-item expanded "><a href="../bringup/simulator.html">1 · Run it, no hardware</a></li><li class="chapter-item expanded "><a href="../bringup/driving-view.html">2 · Read the driving view</a></li><li class="chapter-item expanded "><a href="../bringup/drive.html">3 · Drive a rover</a></li><li class="chapter-item expanded "><a href="../bringup/places-routes.html">4 · Places and routes</a></li><li class="chapter-item expanded "><a href="../bringup/hardware.html">5 · Add motors and mechanisms</a></li><li class="chapter-item expanded "><a href="../bringup/routines.html" class="active">6 · Program a routine</a></li><li class="chapter-item expanded "><a href="../bringup/tuning.html">7 · Tune it in the field</a></li><li class="chapter-item expanded "><a href="../bringup/command.html">8 · Command it by voice</a></li><li class="chapter-item expanded "><a href="../bringup/deploy.html">9 · Put it on the robot</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/wiring.html">Wiring and calibration</a></li><li class="chapter-item expanded "><a href="../reference/python.html">Extending it in Python</a></li><li class="chapter-item expanded "><a href="../reference/protocol.html">The radio protocol</a></li><li class="chapter-item expanded "><a href="../reference/troubleshooting.html">When it misbehaves</a></li><li class="chapter-item expanded "><a href="../reference/releasing.html">Cutting a release</a></li><li class="chapter-item expanded affix "><li class="part-title">Deep dives</li><li class="chapter-item expanded "><a href="../architecture.html">Architecture, end to end</a></li><li class="chapter-item expanded "><a href="../model-conversion.html">Training and converting a detector</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">RoverSoftware</a></li><li class="chapter-item expanded affix "><a href="../shape.html">The shape of the system</a></li><li class="chapter-item expanded affix "><li class="part-title">Install</li><li class="chapter-item expanded "><a href="../install/apt.html">Install from apt</a></li><li class="chapter-item expanded "><a href="../install/packages.html">What each package puts where</a></li><li class="chapter-item expanded affix "><li class="part-title">Bring-up</li><li class="chapter-item expanded "><a href="../bringup/simulator.html">1 · Run it, no hardware</a></li><li class="chapter-item expanded "><a href="../bringup/driving-view.html">2 · Read the driving view</a></li><li class="chapter-item expanded "><a href="../bringup/drive.html">3 · Drive a rover</a></li><li class="chapter-item expanded "><a href="../bringup/places-routes.html">4 · Places and routes</a></li><li class="chapter-item expanded "><a href="../bringup/hardware.html">5 · Add motors and mechanisms</a></li><li class="chapter-item expanded "><a href="../bringup/routines.html" class="active">6 · Program a routine</a></li><li class="chapter-item expanded "><a href="../bringup/scripts.html">7 · Program it in Python</a></li><li class="chapter-item expanded "><a href="../bringup/tuning.html">8 · Tune it in the field</a></li><li class="chapter-item expanded "><a href="../bringup/command.html">9 · Command it by voice</a></li><li class="chapter-item expanded "><a href="../bringup/deploy.html">10 · Put it on the robot</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/wiring.html">Wiring and calibration</a></li><li class="chapter-item expanded "><a href="../reference/python.html">Extending it in Python</a></li><li class="chapter-item expanded "><a href="../reference/protocol.html">The radio protocol</a></li><li class="chapter-item expanded "><a href="../reference/troubleshooting.html">When it misbehaves</a></li><li class="chapter-item expanded "><a href="../reference/releasing.html">Cutting a release</a></li><li class="chapter-item expanded affix "><li class="part-title">Deep dives</li><li class="chapter-item expanded "><a href="../architecture.html">Architecture, end to end</a></li><li class="chapter-item expanded "><a href="../model-conversion.html">Training and converting a detector</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -305,6 +305,15 @@ only then put it on a rover.</p>
 </blockquote>
 <p>Routines <strong>Export</strong> to a JSON file and <strong>Import</strong> back, which is how you move one
 between rovers or keep last season's in the repo.</p>
+<blockquote>
+<p><strong>When a graph is the wrong shape</strong></p>
+<p>A canvas is good at a sequence of states and bad at arithmetic. The moment a
+step wants a real loop, a computed throttle, or a number worked out from a
+measurement, it is trying to be a program — and <a href="scripts.html">the Code
+tab</a> is the same rover, the same sensors and the same delegation,
+reached from Python instead. They sit side by side on purpose; most teams end
+up with some of each.</p>
+</blockquote>
 
                     </main>
 
@@ -314,7 +323,7 @@ between rovers or keep last season's in the repo.</p>
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../bringup/tuning.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../bringup/scripts.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -328,7 +337,7 @@ between rovers or keep last season's in the repo.</p>
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../bringup/tuning.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../bringup/scripts.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

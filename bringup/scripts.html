@@ -1,0 +1,388 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>7 · Program it in Python - RoverSoftware</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="Operator handbook: run the base station, drive a rover, declare your motors and mechanisms, and program a robot without writing Python.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="../highlight.css">
+        <link rel="stylesheet" href="../tomorrow-night.css">
+        <link rel="stylesheet" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/custom.css">
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "../";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "coal" : "coal";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="../index.html">RoverSoftware</a></li><li class="chapter-item expanded affix "><a href="../shape.html">The shape of the system</a></li><li class="chapter-item expanded affix "><li class="part-title">Install</li><li class="chapter-item expanded "><a href="../install/apt.html">Install from apt</a></li><li class="chapter-item expanded "><a href="../install/packages.html">What each package puts where</a></li><li class="chapter-item expanded affix "><li class="part-title">Bring-up</li><li class="chapter-item expanded "><a href="../bringup/simulator.html">1 · Run it, no hardware</a></li><li class="chapter-item expanded "><a href="../bringup/driving-view.html">2 · Read the driving view</a></li><li class="chapter-item expanded "><a href="../bringup/drive.html">3 · Drive a rover</a></li><li class="chapter-item expanded "><a href="../bringup/places-routes.html">4 · Places and routes</a></li><li class="chapter-item expanded "><a href="../bringup/hardware.html">5 · Add motors and mechanisms</a></li><li class="chapter-item expanded "><a href="../bringup/routines.html">6 · Program a routine</a></li><li class="chapter-item expanded "><a href="../bringup/scripts.html" class="active">7 · Program it in Python</a></li><li class="chapter-item expanded "><a href="../bringup/tuning.html">8 · Tune it in the field</a></li><li class="chapter-item expanded "><a href="../bringup/command.html">9 · Command it by voice</a></li><li class="chapter-item expanded "><a href="../bringup/deploy.html">10 · Put it on the robot</a></li><li class="chapter-item expanded affix "><li class="part-title">Reference</li><li class="chapter-item expanded "><a href="../reference/wiring.html">Wiring and calibration</a></li><li class="chapter-item expanded "><a href="../reference/python.html">Extending it in Python</a></li><li class="chapter-item expanded "><a href="../reference/protocol.html">The radio protocol</a></li><li class="chapter-item expanded "><a href="../reference/troubleshooting.html">When it misbehaves</a></li><li class="chapter-item expanded "><a href="../reference/releasing.html">Cutting a release</a></li><li class="chapter-item expanded affix "><li class="part-title">Deep dives</li><li class="chapter-item expanded "><a href="../architecture.html">Architecture, end to end</a></li><li class="chapter-item expanded "><a href="../model-conversion.html">Training and converting a detector</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">RoverSoftware</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/NEXT-Competition/RoverSoftware/edit/main/docs/src/bringup/scripts.md" title="Suggest an edit" aria-label="Suggest an edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="7--program-it-in-python"><a class="header" href="#7--program-it-in-python">7 · Program it in Python</a></h1>
+<p><em>Settings → Code. Real Python, written in the dashboard, running on the robot.</em></p>
+<p>A <a href="routines.html">routine</a> is a state machine you draw. It is the right shape for
+"line up, wait until you're aligned, shoot, back off" and the wrong shape for
+anything with arithmetic in it — a loop that scales throttle by measured range
+is a program, and drawing it as a graph gives you a picture of a program rather
+than a program.</p>
+<p>So the <strong>Code</strong> tab is the other half. Same rover, same sensors, same
+mechanisms, same autonomy modes — reached from Python instead of from a canvas.
+Neither replaces the other, and most teams end up with some of each.</p>
+<pre><code class="language-python"># Creep up to whatever is in front, then stop short of it.
+while True:
+    ahead = rover.distance_ahead()
+    rover.watch("ahead", ahead)
+    if ahead is not None and ahead &lt;= 0.4:
+        break
+    rover.forward(0.22)
+    rover.sleep(0.05)
+
+rover.stop()
+print("stopped at", round(rover.distance_ahead() or 0, 2), "m")
+</code></pre>
+<p>Start from a template rather than an empty file. Every one runs as-is on a bare
+chassis — they check for a camera or a mechanism before reaching for one — so
+"press New, press Run, watch it move" is true before any of the optional
+hardware is fitted.</p>
+<h2 id="everything-hangs-off-rover"><a class="header" href="#everything-hangs-off-rover">Everything hangs off <code>rover</code></a></h2>
+<p>There is no import and no setup. <code>rover</code> is already there, and the panel down
+the right-hand side lists every call it has; clicking one types it at the caret.</p>
+<div class="table-wrapper"><table><thead><tr><th></th><th></th></tr></thead><tbody>
+<tr><td><strong>Driving</strong></td><td><code>rover.forward(0.3, seconds=2)</code> · <code>back</code> · <code>turn</code> · <code>arcade(throttle, steer)</code> · <code>drive(left, right)</code> · <code>stop()</code> · <code>turn_to(heading)</code></td></tr>
+<tr><td><strong>Sensors</strong></td><td><code>rover.distance_ahead()</code> · <code>rover.heading()</code> · <code>rover.position()</code> · <code>rover.gps.fix</code> · <code>rover.imu.calibration</code> · <code>rover.wheels.left_rpm</code></td></tr>
+<tr><td><strong>Camera</strong></td><td><code>rover.vision.seen</code> · <code>.label</code> · <code>.offset</code> · <code>.bearing</code> · <code>.distance</code> · <code>rover.look_for("bucket")</code></td></tr>
+<tr><td><strong>Mechanisms</strong></td><td><code>rover.mech("intake").power(0.8)</code> · <code>.preset("up")</code> · <code>.pulse()</code> · <code>.ready</code> · <code>.wait_ready()</code> · <code>.spin_for(metres)</code></td></tr>
+<tr><td><strong>Launcher</strong></td><td><code>rover.shooter.spin()</code> · <code>.spin_for(metres)</code> · <code>.fire()</code> · <code>.ready</code> · <code>.shots</code></td></tr>
+<tr><td><strong>Autonomy</strong></td><td><code>rover.align_to("bucket", within_m=1.0)</code> · <code>rover.follow_route(points)</code> · <code>rover.hand_over("waypoint")</code></td></tr>
+<tr><td><strong>Waiting</strong></td><td><code>rover.sleep(s)</code> · <code>rover.wait_until(cond, timeout=10)</code> · <code>rover.time()</code></td></tr>
+<tr><td><strong>Output</strong></td><td><code>print(...)</code> · <code>rover.log(...)</code> · <code>rover.watch(name, value)</code></td></tr>
+</tbody></table>
+</div>
+<p>Distances are <strong>metres</strong>, angles are <strong>degrees</strong> (0 = north, clockwise
+positive), speeds are <strong>−1 to 1</strong>, and time is <strong>seconds</strong>. No exceptions, so
+nothing needs a suffix in its name to be read correctly.</p>
+<p>A reading is <code>None</code> whenever nobody can say — no GPS fix, nothing detected, no
+ultrasonic fitted, no range calibration. Check for it rather than comparing it;
+<code>None &lt;= 0.4</code> raises, and it is the first thing every new script gets wrong.</p>
+<h3 id="handing-over-to-the-autonomy-that-already-exists"><a class="header" href="#handing-over-to-the-autonomy-that-already-exists">Handing over to the autonomy that already exists</a></h3>
+<p><code>rover.align_to("bucket", within_m=1.0)</code> does not re-implement an approach. It
+hands the wheel to the same <code>object_align</code> controller the Routines tab
+delegates to, with the same gains and the same standoff, waits until that
+controller says it has arrived, and hands the wheel back. Your script keeps
+running the whole time — it can watch, log and work a mechanism while the rover
+drives itself.</p>
+<p>The detector target and the standoff are <strong>borrowed</strong>, not taken: whatever the
+operator had selected is put back when the script ends, however it ends.</p>
+<h3 id="loop-for-anything-that-steers"><a class="header" href="#loop-for-anything-that-steers"><code>loop()</code>, for anything that steers</a></h3>
+<p>Define a function called <code>loop()</code> and it is called repeatedly at the control
+rate, after your top-level code has run once. That is the shape for anything
+steering on a live measurement — and it puts the pacing in the runner rather
+than in a <code>rover.sleep(0.02)</code> at the bottom of a <code>while True:</code> that the next
+person to edit the file deletes.</p>
+<h2 id="running-it"><a class="header" href="#running-it">Running it</a></h2>
+<ol>
+<li><strong>Save to robot.</strong> Scripts take effect the moment they land — they are text
+the runner compiles, not hardware a constructor owns. The Run button is
+disabled while you have unsaved edits, because Run starts what the <em>rover</em> is
+carrying and watching a bug you already fixed happen again is a miserable
+five minutes.</li>
+<li>Press <strong>Run</strong> (or <kbd>⌘/Ctrl</kbd> + <kbd>Enter</kbd>). The robot switches
+to <code>script</code> mode.</li>
+<li>Watch the <strong>console</strong> underneath. <code>print</code> lands there; <code>rover.watch</code> puts a
+named live number in the row above it, which is what you want for anything
+changing at 50 Hz.</li>
+<li><strong>Stop</strong> ends the run and puts the rover back in teleop.</li>
+</ol>
+<p>Every script the robot carries also appears by name under <strong>Scripts</strong> on the
+driving view, beside the routines — so you do not have to be in the editor to
+start one mid-match.</p>
+<blockquote>
+<p><strong>Test it dry</strong></p>
+<p>The simulator runs the real controller and the real sandbox. You can write,
+run and debug an entire script against <code>--sim</code> — including the syntax-error
+path — and only then put it on a rover.</p>
+</blockquote>
+<h2 id="the-rules-it-runs-under"><a class="header" href="#the-rules-it-runs-under">The rules it runs under</a></h2>
+<p>These are worth reading once, because they are what makes "run arbitrary Python
+on the robot" a reasonable thing to do.</p>
+<p><strong>Your code never touches the hardware.</strong> It puts commands in a mailbox and the
+control loop applies them on its next tick. One thread writes PWM, and it is
+the same one that always did.</p>
+<p><strong>Your code is not on the control loop.</strong> It runs on its own thread, so a script
+that spins forever costs a core, not a rover. The 50 Hz loop keeps its tick.</p>
+<p><strong>It can always be stopped.</strong> Every <code>rover</code> call checks for a stop, and so does
+a line hook — so even <code>while True: pass</code> unwinds when you press Stop. The
+exception that does the unwinding is not a normal one either: a script's own
+<code>try: ... except Exception:</code> cannot swallow the stop button.</p>
+<p><strong>When it stops, the motors stop.</strong> Finished, crashed, stopped, e-stopped, hit
+its time limit, mode switched — all of them end with the drive command back at
+zero and every mechanism stopped, without your script needing a <code>finally:</code>.</p>
+<p><strong>The e-stop is above all of it.</strong> It is arbitrated before the script controller
+is asked at all, exactly as it is for a routine.</p>
+<p><strong>A run always ends.</strong> <code>scripts.max_runtime</code> (5 minutes by default) is a
+wall-clock ceiling. A bug in a loop condition looks exactly like a rover that
+has stopped taking orders, so every run ends whatever it thinks.</p>
+<h3 id="what-python-you-get"><a class="header" href="#what-python-you-get">What Python you get</a></h3>
+<p>Ordinary Python, minus the parts that could only cause trouble on a robot:</p>
+<ul>
+<li><strong>Available:</strong> <code>math</code>, <code>random</code>, <code>statistics</code>, <code>json</code>, <code>re</code>, <code>collections</code>,
+<code>itertools</code>, <code>functools</code>, <code>dataclasses</code>, <code>enum</code>, <code>decimal</code> and friends.</li>
+<li><strong>Refused:</strong> <code>os</code>, <code>sys</code>, <code>subprocess</code>, <code>socket</code>, <code>threading</code>, <code>importlib</code>,
+<code>pathlib</code>, <code>ctypes</code> — and <code>open</code>, <code>exec</code>, <code>eval</code>.</li>
+<li><strong><code>time</code> is refused too</strong>, and that one is a safety rule rather than tidiness:
+<code>time.sleep</code> cannot be interrupted, so a script napping for thirty seconds
+would ignore the stop button for thirty seconds while the rover kept driving.
+Use <code>rover.sleep</code> and <code>rover.time</code>.</li>
+</ul>
+<p>That guard is against <strong>mistakes, not malice</strong>. In-process Python cannot be a
+security boundary and claiming otherwise would be the dangerous statement —
+anyone who can push documents to a rover could already reflash it. It is also
+not where the safety comes from: every rule in the section above holds whatever
+the script does.</p>
+<h3 id="syntax-errors-are-refused-not-deferred"><a class="header" href="#syntax-errors-are-refused-not-deferred">Syntax errors are refused, not deferred</a></h3>
+<p>The robot <strong>compiles</strong> each script as it lands. A missing colon comes back as
+<code>line 12: expected ':'</code>, the editor puts a red marker on line 12, and nothing is
+installed — the rover keeps the last set that was good. That is deliberately
+different from "saved fine, died on Run", which is the version you discover at
+a field.</p>
+<p>Compiling is not running. A document full of <code>os.system(...)</code> compiles and
+stores without anything happening; it is refused when you press Run, by the
+import list above.</p>
+<h2 id="knobs"><a class="header" href="#knobs">Knobs</a></h2>
+<p>Under <strong>Settings → Tuning</strong>, all live:</p>
+<p><code>scripts.enabled</code>
+: Whether this robot will run one at all.</p>
+<p><code>scripts.max_runtime</code>
+: Wall-clock ceiling on a run, in seconds.</p>
+<p><code>scripts.drive_limit</code>
+: Ceiling on what a script may command the tracks, 0.05 to 1.0. Turn it down to
+bring a new script up on a bench and full throttle becomes a crawl — it <em>scales</em>
+the command rather than clamping each track, so the rover drives the same arc
+the script asked for, just slower.</p>
+<p><code>scripts.output_lines</code>
+: How much console output the robot keeps.</p>
+<h2 id="getting-them-in-and-out"><a class="header" href="#getting-them-in-and-out">Getting them in and out</a></h2>
+<p><strong>Export .py</strong> writes the open script as a plain <code>.py</code> file, which opens in any
+editor and diffs in git. <strong>Export all</strong> writes the whole set as the JSON the
+robot stores. <strong>Import</strong> takes either: a <code>.py</code> becomes one new script, a <code>.json</code>
+replaces the set.</p>
+<p>Console output is the one part of this that needs WiFi — it rides the bulk link
+with the config snapshots and the documents, because a script's <code>print</code> is
+kilobytes of text and the radio is carrying driving, telemetry and the e-stop.
+A rover out of WiFi range still runs its script and still tells you on the
+driving view whether it is going and why it stopped; it just cannot tell you
+what it is saying.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../bringup/routines.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../bringup/tuning.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../bringup/routines.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../bringup/tuning.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>
