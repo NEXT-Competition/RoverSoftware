@@ -874,13 +874,35 @@ Order is meaning: put "gave up" below "succeeded".</p>
 <h2 id="what-a-wire-can-wait-for"><a class="header" href="#what-a-wire-can-wait-for">What a wire can wait for</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Group</th><th>Conditions</th></tr></thead><tbody>
 <tr><td>timing</td><td>after a delay · immediately · never (hold here)</td></tr>
-<tr><td>vision</td><td>when the camera sees a target · when lined up · when at the standoff distance</td></tr>
+<tr><td>vision</td><td>when the camera sees a target · when lined up · when at the standoff distance · <strong>when the object is at a distance</strong></td></tr>
 <tr><td>navigation</td><td>when the route is finished · when pointing a direction · when near a saved place</td></tr>
 <tr><td>mechanism</td><td>after N shots · when a mechanism is ready</td></tr>
 <tr><td>logic</td><td>ALL of · ANY of · NOT · after this has happened N times</td></tr>
 <tr><td>operator</td><td>when I press a button · when the e-stop is latched</td></tr>
 </tbody></table>
 </div>
+<p><strong>"When the object is at a distance"</strong> is the one to reach for when <em>at the
+standoff distance</em> is nearly right but not quite. They are different questions:
+the standoff belongs to whichever align mode is driving and fires when that mode
+decides it has arrived, while this one is a number in metres you name, tested
+whatever is driving — so a state can hand over at 2 m on the way in, before any
+approach finishes.</p>
+<p>It measures one of two things, and picking the wrong one is how a routine stops
+at the wrong object:</p>
+<ul>
+<li><strong>target</strong> — how far away the <em>detected</em> object is. Measured by the ultrasonic
+while the target is centred in its beam, and read off the bounding box past
+that. Needs a detection.</li>
+<li><strong>ahead</strong> — how far away the nearest thing <em>straight ahead</em> is, from the
+ultrasonic alone. Needs no model at all, which makes it the one for "creep
+forward until something is close" — and the wrong one for "until the bucket is
+close" in a room with a chair in it.</li>
+</ul>
+<p>Fill in <em>within</em> to close in, <em>no nearer than</em> to wait until something is far
+enough away, or both for a band. It is never true while the distance is unknown,
+so a state waiting on one waits rather than proceeding on a number nobody has.
+Take care asking for less than the collision guard's stop distance: the rover
+halts there, and the transition never fires.</p>
 <p>Every condition can additionally be required to <strong>hold continuously</strong> for a
 number of seconds before it counts. That one field is the difference between a
 launcher that fires on a single noisy frame and one that waits half a second to
@@ -1404,6 +1426,41 @@ survive a restart:</p>
 </code></pre>
 <p>Switch either half off under <strong>Settings → Vision</strong> (<em>Range from the ultrasonic</em>,
 <em>Learn the range constant</em>). A build with no ultrasonic is unaffected by both.</p>
+<h2 id="the-imu-which-wire-it-is-on"><a class="header" href="#the-imu-which-wire-it-is-on">The IMU: which wire it is on</a></h2>
+<p>The BNO085 can be read two ways, and the board is <strong>strapped</strong> for one of them
+(PS0/PS1). It is a wiring decision that <code>imu.mode</code> records, not a preference
+software can change on its own.</p>
+<div class="table-wrapper"><table><thead><tr><th></th><th><code>i2c</code></th><th><code>uart_rvc</code></th></tr></thead><tbody>
+<tr><td>Wires</td><td>SDA, SCL, shared bus</td><td>one: sensor TX → a Pi RX</td></tr>
+<tr><td>Integrity</td><td>none per packet</td><td><strong>checksum on every frame</strong></td></tr>
+<tr><td>Calibration level</td><td>0–3, enforced by <em>Min calibration</em></td><td>none — cannot be enforced</td></tr>
+<tr><td>Yaw rate</td><td>measured gyro</td><td>differentiated from yaw</td></tr>
+<tr><td>Commands to the chip</td><td>yes (calibration save)</td><td>none</td></tr>
+</tbody></table>
+</div>
+<p><strong>The default is <code>uart_rvc</code></strong>, because the failure it prevents is one this rover
+actually had: a single flipped bit on the I²C bus turning a valid report into an
+unrecognised one, with nothing in SHTP able to notice. An RVC frame carries a
+checksum, so a corrupted frame is dropped instead of becoming a heading.</p>
+<pre><code class="language-bash"># it needs its own UART — the GPS holds /dev/ttyAMA0
+ls /dev/ttyAMA*                       # after enabling a spare uart in config.txt
+python tools/imu_monitor.py --mode uart_rvc --port /dev/ttyAMA1 --seconds 60
+</code></pre>
+<p><code>frames 5992 ok, 0 rejected</code> is a clean line. A percent-level rejection rate
+means the wiring or the baud rate is wrong — those frames never became a
+heading, which is the point, but the heading is updating that much less often.</p>
+<p><strong>Calibrate over I²C first, once.</strong> RVC reports no accuracy level, so nothing
+can tell you the magnetometer has converged — but the chip keeps its calibration
+in its own flash, across power cycles <em>and</em> across a change of mode. So: strap
+for I²C, <code>python tools/imu_monitor.py --mode i2c</code>, figure-8s until the level
+reaches 3 (it saves itself), then restrap for RVC.</p>
+<p><strong>Then verify the yaw is a compass heading.</strong> This is the one check not to skip,
+because everything downstream assumes an absolute heading — the waypoint
+controller will pivot in place on it. Point the rover at a landmark, note the
+heading, drive it around for a few minutes, bring it back to the same spot and
+read again. A few degrees of difference is fine. Tens of degrees means the yaw
+is dead-reckoning rather than magnetometer-referenced, and this build should
+stay on <code>heading_source=gps</code> or go back to <code>i2c</code>.</p>
 <h2 id="the-tools"><a class="header" href="#the-tools">The tools</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Tool</th><th>What it is for</th></tr></thead><tbody>
 <tr><td><code>servo_sweep.py</code></td><td>Raw servo sweep — the Fusion HAT hello-world</td></tr>
@@ -1412,7 +1469,7 @@ survive a restart:</p>
 <tr><td><code>ultrasonic_monitor.py</code></td><td>Ultrasonic bring-up, and the stop-distance calibration</td></tr>
 <tr><td><code>xbee_monitor.py</code></td><td>Watch and inject XBee frames to prove the link</td></tr>
 <tr><td><code>gps_monitor.py</code></td><td>GPS bring-up: fix quality, track angle</td></tr>
-<tr><td><code>imu_monitor.py</code></td><td>BNO085 heading and calibration status, and an I²C bus audit (<code>--seconds 60</code>)</td></tr>
+<tr><td><code>imu_monitor.py</code></td><td>BNO085 heading and calibration, on either transport, plus a bus audit (<code>--seconds 60</code>)</td></tr>
 <tr><td><code>imu_selftest.py</code></td><td>Confirms the IMU answers and calibrates</td></tr>
 <tr><td><code>detector_selftest.py</code></td><td>Vision bring-up and standoff calibration, either backend</td></tr>
 <tr><td><code>fetch_tiles.py</code></td><td>Build an offline <code>.mbtiles</code> cache before you lose signal</td></tr>
@@ -1587,6 +1644,9 @@ every mode until cleared. Position fields appear in telemetry once a
 <tr><td>The <code>wheels</code> row keeps going blank while driving</td><td>Edges are being lost faster than 10% of a window, so the speed is no longer trustworthy and the loop opens on purpose — the journal says "losing edges". Move the decoding into the kernel: <code>just encoder-overlay A B</code> per encoder, then <code>just reboot</code>.</td></tr>
 <tr><td><code>just encoder-devices</code> lists nothing after a reboot</td><td>The overlay line never took. Check it is in <code>/boot/firmware/config.txt</code> (not <code>/boot/config.txt</code> on Bookworm and later) and that the firmware actually rebooted.</td></tr>
 <tr><td>The RPM readout is wildly wrong but steady</td><td><em>Counts per rev</em> is wrong. Measure it rather than deriving it: <code>tools/encoder_monitor.py</code>, turn the wheel one turn, read the count. <code>match</code> mode still works with a wrong value; <code>velocity</code> mode does not.</td></tr>
+<tr><td>No heading at all after converting to UART-RVC</td><td>Nothing is arriving on that port. It cannot be <code>/dev/ttyAMA0</code> (the GPS has it), so check a spare UART is actually enabled and <code>ls /dev/ttyAMA*</code> shows the one you configured; check the sensor's TX reaches the Pi's RX; and check the board is strapped for RVC rather than I²C. <code>python tools/imu_monitor.py --mode uart_rvc --port … --seconds 30</code> prints <code>frames 0/0</code> when the line is silent.</td></tr>
+<tr><td>The heading works on RVC but drifts over a run</td><td>The chip's yaw in this mode may not be magnetometer-referenced. Do the landmark check in <a href="reference/wiring.html#the-imu-which-wire-it-is-on">Wiring</a>: if it has drifted tens of degrees after a few minutes of driving, it is dead-reckoning — set <code>heading_source=gps</code>, or go back to <code>imu.mode=i2c</code> where the calibration level tells you when the compass is trustworthy.</td></tr>
+<tr><td>The calibration pips never appear on RVC</td><td>They can't: RVC frames carry no accuracy level, so the robot reports none rather than inventing one. Calibrate over I²C once; the chip keeps it in flash across a change of mode.</td></tr>
 <tr><td><code>[IMU] read error: 123</code> — just a number</td><td>That number is an SHTP <em>report id</em> the BNO085 driver does not recognise (123 = 0x7B, which is not a report the chip emits at all), and the bare digits are what a Python <code>KeyError</code> prints. So the sensor is there and answering; the byte stream reaching the driver is corrupted or has lost frame alignment. In order: something else on the I²C bus (a monitor tool running while the service is up — stop the service first), wiring or motor noise, a stale <code>dtparam=i2c_arm_baudrate=10000</code> left over from the BNO055, or a sagging supply. The line is throttled to one every 5 s, with a running count. Measure it rather than guessing: <code>python tools/imu_monitor.py --seconds 60</code> counts every packet, diagnoses the bad ones, and tells you whether each was a single flipped bit (a physical-layer fault — cable, clock, pull-ups) or something else. Run it for the same duration before and after a change, or the two rates are not comparable.</td></tr>
 <tr><td>The heading row switched to the GPS course on its own</td><td>The IMU stopped producing valid samples for longer than <strong>Reading timeout</strong> (Settings → IMU, 2 s by default), so it stopped being believed — the journal says so on the way out and again on the way back. Deliberate: the reader survives bus errors by retrying, which means a dead sensor otherwise looks exactly like one reporting a heading that is not changing.</td></tr>
 <tr><td>The calibration pips vanished but the rover drives fine</td><td>Same thing. The pips are only shown while the IMU is currently answering, because three pips beside a bearing that stopped updating is the dashboard being reassuring about a sensor that is not there.</td></tr>
