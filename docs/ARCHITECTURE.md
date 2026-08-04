@@ -1265,7 +1265,8 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_VISION_IMX500_LABELS` / `_IOU` / `_MAX_DET` | `` / `0.65` / `10` | Labels file (empty = embedded in the `.rpk`), NMS overlap, boxes per frame. |
 | `RS_VISION_LABEL` / `RS_VISION_CONF` | `` / `0.6` | Label to track (empty = any); score floor. |
 | `RS_VISION_STANDOFF` / `RS_VISION_HFOV` | `0.45` / `50` | **Both backend-dependent** — calibrate with `tools/detector_selftest.py`; HFOV is post-crop on Edge Impulse, the real ~66° on the IMX500. |
-| `RS_VISION_TARGET_HEIGHT` / `RS_VISION_FOCAL_FRAC` | `0` / `0` | Metric range (telemetry `dist`, metres) to a known-size target. **Backend-dependent**, both `0` = uncalibrated and `dist` is omitted. Calibrate: `tools/detector_selftest.py --target-height 0.29 --distance 3.00`. |
+| `RS_VISION_TARGET_HEIGHT` / `RS_VISION_FOCAL_FRAC` | `0` / `0` | Metric range (telemetry `dist`, metres) to a known-size target. **Backend-dependent**, both `0` = uncalibrated and `dist` is omitted. Calibrate: `tools/detector_selftest.py --target-height 0.368 --distance 3.00`. |
+| `RS_VISION_STANDOFF_M` | `0` | Stop this many metres short, instead of at `RS_VISION_STANDOFF`'s box-height fraction. Converted to that fraction once at startup, so the align loop is unchanged; needs the two above, and falls back to `RS_VISION_STANDOFF` without them. Also where `shooter_align` fires. |
 | `RS_CAMERA_DEVICE` | `auto` | `auto` \| `imx500` \| `picamera2` \| `/dev/videoN` \| index. Set for you when the IMX500 backend is selected. |
 | `RS_SHOOTER_ENABLED` / `RS_SHOOTER_CHANNEL` | `0` / `2` | Servo launcher. Channels 0–1 are the drive ESCs. |
 | `RS_SHOOTER_REST` / `RS_SHOOTER_FIRE` | `-30` / `30` | Home and fire angles (find with `tools/servo_sweep.py`). |

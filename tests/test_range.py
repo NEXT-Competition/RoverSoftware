@@ -1,9 +1,13 @@
-"""Metric range from a bounding box: the 1/d law and its refusals."""
+"""Metric range from a bounding box: the 1/d law, its refusals, and the
+standoff-in-metres conversion that hangs off it."""
 
 import importlib.util
 import pathlib
+import time
 
-from robot.control.detection import distance_m
+from robot.config import VisionConfig
+from robot.control.detection import Detection, distance_m, size_at_m
+from robot.control.object_align import ObjectAlignController
 
 _spec = importlib.util.spec_from_file_location(
     "detector_selftest",
@@ -56,3 +60,74 @@ def test_selftest_calibration_inverts_distance_m():
     med = _selftest._median(sizes)
     focal = med * truth_m / HEIGHT  # what _range_report prints
     assert abs(distance_m(med, focal, HEIGHT) - truth_m) < 1e-9
+
+
+# --- standoff in metres ------------------------------------------------------
+# The shipped bucket calibration (packaging/robot.env), so these tests fail if
+# someone recalibrates without revisiting the stop distance.
+BUCKET = dict(focal_frac=1.03, target_height_m=0.368)
+
+
+def _vision(**kw) -> VisionConfig:
+    return VisionConfig(**{**BUCKET, **kw})
+
+
+def test_standoff_m_converts_to_the_size_the_loop_stops_at():
+    """1 m must come back out as 1 m through distance_m — same map, inverted."""
+    size = _vision(standoff_m=1.0).resolved_standoff_size()
+    assert abs(size - 0.379) < 0.001  # 1.03 * 0.368 / 1.0
+    assert abs(distance_m(size, **BUCKET) - 1.0) < 1e-9
+
+
+def test_standoff_m_falls_back_when_it_cannot_be_resolved():
+    """Never leave the robot with no stop threshold — fall back, don't refuse.
+
+    Refusing (returning None and letting the loop never latch) would mean
+    driving into the bucket. standoff_size needs no calibration, so it is
+    always a safe answer, even if it is not the requested one.
+    """
+    assert _vision(standoff_m=0.0, standoff_size=0.45).resolved_standoff_size() == 0.45
+    # Range calibration cleared, metres still requested.
+    assert VisionConfig(standoff_m=1.0, standoff_size=0.45).resolved_standoff_size() == 0.45
+    assert VisionConfig(standoff_m=1.0, focal_frac=1.03,
+                        standoff_size=0.45).resolved_standoff_size() == 0.45
+
+
+def test_standoff_closer_than_the_frame_allows_is_clamped():
+    """A standoff needing a box taller than the frame would never latch."""
+    # 1.03 * 0.368 / 0.1 = 3.79 frame heights — unreachable.
+    assert _vision(standoff_m=0.1).resolved_standoff_size() == 1.0
+
+
+def test_controller_stops_at_one_metre():
+    """The integration that matters: metres in, wheels stopped at 1 m.
+
+    Drives the real state machine with detections sized as the detector would
+    report them at 1.05 m and 0.95 m — straddling the standoff — and asserts it
+    creeps at the first and is stopped at the second. Everything upstream of
+    this (the conversion, the config plumbing) is only worth having if this
+    holds.
+    """
+    cfg = _vision(standoff_m=1.0)
+    box = {"d": None}
+    c = ObjectAlignController(
+        detection_provider=lambda: box["d"],
+        standoff_size=cfg.resolved_standoff_size(),
+        forward_speed=0.25,
+    )
+    c.on_activate()
+
+    def seen_at(metres):
+        """The size the detector reports for our bucket at this distance."""
+        return Detection(label="bucket", confidence=0.9, error_x=0.0, error_y=0.0,
+                         size=size_at_m(metres, **BUCKET), stamp=time.monotonic())
+
+    box["d"] = seen_at(1.05)
+    cmd = c.update(0.02)
+    assert cmd.left > 0 and cmd.right > 0, "still short of 1 m — keep creeping"
+    assert not c.arrived()
+
+    box["d"] = seen_at(0.95)
+    cmd = c.update(0.02)
+    assert (cmd.left, cmd.right) == (0.0, 0.0), "past 1 m — stop"
+    assert c.arrived()

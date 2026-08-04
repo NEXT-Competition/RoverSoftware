@@ -72,10 +72,11 @@ def distance_m(
     None must degrade, never substitute a default — a wrong distance is worse
     than a missing one, since it looks usable.
 
-    Standoff does NOT go through here. The controller compares `size` against
-    `standoff_size` directly, which needs no calibration at all and is the
-    reason approach has always worked on an uncalibrated robot. This is for
-    telemetry and anything downstream that needs real units.
+    The control loop does NOT call this per frame. It compares `size` against a
+    threshold, and VisionConfig.resolved_standoff_size() converts a standoff in
+    metres into that threshold ONCE, at config time (see the alias below). That
+    keeps approach working on an uncalibrated robot, where this returns None and
+    a loop that needed metres every frame could never stop at all.
     """
     # ponytail: no lens-distortion model. A wide-angle lens breaks the 1/d
     # assumption toward the frame edges — fix it with cv2.undistort and real
@@ -83,3 +84,12 @@ def distance_m(
     if not size or focal_frac <= 0.0 or target_height_m <= 0.0:
         return None
     return focal_frac * target_height_m / size
+
+
+# size <-> distance is the SAME map in both directions — `f*h/x` is its own
+# inverse — so this is distance_m under the name that reads correctly when you
+# feed it metres and want back a box height fraction. An alias, deliberately,
+# not a copy: two functions with identical bodies drift, and the whole point is
+# that the threshold the loop stops on is the exact inverse of the range it
+# reports. Same refusals, so an uncalibrated build gets None here too.
+size_at_m = distance_m

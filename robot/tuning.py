@@ -196,6 +196,10 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("vision.min_confidence", 0, 1),
     _f("vision.max_fps", 0.5, 60),
     _f("vision.standoff_size", 0.05, 1),
+    # Stop distance in metres. Overrides standoff_size above when nonzero and
+    # the robot is range-calibrated; 0 hands control back to it. Upper bound is
+    # a sanity rail, not a range limit — confidence falls off well before 10 m.
+    _f("vision.standoff_m", 0, 10),
     _f("vision.hfov_deg", 10, 180),
     _f("vision.search_speed", 0, 1),
     _f("vision.target_timeout", 0.1, 10),

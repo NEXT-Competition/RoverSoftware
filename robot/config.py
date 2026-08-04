@@ -25,6 +25,11 @@ the endpoints/clamps; whichever is closer to neutral sets the usable throw.
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+# Safe despite config being the leaf everything imports: detection.py depends on
+# nothing but the stdlib, and no module reached through robot.control's __init__
+# imports config back.
+from .control.detection import size_at_m
+
 
 @dataclass
 class MotorConfig:
@@ -315,7 +320,24 @@ class VisionConfig:
     # model input height, on the edge_impulse backend). Calibrate it, don't
     # guess: park at the distance you want, run tools/detector_selftest.py, and
     # read off the printed size.
+    #
+    # Still the threshold the control loop actually compares against, even when
+    # standoff_m below is set — that one is converted INTO this. Works with no
+    # calibration of any kind, which is why it stays the fallback.
     standoff_size: float = 0.45
+    # Stop this many metres short instead, for a target of known height on a
+    # range-calibrated robot. 0 = off, use standoff_size as-is.
+    #
+    # A convenience over standoff_size, NOT a second mechanism: it is converted
+    # to a size threshold once at config time by resolved_standoff_size(), and
+    # the loop is none the wiser. Metres are the number you actually have an
+    # opinion about ("stop 1 m short"); a box height fraction is a number you
+    # have to go measure. This just does that measurement arithmetically.
+    #
+    # Needs focal_frac AND target_height_m set (they are, below, for buckets).
+    # Uncalibrated, it falls back to standoff_size rather than inventing a
+    # threshold — approach keeps working, it just stops where it always did.
+    standoff_m: float = 0.0
     search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
 
     # --- Metric range (telemetry only; standoff above needs none of this) ---
@@ -343,6 +365,37 @@ class VisionConfig:
     # (rather than that formula) is what folds in any systematic tight/loose
     # box bias of the model, so no second correction factor is needed.
     focal_frac: float = 0.0
+
+    def resolved_standoff_size(self) -> float:
+        """The box height fraction object_align should actually stop at.
+
+        `standoff_m` if it is set and the robot is range-calibrated, else
+        `standoff_size` unchanged. This is the ONLY place metres turn into the
+        units the control loop speaks, and it runs at config time — not per
+        frame — so a mid-approach calibration change can't move the goalposts
+        under a latched arrival.
+
+        Stopping at a distance and stopping at a size are the same decision,
+        because size falls monotonically with distance: `size >= threshold` is
+        `distance <= standoff_m` written in the units the detector reports. So
+        there is no second control path here, just a change of units.
+
+        Uncalibrated is a FALLBACK, not a failure: standoff_size needs no
+        calibration and is what has always worked, so a robot nobody measured
+        still approaches and still stops — at its old distance. Silently, which
+        is the right trade for a stop threshold: refusing to stop (the strict
+        reading of "never invent a number") means driving into the bucket.
+        """
+        if self.standoff_m <= 0.0:
+            return self.standoff_size
+        size = size_at_m(self.standoff_m, self.focal_frac, self.target_height_m)
+        if size is None:
+            return self.standoff_size
+        # A standoff closer than the target can be framed at asks for a box
+        # taller than the frame, which never arrives — the robot would drive
+        # into it. Clamp: stop when it fills the frame, the closest geometry
+        # allows. For our 0.368 m bucket that binds below ~0.38 m.
+        return min(size, 1.0)
 
 
 @dataclass
