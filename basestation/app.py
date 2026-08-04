@@ -307,9 +307,13 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             dispatch(rid, {"type": name})
         elif name in TOGGLE_MECHANISMS:
             # Press to start, press again to stop. Sent WITHOUT "on" so the
-            # robot toggles from the state it is actually in — pressing the
-            # opposite direction while running switches direction rather than
-            # stopping. See Robot._set_mechanism.
+            # robot toggles from the state it is actually in, and so the robot
+            # can tell a latched command from a held one — only the held form
+            # arms a mechanism's dead-man. See Robot._set_mechanism.
+            #
+            # Holding spit while the intake is toggled on reverses it, and
+            # letting go stops the mechanism outright rather than restoring the
+            # latch: after clearing a jam, "off" is the state to come back to.
             mech, preset = TOGGLE_MECHANISMS[name]
             dispatch(rid, {"type": "mech", "mech": mech, "preset": preset})
         elif name == "shooter_spin":
@@ -323,7 +327,10 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # Press-to-toggle mechanism controls, addressed by preset.
     TOGGLE_MECHANISMS = {
         "intake": ("intake", "in"),
-        "intake_spit": ("intake", "out"),
+        # One press runs it, the next stops it — the robot flips the bool, so a
+        # press always means "the other state" even after an e-stop stopped it
+        # from underneath us.
+        "dumper": ("dumper", "run"),
     }
 
     # Which mechanism and preset each run-while-held control drives. Held
@@ -331,6 +338,7 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # frame cannot invert them; the robot additionally auto-stops any of these
     # that stops being refreshed.
     HELD_MECHANISMS = {
+        "intake_spit": ("intake", "out"),
         "feeder": ("feeder", "run"),
         "agitator": ("agitator", "run"),
         "agitator_rev": ("agitator", "reverse"),

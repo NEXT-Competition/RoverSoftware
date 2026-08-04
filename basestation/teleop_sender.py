@@ -11,8 +11,9 @@ your end-to-end teleop test today, and the seed of the full base station later.
     # no radio handy? print frames to the terminal to sanity-check:
     python -m basestation.teleop_sender
 
-Controls: R2 = forward, L2 = reverse, right stick X = steer. The robot does the
-arcade->tank mixing. Buttons map to mode switches / e-stop (see below).
+Controls: left stick Y = throttle, right stick X = steer (--triggers puts the
+throttle back on R2 forward / L2 reverse). The robot does the arcade->tank
+mixing. Buttons map to mode switches / e-stop (see below).
 
 Note: gamepad axis/button indices vary by OS and driver. If throttle/steer feel
 wrong, print `js.get_numaxes()` and the per-axis values and adjust AXIS_*.
@@ -30,6 +31,7 @@ from basestation.controller_input import (
     AXIS_L2,
     AXIS_R2,
     AXIS_STEER,
+    AXIS_THROTTLE,
     BTN_ALIGN,
     BTN_CLEAR,
     BTN_ESTOP,
@@ -66,6 +68,8 @@ def main():
     p.add_argument("--port", default=None, help="XBee serial port (omit to print to stdout)")
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--hz", type=float, default=20.0)
+    p.add_argument("--triggers", action="store_true",
+                   help="throttle on R2/L2 instead of the left stick")
     args = p.parse_args()
 
     if pygame is None:
@@ -84,7 +88,10 @@ def main():
     js = pygame.joystick.Joystick(0)
     js.init()
     print(f"Controller: {js.get_name()}  ({js.get_numaxes()} axes, {js.get_numbuttons()} buttons)")
-    print("R2 = forward, L2 = reverse, R-stick X = steer. Ctrl-C to quit.")
+    if args.triggers:
+        print("R2 = forward, L2 = reverse, R-stick X = steer. Ctrl-C to quit.")
+    else:
+        print("L-stick Y = throttle, R-stick X = steer. Ctrl-C to quit.")
 
     prev_buttons = {}
     l2, r2 = Trigger(), Trigger()
@@ -111,9 +118,14 @@ def main():
                 send(ser, {"type": "mode", "mode": "object_align"})
 
             naxes = js.get_numaxes()
-            fwd = r2.value(js.get_axis(AXIS_R2)) if naxes > AXIS_R2 else 0.0
-            rev = l2.value(js.get_axis(AXIS_L2)) if naxes > AXIS_L2 else 0.0
-            throttle = deadzone(fwd - rev)  # R2 forward, L2 reverse
+            if args.triggers:
+                fwd = r2.value(js.get_axis(AXIS_R2)) if naxes > AXIS_R2 else 0.0
+                rev = l2.value(js.get_axis(AXIS_L2)) if naxes > AXIS_L2 else 0.0
+                throttle = deadzone(fwd - rev)  # R2 forward, L2 reverse
+            else:
+                # Sticks report UP as negative, so the left stick is inverted.
+                raw = js.get_axis(AXIS_THROTTLE) if naxes > AXIS_THROTTLE else 0.0
+                throttle = deadzone(-raw)
             steer = deadzone(js.get_axis(AXIS_STEER)) if naxes > AXIS_STEER else 0.0
             send(ser, {"type": "drive", "throttle": round(throttle, 3), "steer": round(steer, 3)})
 

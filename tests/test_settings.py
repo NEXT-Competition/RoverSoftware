@@ -132,6 +132,21 @@ def test_two_actions_may_share_a_button():
     assert len(mapping.actions()) == 4
 
 
+def test_spitting_is_held_while_the_intake_toggles():
+    """The two intake directions are deliberately different shapes: taking in
+    runs for long stretches, spitting clears a jam and must stop on release."""
+    mapping = ControllerMapping(btn_intake=6, btn_intake_spit=4)
+    assert ("intake" in dict((n, i) for i, n in mapping.actions()))
+    assert ("intake_spit" in dict((n, i) for i, n in mapping.holds()))
+    # ...and never both, or a press would start it twice by two routes.
+    assert "intake_spit" not in dict((n, i) for i, n in mapping.actions())
+
+
+def test_the_dumper_is_a_press_once_action():
+    mapping = ControllerMapping(btn_shooter_spin=7)
+    assert dict((n, i) for i, n in mapping.actions())["shooter_spin"] == 7
+
+
 # --- trigger rest, per mapping ---------------------------------------------
 
 def test_trigger_honours_a_driver_that_rests_at_zero():

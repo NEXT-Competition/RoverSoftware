@@ -100,6 +100,7 @@ def _actuator_doc(m: MotorConfig) -> dict:
         "deadband": m.deadband,
         "max_forward": m.max_forward,
         "max_reverse": m.max_reverse,
+        "speed_scale": m.speed_scale,
     }
 
 
@@ -121,7 +122,8 @@ def _mechanism_doc(mech: MechanismConfig) -> dict:
             max_activations=mech.max_activations,
         )
     else:
-        doc.update(presets=mech.presets, auto_stop_seconds=mech.auto_stop_seconds)
+        doc.update(presets=mech.presets, auto_stop_seconds=mech.auto_stop_seconds,
+                   slew_rate=mech.slew_rate)
     return doc
 
 
@@ -382,6 +384,11 @@ def _validate_mechanism(raw: Any, errors: List[str],
                 mech.auto_stop_seconds = _clamp_float(raw["auto_stop_seconds"], 0, 300)
             except (TypeError, ValueError):
                 errors.append(f"{what}: auto_stop_seconds must be a number")
+        if "slew_rate" in raw:
+            try:
+                mech.slew_rate = _clamp_float(raw["slew_rate"], 0, 20)
+            except (TypeError, ValueError):
+                errors.append(f"{what}: slew_rate must be a number")
 
     return mech
 

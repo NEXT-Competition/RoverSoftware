@@ -245,3 +245,69 @@ def test_a_layout_reaches_all_the_way_to_the_hardware():
     dt.drive(0.8, 0.2)
     assert isinstance(dt, SteeredDrivetrain)
     assert dt.motors["rear"].throttle == pytest.approx(0.5)
+
+
+# --- per-motor speed trim ----------------------------------------------------
+
+def _trimmed(scale, throttle=1.0):
+    """One motor at `throttle`, trimmed by `scale`. Returns its servo angle."""
+    from robot.drive.motor import ESCMotor
+    m = ESCMotor(MotorConfig(channel=0, name="m", neutral_angle=5.0,
+                             max_angle=40.0, min_angle=-30.0, speed_scale=scale))
+    m.set_throttle(throttle)
+    return m.servo._last
+
+
+def test_the_speed_trim_scales_the_angle_away_from_neutral():
+    """Full throttle on a 35 degree throw lands on 40; at 0.9 it lands 10% of
+    the THROW short of it, not 10% short of the raw angle."""
+    assert _trimmed(1.0) == pytest.approx(40.0)
+    assert _trimmed(0.9) == pytest.approx(5.0 + 0.9 * 35.0)
+
+
+def test_the_speed_trim_applies_in_both_directions():
+    """It corrects a mechanical mismatch, which does not care which way the
+    motor turns — a side trimmed only going forward would still pull in
+    reverse."""
+    assert _trimmed(0.9, -1.0) == pytest.approx(5.0 - 0.9 * 35.0)
+
+
+def test_the_speed_trim_does_not_move_the_dead_band():
+    """Trimming must not change WHERE a motor starts moving, or the two sides
+    would break away at different stick positions — the very thing it fixes."""
+    dead = 0.02  # below the 0.03 default dead band
+    assert _trimmed(1.0, dead) == pytest.approx(5.0)
+    assert _trimmed(0.5, dead) == pytest.approx(5.0)
+
+
+def test_the_default_trim_is_inert():
+    """1.0 must map exactly as it did before the field existed, or every
+    deployed tuning.json and layout.json would quietly shift when it landed."""
+    for throttle in (-1.0, -0.4, 0.4, 1.0):
+        assert _trimmed(1.0, throttle) == pytest.approx(5.0 + throttle * 35.0)
+
+
+def test_trimming_the_faster_side_evens_a_tank_drive_up():
+    """The actual use: same command, two motors, matched output."""
+    cfg = DriveConfig(actuators={
+        "left": MotorConfig(channel=0, name="left"),
+        "right": MotorConfig(channel=1, name="right", speed_scale=0.9),
+    }, roles=DriveRoles(left=["left"], right=["right"]), slew_rate=0)
+    dt = TankDrivetrain(cfg)
+    dt.drive(1.0, 1.0)
+    left, right = dt.motors["left"], dt.motors["right"]
+    # Both were COMMANDED the same; only what reaches the hardware differs.
+    assert left.throttle == right.throttle == pytest.approx(1.0)
+    assert right.servo._last < left.servo._last
+    assert right.servo._last == pytest.approx(
+        cfg.actuators["right"].neutral_angle + 0.9 * 30.0)
+
+
+def test_the_trim_survives_a_round_trip_through_a_layout():
+    """It is a layout field, so a saved document has to carry it — a trim that
+    silently reset to 1.0 on reboot would read as the robot drifting again."""
+    cfg = RobotConfig()
+    cfg.drive.actuators["right"].speed_scale = 0.9
+    result = layout.apply(RobotConfig(), layout.to_doc(cfg))
+    assert result.ok, result.errors
+    assert result.drive.actuators["right"].speed_scale == pytest.approx(0.9)

@@ -199,6 +199,16 @@ export function MechanismCard({ mech }: { mech: MechanismSpec }) {
               onChange={(v) => set("auto_stop_seconds", v)}
               hint="Stop this long after being told to run. 0 = run until stopped."
             />
+            <NumberField
+              label="Spin-up ramp"
+              unit="/s"
+              value={mech.slew_rate ?? 0}
+              min={0}
+              max={20}
+              step={0.1}
+              onChange={(v) => set("slew_rate", v)}
+              hint="Limits how fast it winds UP. A flywheel told to go from stop to full in one step asks its ESC for a current it cannot give, and the ESC cuts out. 0 = go straight there. Stopping is never ramped."
+            />
             <PresetEditor mech={mech} />
           </>
         )}

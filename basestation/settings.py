@@ -53,10 +53,13 @@ class ControllerMapping:
     axis_steer: int = 2  # right stick X
     axis_l2: int = 4  # L2 analog trigger -> reverse
     axis_r2: int = 5  # R2 analog trigger -> forward
-    # Arcade drive on a stick. UNBOUND keeps the R2-forward/L2-reverse trigger
-    # behaviour; >= 0 names a stick axis for throttle and takes the drivetrain
-    # off the triggers entirely, which frees them to be ordinary buttons.
-    axis_throttle: int = UNBOUND
+    # Throttle source. The default is TWO-STICK drive: left stick Y here, right
+    # stick X in axis_steer, which is what a driver expects and what lets one
+    # hand hold a speed while the other works the steering. UNBOUND (-1) falls
+    # back to the old R2-forward/L2-reverse trigger throttle; any value >= 0
+    # names a stick axis and takes the drivetrain off the triggers entirely,
+    # which frees them to be ordinary buttons.
+    axis_throttle: int = 1  # left stick Y
     # Sticks report UP as negative, so a stick throttle is inverted by default.
     # Triggers are not, which is why this is separate from invert_steer.
     invert_throttle: bool = True
@@ -94,12 +97,18 @@ class ControllerMapping:
     # one is ShooterAlignController's armed/dwelled shot, these work while
     # driving.
     #
-    # The flywheel and both intake directions TOGGLE (see actions()): they run
-    # for long stretches and holding a button through a match is not a thing
-    # anyone wants. The feeder and the agitator RUN WHILE HELD (see holds() and
-    # hat_holds()), which is also what lets them carry a dead-man timeout —
-    # a toggled mechanism cannot, because nothing is refreshing it.
+    # The launcher, the dumper and the intake's IN direction TOGGLE (see
+    # actions()): they run for long stretches and holding a button through a
+    # match is not a thing anyone wants. Spitting, the feeder and the agitator
+    # RUN WHILE HELD (see holds() and hat_holds()) — they undo a jam or feed a
+    # shot, so letting go is the stop. Held controls are also the only ones that
+    # can carry a dead-man timeout, because they are the only ones anything is
+    # refreshing.
     btn_shooter_spin: int = UNBOUND
+    # A dumper is a plain motor that runs until it is switched off again, so it
+    # is a mechanism rather than the built-in launcher: no arming, no dwell, no
+    # magazine, and a press is a bool flip rather than a firing cycle.
+    btn_dumper: int = UNBOUND
     btn_intake: int = UNBOUND
     btn_intake_spit: int = UNBOUND
     btn_feeder: int = UNBOUND
@@ -125,8 +134,8 @@ class ControllerMapping:
             (self.btn_arm_shooter, "arm_shooter"),
             (self.btn_fire, "fire"),
             (self.btn_shooter_spin, "shooter_spin"),
+            (self.btn_dumper, "dumper"),
             (self.btn_intake, "intake"),
-            (self.btn_intake_spit, "intake_spit"),
         )
         return tuple((idx, name) for idx, name in pairs if idx is not None and idx >= 0)
 
@@ -141,6 +150,10 @@ class ControllerMapping:
         """
         pairs = (
             (self.btn_feeder, "feeder"),
+            # Spitting is held, not toggled: it clears a jam, and the operator
+            # wants it to stop the moment they let go rather than needing a
+            # second press while the robot is throwing something out.
+            (self.btn_intake_spit, "intake_spit"),
         )
         return tuple((idx, name) for idx, name in pairs if idx is not None and idx >= 0)
 
@@ -193,6 +206,7 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.btn_arm_shooter", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_fire", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_shooter_spin", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_dumper", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_intake", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_intake_spit", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_feeder", "int", lo=UNBOUND, hi=31),

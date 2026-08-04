@@ -90,6 +90,12 @@ class ESCMotor:
         throw = max(0.0, min(self.cfg.max_angle - self.cfg.neutral_angle,
                              self.cfg.neutral_angle - self.cfg.min_angle))
         cmd *= self.cfg.max_forward if cmd > 0 else self.cfg.max_reverse
+        # Speed trim last, and in both directions: it corrects a mechanical
+        # mismatch between two motors, which does not care which way they turn.
+        # After the dead band on purpose — trimming a motor to 0.9 must not also
+        # move where its dead band starts, or the two sides would begin moving
+        # at different stick positions, which is the very thing this fixes.
+        cmd *= _clamp(self.cfg.speed_scale, 0.0, 1.0)
         self.servo.angle(self.cfg.neutral_angle + cmd * throw)
 
     def set_angle(self, degrees: float) -> None:

@@ -106,9 +106,9 @@ def test_a_changed_value_is_written():
     assert m.motors["roller"].servo._last is not None
 
 
-def test_auto_stop_releases_the_mechanism_on_its_own():
+def test_auto_stop_releases_a_held_mechanism_on_its_own():
     m = PowerMechanism(intake_cfg(auto_stop_seconds=0.02))
-    m.set_power(1.0)
+    m.set_power(1.0, hold=True)
     time.sleep(0.03)
     m.update()
     assert m.motors["roller"].throttle == 0.0
@@ -119,6 +119,47 @@ def test_auto_stop_does_not_fire_while_the_mechanism_is_idle():
     time.sleep(0.02)
     m.update()  # must not raise or do anything odd
     assert m.motors["roller"].throttle == 0.0
+
+
+def test_a_latched_command_is_not_subject_to_the_dead_man():
+    """A press-once toggle means "run until told to stop". Nothing refreshes it,
+    so applying the held control's timeout to it would stop it a moment later."""
+    m = PowerMechanism(intake_cfg(auto_stop_seconds=0.02))
+    m.apply_preset("in")  # hold defaults to False
+    time.sleep(0.03)
+    m.update()
+    assert m.motors["roller"].throttle == 1.0
+
+
+def test_a_held_preset_stops_when_it_stops_being_refreshed():
+    m = PowerMechanism(intake_cfg(auto_stop_seconds=0.02))
+    m.apply_preset("out", hold=True)
+    assert m.motors["roller"].throttle == -1.0
+    time.sleep(0.03)
+    m.update()
+    assert m.motors["roller"].throttle == 0.0
+
+
+def test_refreshing_a_held_preset_keeps_it_running():
+    """What the gamepad's repeat does: re-announcing a held control several
+    times a second is what keeps pushing the dead-man out."""
+    m = PowerMechanism(intake_cfg(auto_stop_seconds=0.05))
+    for _ in range(4):
+        m.apply_preset("out", hold=True)
+        time.sleep(0.02)
+        m.update()
+    assert m.motors["roller"].throttle == -1.0
+
+
+def test_latching_clears_a_dead_man_armed_by_a_held_command():
+    """Holding spit and then toggling the intake on must not leave the toggle
+    carrying the spit's timeout — it would stop on its own a moment later."""
+    m = PowerMechanism(intake_cfg(auto_stop_seconds=0.02))
+    m.apply_preset("out", hold=True)
+    m.apply_preset("in")
+    time.sleep(0.03)
+    m.update()
+    assert m.motors["roller"].throttle == 1.0
 
 
 def test_status_reports_what_each_actuator_is_doing():
@@ -298,3 +339,95 @@ def test_mechanism_state_reaches_telemetry(rover):
     rover.mechanisms["intake"].apply_preset("in")
     telemetry = rover._telemetry(DriveCommand.stopped())
     assert telemetry["mech"]["intake"]["values"]["roller"] == 1.0
+
+
+# --- spin-up ramp ------------------------------------------------------------
+#
+# A flywheel commanded from neutral to full in one PWM step asks its ESC for a
+# current it cannot deliver, and the ESC's own protection cuts out: the wheel
+# spins up hard and then dies while the software still believes it is running.
+# The drivetrain has never driven its ESCs with a step for the same reason.
+
+def _flywheel(rate=10.0):
+    """One actuator, ramping at `rate` per second. 10/s = full in 0.1 s."""
+    cfg = MechanismConfig(
+        name="flywheel", kind="power",
+        actuators={"motor": MotorConfig(channel=2, name="motor")},
+        presets={"run": {"motor": 1.0}},
+        slew_rate=rate,
+    )
+    return PowerMechanism(cfg)
+
+
+def test_a_ramped_mechanism_does_not_jump_on_the_command():
+    """The whole point: the first thing the ESC sees must not be full power."""
+    m = _flywheel()
+    m.apply_preset("run")
+    assert m.motors["motor"].throttle == 0.0
+
+
+def test_a_ramp_climbs_to_the_commanded_value():
+    m = _flywheel()
+    m.apply_preset("run")
+    end = time.monotonic() + 2.0
+    while m.motors["motor"].throttle < 1.0 and time.monotonic() < end:
+        m.update()
+        time.sleep(0.005)
+    assert m.motors["motor"].throttle == pytest.approx(1.0)
+
+
+def test_a_ramp_climbs_gradually_rather_than_in_one_step():
+    m = _flywheel(rate=2.0)  # full in 0.5 s
+    m.apply_preset("run")
+    time.sleep(0.05)
+    m.update()
+    partial = m.motors["motor"].throttle
+    assert 0.0 < partial < 1.0, f"expected a partial value, got {partial}"
+
+
+def test_stopping_is_never_ramped():
+    """An e-stop that eased a flywheel to a halt would be a bug."""
+    m = _flywheel(rate=0.5)  # slow enough that a ramped stop would be visible
+    m.apply_preset("run")
+    for _ in range(10):
+        m.update()
+        time.sleep(0.01)
+    assert m.motors["motor"].throttle > 0.0
+    m.stop()
+    assert m.motors["motor"].throttle == 0.0
+
+
+def test_a_ramping_mechanism_still_reports_what_it_was_told_to_do():
+    """Robot._set_mechanism decides whether a bare toggle means start or stop by
+    comparing status() against the preset. Reporting the part-way output would
+    never match, so pressing the button mid-spin-up would restart the wheel
+    instead of stopping it."""
+    m = _flywheel(rate=1.0)
+    m.apply_preset("run")
+    m.update()
+    assert m.status()["values"]["motor"] == pytest.approx(1.0)
+    assert m.status()["output"]["motor"] < 1.0
+
+
+def test_an_unramped_mechanism_is_unchanged():
+    """slew_rate 0 is what every mechanism did before this existed, and what
+    the intake, feeder and agitator still do."""
+    m = PowerMechanism(intake_cfg())
+    m.apply_preset("in")
+    assert m.motors["roller"].throttle == pytest.approx(1.0)
+    assert "output" not in m.status()
+
+
+def test_a_ramp_restarts_from_where_the_output_actually_is():
+    """A mechanism that sat at its target must not be handed all the elapsed
+    time as one step the next time it is commanded."""
+    m = _flywheel(rate=2.0)
+    m.apply_preset("run")
+    end = time.monotonic() + 2.0
+    while m.motors["motor"].throttle < 1.0 and time.monotonic() < end:
+        m.update()
+        time.sleep(0.005)
+    m.stop()
+    time.sleep(0.3)          # idle, accumulating wall-clock
+    m.apply_preset("run")
+    assert m.motors["motor"].throttle == 0.0, "the idle gap became a free step"

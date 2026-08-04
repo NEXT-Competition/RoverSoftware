@@ -70,64 +70,150 @@ class PowerMechanism(Mechanism):
 
     def __init__(self, config: MechanismConfig):
         super().__init__(config)
+        # What was ASKED for, per actuator. Distinct from what is currently
+        # written to the hardware once a ramp is involved — see _ramp_to.
         self._values: Dict[str, float] = {name: 0.0 for name in self.motors}
+        self._output: Dict[str, float] = {name: 0.0 for name in self.motors}
         self._deadline: Optional[float] = None
+        self._ramped: Optional[float] = None  # monotonic time of the last step
 
-    def set_power(self, power: float, actuator: Optional[str] = None) -> bool:
-        """Drive one actuator, or all of them when `actuator` is None."""
+    def set_power(self, power: float, actuator: Optional[str] = None,
+                  hold: bool = False) -> bool:
+        """Drive one actuator, or all of them when `actuator` is None.
+
+        `hold` marks this as a RUN-WHILE-HELD command — see `_arm_auto_stop`.
+        """
         targets = ([actuator] if actuator is not None else list(self.motors))
         ok = True
         for name in targets:
-            motor = self.motors.get(name)
-            if motor is None:
+            if name not in self.motors:
                 ok = False
                 continue
-            value = _clamp(power)
-            # See the module docstring: never write an unchanged value.
-            if self._values.get(name) == value:
-                continue
-            self._values[name] = value
-            motor.set_throttle(value)
-        self._arm_auto_stop()
+            self._command(name, power)
+        self._write()
+        self._arm_auto_stop(hold)
         return ok
 
-    def apply_preset(self, name: str) -> bool:
+    def _command(self, name: str, power: float) -> None:
+        """Set one actuator's target, restarting the ramp if it moved.
+
+        Restarting matters: `_write` measures a step from the last time the
+        output moved, so a mechanism that sat at its target for a minute would
+        otherwise be handed a minute's worth of step on the next command and
+        jump straight there — exactly the step the ramp exists to avoid.
+        """
+        value = _clamp(power)
+        if value != self._values.get(name):
+            self._ramped = None
+        self._values[name] = value
+
+    def _write(self) -> None:
+        """Push the current output at the hardware, ramping if asked to.
+
+        With slew_rate 0 the output IS the commanded value and this is the
+        straight-through write every mechanism has always done. Above 0 the
+        output only closes on the command at that many units per second, so a
+        flywheel's ESC sees a ramp instead of a step it will refuse.
+
+        Winding DOWN is never limited: `stop()` has to be immediate, and a
+        mechanism easing itself to a halt through an e-stop would be a bug.
+        """
+        now = time.monotonic()
+        rate = max(0.0, float(self.cfg.slew_rate))
+        if rate <= 0:
+            step = None          # no limit: the output IS the command
+        elif self._ramped is None:
+            step = 0.0           # a ramp begins now, so nothing moves yet
+        else:
+            step = rate * (now - self._ramped)
+        self._ramped = now
+        for name, motor in self.motors.items():
+            want = self._values.get(name, 0.0)
+            out = self._output.get(name, 0.0)
+            if step is not None and abs(want) > abs(out) and want * out >= 0:
+                # Same direction and further from zero: this is a wind-up.
+                out = out + _clamp(want - out, -step, step)
+            else:
+                out = want
+            # See the module docstring: never write an unchanged value.
+            if out == self._output.get(name):
+                continue
+            self._output[name] = out
+            motor.set_throttle(out)
+
+    def apply_preset(self, name: str, hold: bool = False) -> bool:
         """Drive every actuator to the values of a named preset.
 
         Actuators the preset doesn't mention are set to zero rather than left
         where they were: a preset describes the whole mechanism's state, and a
         roller still spinning because the previous preset named it and this one
         doesn't is a surprise nobody wants near their hands.
+
+        `hold` marks this as a RUN-WHILE-HELD command — see `_arm_auto_stop`.
         """
         preset = self.cfg.presets.get(name)
         if preset is None:
             return False
         for act in self.motors:
-            self.set_power(preset.get(act, 0.0), act)
-        self._arm_auto_stop()
+            self._command(act, preset.get(act, 0.0))
+        self._write()
+        self._arm_auto_stop(hold)
         return True
 
-    def _arm_auto_stop(self) -> None:
+    def _arm_auto_stop(self, hold: bool) -> None:
+        """Arm the dead-man, but only for a run-while-held command.
+
+        `auto_stop_seconds` is the dead-man for controls the operator is
+        physically holding: those re-announce themselves several times a second,
+        so a lost release frame costs a fraction of a second of extra running
+        instead of a mechanism nobody can stop.
+
+        It deliberately does NOT apply to a latched command — a press-once
+        toggle, a routine's `mech_preset`. Those mean "run until told to stop",
+        and one mechanism can be driven both ways: an intake that toggles IN and
+        is held to SPIT wants the dead-man on the second and would be unusable
+        with it on the first. Which one this is comes from the caller, because
+        only the caller knows whether anything is still refreshing it.
+        """
         running = any(v != 0.0 for v in self._values.values())
-        if running and self.cfg.auto_stop_seconds > 0:
+        if running and hold and self.cfg.auto_stop_seconds > 0:
             self._deadline = time.monotonic() + self.cfg.auto_stop_seconds
-        elif not running:
+        else:
+            # Stopped, or latched. Either way clear the deadline rather than
+            # leaving it: toggling the intake on while a held spit's dead-man
+            # was still armed would otherwise inherit it and stop a second later.
             self._deadline = None
 
     def update(self) -> None:
         if self._deadline is not None and time.monotonic() >= self._deadline:
             self._deadline = None
             self.stop()
+            return
+        # Advance a ramp. Ticked from Robot.run() for every mechanism, every
+        # tick, which is what lets a wind-up continue after the command that
+        # started it has been dealt with.
+        if self.cfg.slew_rate > 0 and self._output != self._values:
+            self._write()
 
     def stop(self) -> None:
         self._deadline = None
+        self._ramped = None
         for name, motor in self.motors.items():
             self._values[name] = 0.0
+            self._output[name] = 0.0
             motor.stop()
 
     def status(self) -> dict:
-        return {"kind": "power",
-                "values": {k: round(v, 3) for k, v in self._values.items()}}
+        # `values` is what the mechanism was TOLD to do, not what has reached
+        # the hardware yet. Load-bearing: Robot._set_mechanism decides whether a
+        # bare toggle means start or stop by comparing this against the preset,
+        # and a value still ramping would never match — pressing the button
+        # during a spin-up would restart it instead of stopping it.
+        out = {"kind": "power",
+               "values": {k: round(v, 3) for k, v in self._values.items()}}
+        if self.cfg.slew_rate > 0:
+            out["output"] = {k: round(v, 3) for k, v in self._output.items()}
+        return out
 
 
 class PulseMechanism(Mechanism):

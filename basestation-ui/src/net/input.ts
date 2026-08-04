@@ -1,5 +1,5 @@
-// The on-screen joystick's input loop. One requestAnimationFrame pump feeds the
-// rate-limited drive sender from whatever the touch pad is reporting.
+// The on-screen joysticks' input loop. One requestAnimationFrame pump feeds the
+// rate-limited drive sender from the combined throttle and steering pads.
 //
 // --- Why there is no gamepad here ---
 // A physical controller is read on the base station itself, by pygame
@@ -37,7 +37,7 @@
 import { signal } from "@preact/signals";
 import { deadzone, makeDriveSender } from "./drive.ts";
 
-/** Set by the DrivePad while a thumb is down; null when released. */
+/** Set by the DrivePad while either thumb is down; null when both are released. */
 export const padInput = signal<{ throttle: number; steer: number } | null>(null);
 
 const sender = makeDriveSender();

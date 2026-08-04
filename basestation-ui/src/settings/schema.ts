@@ -135,6 +135,12 @@ function motorGroup(p: string, title: string): Group {
       f(`${p}.max_reverse`, "Reverse cap", 0, 1, 0.01, {
         help: "Safety cap on reverse throttle.",
       }),
+      f(`${p}.speed_scale`, "Speed trim", 0, 1, 0.01, {
+        help:
+          "Corrects a motor that runs faster than its partner, both directions. " +
+          "Scale the FASTER side down until the robot tracks straight — 0.9 runs " +
+          "it at 90%. Not a safety cap; that is what the two above are.",
+      }),
       i(`${p}.channel`, "PWM channel", 0, 15, {
         live: false,
         help: "Fusion HAT channel. Unique across the robot — the layout refuses two actuators on one.",
@@ -482,7 +488,16 @@ export const BASE_GROUPS: Group[] = [
 
 // --- gamepad mapping -------------------------------------------------------
 
+/** Index used by a binding that is deliberately unassigned. */
+export const UNBOUND = -1;
+
+// Two-stick drive is the default: throttle on the left stick's Y, steering on
+// the right stick's X. Clearing the throttle axis (UNBOUND) is what puts the
+// throttle back on the triggers, which is why those two stay listed here.
 export const AXIS_FIELDS: Field[] = [
+  i("controller.axis_throttle", "Throttle axis", UNBOUND, 15, {
+    help: "Left stick Y by default. Clear it to drive from the triggers instead.",
+  }),
   i("controller.axis_steer", "Steer axis", 0, 15),
   i("controller.axis_r2", "Forward trigger axis", 0, 15),
   i("controller.axis_l2", "Reverse trigger axis", 0, 15),
@@ -498,6 +513,27 @@ export const BUTTON_FIELDS: { path: string; label: string; help?: string }[] = [
   { path: "controller.btn_waypoint", label: "Mode: waypoint" },
   { path: "controller.btn_arm_shooter", label: "Arm shooter" },
   { path: "controller.btn_fire", label: "Fire" },
+  // Manual mechanism controls. The (hold) ones run only while the button is
+  // down; the rest are press-once toggles. Which is which is not a preference —
+  // it is settings.py::actions() vs holds() — so it is stated in the label
+  // rather than left for an operator to discover on a robot that is moving.
+  { path: "controller.btn_intake", label: "Intake" },
+  {
+    path: "controller.btn_intake_spit",
+    label: "Intake spit (hold)",
+    help: "Runs the intake backwards while held, to clear a jam.",
+  },
+  {
+    path: "controller.btn_dumper",
+    label: "Dumper",
+    help: "Press to run it, press again to stop. A `dumper` mechanism in the layout decides which way and how fast.",
+  },
+  {
+    path: "controller.btn_shooter_spin",
+    label: "Shooter spin",
+    help: "The built-in launcher: one shot per press on a servo build, or toggles the wheel on a flywheel one.",
+  },
+  { path: "controller.btn_feeder", label: "Feeder (hold)" },
 ];
 
 export const FEEL_FIELDS: Field[] = [
@@ -514,10 +550,10 @@ export const FEEL_FIELDS: Field[] = [
     help: "Lower it for a chassis that darts.",
   }),
   b("controller.invert_steer", "Invert steering"),
+  b("controller.invert_throttle", "Invert throttle", {
+    help: "Sticks report UP as negative, so a stick throttle wants this on. Turn it off for a trigger throttle.",
+  }),
 ];
-
-/** Index used by a binding that is deliberately unassigned. */
-export const UNBOUND = -1;
 
 const ALL_FIELDS: Field[] = [
   ...ROBOT_GROUPS.flatMap((g) => g.fields),

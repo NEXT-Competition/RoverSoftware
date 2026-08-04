@@ -1,0 +1,174 @@
+{
+  "drive": {
+    "actuators": [
+      {
+        "channel": 0,
+        "deadband": 0.03,
+        "inverted": false,
+        "kind": "esc",
+        "label": "Left",
+        "max_angle": 35.0,
+        "max_forward": 1.0,
+        "max_reverse": 1.0,
+        "min_angle": -25.0,
+        "name": "left",
+        "neutral_angle": 5.0,
+        "speed_scale": 1.0
+      },
+      {
+        "channel": 1,
+        "deadband": 0.03,
+        "inverted": false,
+        "kind": "esc",
+        "label": "Right",
+        "max_angle": 35.0,
+        "max_forward": 1.0,
+        "max_reverse": 1.0,
+        "min_angle": -25.0,
+        "name": "right",
+        "neutral_angle": 5.0,
+        "speed_scale": 0.9
+      }
+    ],
+    "arm_seconds": 2.0,
+    "kind": "tank",
+    "min_pivot_throttle": 0.15,
+    "roles": {
+      "left": [
+        "left"
+      ],
+      "right": [
+        "right"
+      ],
+      "steer": "",
+      "throttle": []
+    },
+    "slew_rate": 4.0,
+    "steer_gain": 1.0
+  },
+  "mechanisms": [
+    {
+      "actuators": [
+        {
+          "channel": 3,
+          "deadband": 0.03,
+          "inverted": false,
+          "kind": "esc",
+          "label": "Roller",
+          "max_angle": 40.0,
+          "max_forward": 1.0,
+          "max_reverse": 1.0,
+          "min_angle": -30.0,
+          "name": "roller",
+          "neutral_angle": 5.0,
+          "speed_scale": 1.0
+        }
+      ],
+      "auto_stop_seconds": 0.5,
+      "enabled": true,
+      "kind": "power",
+      "label": "Intake",
+      "name": "intake",
+      "presets": {
+        "in": {
+          "roller": -1.0
+        },
+        "out": {
+          "roller": 1.0
+        }
+      },
+      "slew_rate": 0.0
+    },
+    {
+      "actuators": [
+        {
+          "channel": 2,
+          "deadband": 0.03,
+          "inverted": false,
+          "kind": "esc",
+          "label": "Flywheel",
+          "max_angle": 60.0,
+          "max_forward": 1.0,
+          "max_reverse": 1.0,
+          "min_angle": -50.0,
+          "name": "motor",
+          "neutral_angle": 5.0,
+          "speed_scale": 1.0
+        }
+      ],
+      "auto_stop_seconds": 0.0,
+      "enabled": true,
+      "kind": "power",
+      "label": "Flywheel",
+      "name": "dumper",
+      "presets": {
+        "run": {
+          "motor": -1.0
+        }
+      },
+      "slew_rate": 1.0
+    },
+    {
+      "actuators": [
+        {
+          "channel": 4,
+          "deadband": 0.03,
+          "inverted": false,
+          "kind": "esc",
+          "label": "Feeder",
+          "max_angle": 50.0,
+          "max_forward": 1.0,
+          "max_reverse": 1.0,
+          "min_angle": -40.0,
+          "name": "feeder",
+          "neutral_angle": 5.0,
+          "speed_scale": 1.0
+        }
+      ],
+      "auto_stop_seconds": 0.5,
+      "enabled": true,
+      "kind": "power",
+      "label": "Feeder",
+      "name": "feeder",
+      "presets": {
+        "run": {
+          "feeder": 1.0
+        }
+      },
+      "slew_rate": 0.0
+    },
+    {
+      "actuators": [
+        {
+          "channel": 5,
+          "deadband": 0.03,
+          "inverted": false,
+          "kind": "esc",
+          "label": "Agitator",
+          "max_angle": 90.0,
+          "max_forward": 1.0,
+          "max_reverse": 1.0,
+          "min_angle": -80.0,
+          "name": "agitator",
+          "neutral_angle": 5.0,
+          "speed_scale": 1.0
+        }
+      ],
+      "auto_stop_seconds": 0.5,
+      "enabled": true,
+      "kind": "power",
+      "label": "Agitator",
+      "name": "agitator",
+      "presets": {
+        "reverse": {
+          "agitator": -1.0
+        },
+        "run": {
+          "agitator": 1.0
+        }
+      },
+      "slew_rate": 0.0
+    }
+  ],
+  "version": 1
+}

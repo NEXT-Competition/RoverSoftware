@@ -818,7 +818,11 @@ class Robot:
             return
 
         values = mech.status().get("values", {})
-        if "on" in msg:
+        # The explicit form is what a run-while-held control sends, and it is
+        # the only form anything keeps refreshing — so it is also the only one
+        # that may arm the mechanism's dead-man. See PowerMechanism._arm_auto_stop.
+        held = "on" in msg
+        if held:
             want = bool(msg["on"])
         else:
             # Toggle, but against THIS preset rather than against "is anything
@@ -837,7 +841,7 @@ class Robot:
 
         if want:
             preset = str(msg.get("preset") or "in")
-            if not mech.apply_preset(preset):
+            if not mech.apply_preset(preset, hold=held):
                 print(f"[Robot] mech refused: {name!r} has no preset "
                       f"{preset!r} (have: {sorted(mech.cfg.presets)})")
                 return

@@ -14,7 +14,7 @@
 # Set up an SSH key too (`ssh-copy-id pi@rover1.local`) or every recipe below
 # asks for the login password once per ssh/scp.
 
-host    := env_var_or_default("ROBOT_HOST", "Northeast.local")
+host    := env_var_or_default("ROBOT_HOST", "northeast.local")
 user    := env_var_or_default("ROBOT_USER", "pi")
 version := "0.1.0"
 
@@ -141,6 +141,25 @@ sync:
         {{target}}:{{app_dir}}/
     # ssh {{target}} "sudo systemctl restart {{service}}"
     @echo "==> synced to {{host}} and restarted {{service}}"
+
+# Regenerate the checked-in layout documents from packaging/layouts/*.py.
+# Every document is run through the robot's own validator; commit the results.
+layouts:
+    python3 packaging/layouts/build_layouts.py
+
+# Push a layout document to a rover. A layout takes effect on the NEXT START
+# (see robot/layout.py), so this restarts the service for you.
+#     just push-layout packaging/layouts/east.json
+#     just host=bot2.local push-layout packaging/layouts/shooter.json
+#
+# Both documents put a mechanism on channel 2, so the target rover needs
+# RS_SHOOTER_ENABLED=0 (`just config`) or the built-in launcher wins the channel
+# and the mechanism is disabled with an error in the log.
+push-layout FILE:
+    scp {{FILE}} {{target}}:/tmp/layout.json
+    ssh -t {{target}} "sudo install -o root -g root -m 644 /tmp/layout.json \
+        /var/lib/roversoftware/layout.json && sudo systemctl restart {{service}}"
+    @echo "==> pushed {{FILE}} to {{host}}; check it applied: just logs"
 
 # Service controls.
 restart:

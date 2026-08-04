@@ -1,5 +1,5 @@
-"""The two gamepad-bound mechanism commands: {"type":"intake"} and
-{"type":"shooter_spin"}.
+"""The gamepad-bound mechanism commands: {"type":"intake"}, {"type":"mech"}
+(any layout mechanism, e.g. the dumper) and {"type":"shooter_spin"}.
 
 Both exist because `fire` and `jog` cannot serve this case. `fire` is answered
 only by ShooterAlignController, so it does nothing in teleop; `jog` is gated to
@@ -10,6 +10,7 @@ with their own (much smaller) rules: the e-stop, and nothing else.
 
 import json
 import os
+import time
 
 import pytest
 
@@ -23,14 +24,37 @@ from robot.robot import Robot
 
 
 INTAKE_CHANNEL = 3
-# neutral 5 with min -30 / max 40 gives a symmetric throw of
-# min(40 - 5, 5 - -30) = 35, so a preset of -1.0 lands exactly on -30 degrees.
-INTAKE_ANGLE = -30.0
+# Fusion HAT literal angles. Neutral is 5 — the value that stops a motor fully —
+# and min -30 / max 40 gives a symmetric throw of min(40 - 5, 5 - -30) = 35, so
+# a preset of +1.0 lands exactly on 40 degrees and -1.0 on -30.
+DUMPER_CHANNEL = 2
+INTAKE_ANGLE = 40.0   # "in", full forward
+SPIT_ANGLE = -30.0    # "out", full reverse
+DUMPER_ANGLE = -30.0  # the dumper runs one way only, at full reverse
+NEUTRAL_ANGLE = 5.0   # stopped, and the pulse that keeps the ESC armed
 
 
-def _layout_doc():
+def _layout_doc(dumper=False):
     cfg = RobotConfig()
     doc = layout.to_doc(cfg)
+    if dumper:
+        # The real shape of this build: no built-in launcher, so channel 2 is
+        # free for a dumper that is just a motor with an on/off state.
+        doc["mechanisms"].append({
+            "name": "dumper",
+            "label": "Dumper",
+            "kind": "power",
+            "enabled": True,
+            "actuators": [{
+                "name": "motor", "label": "Dumper", "kind": "esc",
+                "channel": DUMPER_CHANNEL, "inverted": False,
+                "neutral_angle": NEUTRAL_ANGLE, "max_angle": INTAKE_ANGLE,
+                "min_angle": DUMPER_ANGLE,
+                "deadband": 0.03, "max_forward": 1.0, "max_reverse": 1.0,
+            }],
+            "presets": {"run": {"motor": -1.0}},
+            "auto_stop_seconds": 0.0,
+        })
     doc["mechanisms"].append({
         "name": "intake",
         "label": "Intake",
@@ -39,10 +63,11 @@ def _layout_doc():
         "actuators": [{
             "name": "roller", "label": "Roller", "kind": "esc",
             "channel": INTAKE_CHANNEL, "inverted": False,
-            "neutral_angle": 5.0, "max_angle": 40.0, "min_angle": INTAKE_ANGLE,
+            "neutral_angle": NEUTRAL_ANGLE, "max_angle": INTAKE_ANGLE,
+            "min_angle": SPIT_ANGLE,
             "deadband": 0.03, "max_forward": 1.0, "max_reverse": 1.0,
         }],
-        "presets": {"in": {"roller": -1.0}},
+        "presets": {"in": {"roller": 1.0}, "out": {"roller": -1.0}},
         "auto_stop_seconds": 0.0,
     })
     return doc
@@ -56,6 +81,17 @@ def _robot(target_rpm=0.0):
     for sub in ("gps", "imu", "vision", "camera", "fpv"):
         getattr(cfg, sub).enabled = False
     result = layout.apply(cfg, _layout_doc())
+    assert result.ok, result.errors
+    return Robot(cfg)
+
+
+def _dumper_robot():
+    """This build: the launcher disabled, and a dumper mechanism on channel 2."""
+    cfg = RobotConfig()
+    cfg.shooter.enabled = False
+    for sub in ("gps", "imu", "vision", "camera", "fpv"):
+        getattr(cfg, sub).enabled = False
+    result = layout.apply(cfg, _layout_doc(dumper=True))
     assert result.ok, result.errors
     return Robot(cfg)
 
@@ -77,14 +113,17 @@ def test_intake_layout_validates_against_the_reserved_shooter_channel():
     assert result.mechanisms["intake"].actuators["roller"].channel == INTAKE_CHANNEL
 
 
-def test_the_preset_commands_exactly_minus_thirty_degrees():
-    """The requested speed is an ANGLE, and the symmetric-throw mapping is what
-    decides whether it is reachable: with the stock +-25/35 endpoints full
-    reverse stops at -25, so the endpoints are widened rather than the preset
-    pushed past -1.0 (which would simply clamp)."""
+def test_the_presets_command_exactly_the_requested_angles():
+    """The requested speeds are ANGLES, and the symmetric-throw mapping is what
+    decides whether they are reachable: the throw is the NARROWER side of
+    neutral, so 5/-30/40 gives 35 either way and both endpoints land exactly.
+    Widen the endpoints to reach an angle — pushing a preset past +-1.0 only
+    clamps."""
     robot = _robot()
-    _send(robot, {"type": "intake", "on": True})
+    _send(robot, {"type": "intake", "preset": "in", "on": True})
     assert _roller(robot)._last == INTAKE_ANGLE
+    _send(robot, {"type": "intake", "preset": "out", "on": True})
+    assert _roller(robot)._last == SPIT_ANGLE
 
 
 # --- intake ------------------------------------------------------------------
@@ -94,7 +133,7 @@ def test_a_bare_message_toggles():
     _send(robot, {"type": "intake"})
     assert _roller(robot)._last == INTAKE_ANGLE
     _send(robot, {"type": "intake"})
-    assert _roller(robot)._last == 5.0  # neutral: the ESC stays armed
+    assert _roller(robot)._last == NEUTRAL_ANGLE  # the ESC stays armed
 
 
 def test_an_explicit_state_is_idempotent():
@@ -105,7 +144,76 @@ def test_an_explicit_state_is_idempotent():
         assert _roller(robot)._last == INTAKE_ANGLE
     for _ in range(3):
         _send(robot, {"type": "intake", "on": False})
-        assert _roller(robot)._last == 5.0
+        assert _roller(robot)._last == NEUTRAL_ANGLE
+
+
+def test_only_the_explicit_form_arms_the_dead_man():
+    """The `on` field is also how the robot tells a HELD control from a latched
+    one. A held control is re-announced several times a second, so it can carry
+    a dead-man; a toggle is not, so applying one would stop it a moment later.
+    """
+    robot = _robot()
+    robot.cfg.mechanisms["intake"].auto_stop_seconds = 0.02
+    intake = robot.mechanisms["intake"]
+
+    _send(robot, {"type": "intake"})  # latched: press-once toggle
+    time.sleep(0.03)
+    intake.update()
+    assert _roller(robot)._last == INTAKE_ANGLE, "a toggle must not time out"
+
+    _send(robot, {"type": "intake", "on": True})  # held
+    time.sleep(0.03)
+    intake.update()
+    assert _roller(robot)._last == NEUTRAL_ANGLE, "a held control must stop being refreshed"
+
+
+# --- dumper ------------------------------------------------------------------
+
+def test_the_dumper_is_a_bool_the_robot_owns():
+    """One press runs it, the next stops it.
+
+    The flip happens on the ROBOT, against the state the mechanism is actually
+    in, rather than from a bool the base station keeps: a shadow copy goes stale
+    the first time an e-stop stops the motor from underneath it, and the press
+    after that would then mean "stop" while the dumper sat there stopped.
+    """
+    robot = _dumper_robot()
+    dumper = robot.mechanisms["dumper"].motors["motor"].servo
+
+    _send(robot, {"type": "mech", "mech": "dumper", "preset": "run"})
+    assert dumper._last == DUMPER_ANGLE
+    _send(robot, {"type": "mech", "mech": "dumper", "preset": "run"})
+    assert dumper._last == NEUTRAL_ANGLE
+    _send(robot, {"type": "mech", "mech": "dumper", "preset": "run"})
+    assert dumper._last == DUMPER_ANGLE
+
+
+def test_an_estop_stops_the_dumper_and_the_next_press_starts_it_again():
+    """The stale-bool case, made concrete: after an e-stop the robot is stopped,
+    so the next press must mean "run" — not "stop" because the base station
+    thought it was still going."""
+    robot = _dumper_robot()
+    dumper = robot.mechanisms["dumper"].motors["motor"].servo
+
+    _send(robot, {"type": "mech", "mech": "dumper", "preset": "run"})
+    robot.manager.estop = True
+    robot._apply_estop()
+    assert dumper._last == NEUTRAL_ANGLE
+
+    robot.manager.estop = False
+    _send(robot, {"type": "mech", "mech": "dumper", "preset": "run"})
+    assert dumper._last == DUMPER_ANGLE
+
+
+def test_the_dumper_keeps_running_with_nothing_refreshing_it():
+    """A toggle is not re-announced by anything, so it must not carry a
+    dead-man — that would stop it a moment after every press."""
+    robot = _dumper_robot()
+    dumper = robot.mechanisms["dumper"]
+    _send(robot, {"type": "mech", "mech": "dumper", "preset": "run"})
+    time.sleep(0.03)
+    dumper.update()
+    assert dumper.motors["motor"].servo._last == DUMPER_ANGLE
 
 
 def test_it_works_outside_teleop_unlike_jog():
@@ -122,15 +230,15 @@ def test_estop_stops_it_and_then_refuses_to_start_it():
     _send(robot, {"type": "intake", "on": True})
     robot.manager.estop = True
     robot._apply_estop()
-    assert _roller(robot)._last == 5.0
+    assert _roller(robot)._last == NEUTRAL_ANGLE
     _send(robot, {"type": "intake", "on": True})
-    assert _roller(robot)._last == 5.0
+    assert _roller(robot)._last == NEUTRAL_ANGLE
 
 
 def test_an_unknown_mechanism_is_refused_rather_than_raising():
     robot = _robot()
     _send(robot, {"type": "intake", "mech": "nope", "on": True})
-    assert _roller(robot)._last == 5.0
+    assert _roller(robot)._last == NEUTRAL_ANGLE
 
 
 # --- shooter -----------------------------------------------------------------
@@ -255,6 +363,32 @@ def test_a_servo_launcher_still_parks_at_its_rest_position():
     to neutral, which is not a position its geometry knows about."""
     robot = _robot(target_rpm=0.0)
     assert robot.shooter.servo._last == robot.cfg.shooter.rest_angle
+
+
+def test_an_esc_dumper_rests_at_neutral_and_pulses_to_its_fire_angle():
+    """A motor on the shooter channel — a dumper, a roller — is a pulse
+    mechanism whose REST angle has to be neutral, because that is what arms it.
+
+    This is the same trap as the flywheel above, reached from the other side: a
+    dumper is configured as a servo launcher (target_rpm 0) and so parks at
+    rest_angle, which on a stock config is -30. An ESC that only ever sees -30
+    never arms and the dumper looks dead. Setting rest to neutral is the fix,
+    and it costs a positional launcher nothing because it has its own rest.
+    """
+    robot = _robot(target_rpm=0.0)
+    robot.cfg.shooter.rest_angle = NEUTRAL_ANGLE
+    robot.cfg.shooter.fire_angle = INTAKE_ANGLE
+    # The cycle reads these when the shot STARTS, so set them before firing.
+    robot.cfg.shooter.fire_seconds = 0.0
+    robot.cfg.shooter.retract_seconds = 0.0
+    robot.shooter.stop()
+    assert robot.shooter.servo._last == NEUTRAL_ANGLE, "idles armed"
+
+    _send(robot, {"type": "shooter_spin"})
+    assert robot.shooter.servo._last == INTAKE_ANGLE, "one press = one dump"
+
+    robot.shooter.update()
+    assert robot.shooter.servo._last == NEUTRAL_ANGLE, "and back to armed-idle"
 
 
 def test_estop_refuses_to_spin_it_up():

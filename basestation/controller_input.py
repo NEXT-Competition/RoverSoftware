@@ -8,7 +8,9 @@ Runs headless (SDL dummy video driver) so it works on a Mac and on a Pi without
 a display. Hot-plugging is handled: unplug/replug the controller and it
 reconnects.
 
-Controls (defaults): R2 = forward, L2 = reverse, right stick X = steer.
+Controls (defaults): left stick Y = throttle, right stick X = steer. Setting
+`axis_throttle` to UNBOUND swaps the throttle back onto the triggers (R2 =
+forward, L2 = reverse) without touching steering.
 
 --- Why the layout is a setting, not a constant ---
 Axis and button indices describe a *driver*, not a controller: the same pad
@@ -40,9 +42,10 @@ try:
 except Exception:  # pragma: no cover
     pygame = None
 
-AXIS_STEER = 2      # right stick X
-AXIS_L2 = 4         # L2 analog trigger -> reverse
-AXIS_R2 = 5         # R2 analog trigger -> forward
+AXIS_THROTTLE = 1   # left stick Y -> throttle
+AXIS_STEER = 2      # right stick X -> steering
+AXIS_L2 = 4         # L2 analog trigger -> reverse (fallback throttle)
+AXIS_R2 = 5         # R2 analog trigger -> forward (fallback throttle)
 BTN_ESTOP = 1       # circle
 BTN_CLEAR = 0       # cross
 BTN_TELEOP = 4      # L1
@@ -120,6 +123,40 @@ class Trigger:
         if span <= 0:
             return 0.0
         return max(0.0, min(1.0, (raw - self.rest) / span))
+
+
+def mix(m: ControllerMapping, axes, l2: "Trigger", r2: "Trigger"):
+    """Turn one raw sample of the pad into the (throttle, steer) we transmit.
+
+    Two-stick by default: `axis_throttle` names the left stick's Y and
+    `axis_steer` the right stick's X, so a hand can hold a speed while the other
+    works the steering. Leaving `axis_throttle` UNBOUND puts the throttle back on
+    the triggers (R2 forward, L2 reverse, both = cancel) and changes nothing
+    else.
+
+    Either way the arcade->tank mixing happens on the ROBOT
+    (`DriveCommand.arcade`); this only decides where throttle comes from, so
+    every layout speaks the identical wire protocol.
+
+    Pure, and separate from the poll loop, because this is the part worth
+    testing and the loop around it needs a joystick to exist.
+    """
+    def axis(idx: int) -> float:
+        return axes[idx] if (0 <= idx < len(axes)) else 0.0
+
+    if m.axis_throttle is not None and m.axis_throttle >= 0:
+        raw = axis(m.axis_throttle)
+        # Sticks report UP as negative, so a stick throttle is inverted.
+        if m.invert_throttle:
+            raw = -raw
+    else:
+        raw = r2.value(axis(m.axis_r2)) - l2.value(axis(m.axis_l2))
+    throttle = _expo(_dz(raw, m.deadzone), m.throttle_expo) * m.throttle_gain
+    steer = _expo(_dz(axis(m.axis_steer), m.deadzone),
+                  m.steer_expo) * m.steer_gain
+    if m.invert_steer:
+        steer = -steer
+    return _clamp1(throttle), _clamp1(steer)
 
 
 class ControllerReader:
@@ -257,28 +294,10 @@ class ControllerReader:
                 m = self._map  # one read: the mapping can be swapped mid-tick
                 naxes = self._js.get_numaxes()
                 self._publish(naxes)
-                if m.axis_throttle is not None and m.axis_throttle >= 0:
-                    # Arcade drive on one stick. The mixing itself happens on
-                    # the robot (DriveCommand.arcade), same as it does for the
-                    # trigger path — this only decides where throttle comes
-                    # from, so both layouts speak the identical wire protocol.
-                    raw = self._axis(m.axis_throttle, naxes)
-                    if m.invert_throttle:
-                        raw = -raw
-                    throttle = _expo(_dz(raw, m.deadzone),
-                                     m.throttle_expo) * m.throttle_gain
-                else:
-                    r2 = self._r2.value(self._axis(m.axis_r2, naxes))
-                    l2 = self._l2.value(self._axis(m.axis_l2, naxes))
-                    # R2 forward, L2 reverse, both = cancel.
-                    throttle = _expo(_dz(r2 - l2, m.deadzone),
-                                     m.throttle_expo) * m.throttle_gain
-                steer = _expo(_dz(self._axis(m.axis_steer, naxes), m.deadzone),
-                              m.steer_expo) * m.steer_gain
-                if m.invert_steer:
-                    steer = -steer
+                axes = [self._axis(i, naxes) for i in range(naxes)]
+                throttle, steer = mix(m, axes, self._l2, self._r2)
                 if self.on_drive:
-                    self.on_drive(_clamp1(throttle), _clamp1(steer))
+                    self.on_drive(throttle, steer)
                 for idx, name in m.actions():
                     if self._edge(idx) and self.on_action:
                         self.on_action(name)

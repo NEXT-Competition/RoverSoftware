@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .config import RobotConfig
 
@@ -116,6 +116,7 @@ def _actuator_params(prefix: str, group: str = "", label: str = "") -> Tuple[Par
         _f(f"{prefix}.deadband", 0, 0.5, **meta("dead band", step=0.005)),
         _f(f"{prefix}.max_forward", 0, 1, **meta("forward cap", step=0.01)),
         _f(f"{prefix}.max_reverse", 0, 1, **meta("reverse cap", step=0.01)),
+        _f(f"{prefix}.speed_scale", 0, 1, **meta("speed trim", step=0.01)),
         _i(f"{prefix}.channel", 0, 15, live=False, **meta("PWM channel")),
     )
 
@@ -341,6 +342,10 @@ def _mechanism_params(mech) -> Tuple[Param, ...]:
             _f(f"{prefix}.auto_stop_seconds", 0, 300, group=group,
                label=f"{label} auto-stop", unit="s", step=0.1,
                help="Stop this long after being told to run. 0 = run until stopped."),
+            _f(f"{prefix}.slew_rate", 0, 20, group=group,
+               label=f"{label} spin-up ramp", unit="/s", step=0.1,
+               help="Limits how fast it winds UP, for a load whose ESC cuts out "
+                    "on a step. 0 = go straight there. Stopping is never ramped."),
         ]
     out.append(_b(f"{prefix}.enabled", live=False, group=group,
                   label=f"{label} enabled"))

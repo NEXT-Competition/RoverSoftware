@@ -1746,7 +1746,7 @@ kbd {
   }
 }
 
-/* ---------- Drive pad ---------- */
+/* ---------- Drive pads ---------- */
 
 .drivepad {
   --pad: 190px;
@@ -1781,6 +1781,10 @@ kbd {
   content: "";
   position: absolute;
   background: var(--hairline);
+}
+.drivepad-throttle .crosshair::before,
+.drivepad-steer .crosshair::after {
+  display: none;
 }
 .drivepad .crosshair::before {
   left: 12%;

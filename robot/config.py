@@ -42,6 +42,19 @@ class MotorConfig:
     deadband: float = 0.03  # |throttle| below this => treat as neutral
     max_forward: float = 1.0  # Safety cap on forward throttle, [0..1]
     max_reverse: float = 1.0  # Safety cap on reverse throttle, [0..1]
+    # Per-motor speed TRIM, [0..1], applied in both directions. Two motors given
+    # the same throttle rarely turn at the same rate — gearboxes, ESCs and even
+    # tyre wear differ — and on a tank drive that shows up as a robot that will
+    # not hold a straight line. Scale the FASTER side down until it matches
+    # (0.9 = "run this one at 90%"); there is no way to speed the slower one up,
+    # since it is already being asked for everything it has.
+    #
+    # Deliberately separate from max_forward/max_reverse even though the
+    # arithmetic overlaps: those are a directional authority LIMIT ("never let
+    # this motor exceed half"), this is a calibration constant for a mechanical
+    # mismatch. Keeping them apart means setting one does not silently spend
+    # the other, and a trainer-mode cap still trims straight.
+    speed_scale: float = 1.0
 
     # --- identity, for layouts with more than the two stock track motors ---
     # Trailing and defaulted on purpose: every existing MotorConfig(channel=N,
@@ -418,7 +431,24 @@ class MechanismConfig:
     # Presets are what the FSM editor offers, so a routine reads "intake -> in"
     # rather than a column of magic numbers.
     presets: Dict[str, Dict[str, float]] = field(default_factory=dict)
-    auto_stop_seconds: float = 0.0  # 0 = run until told to stop
+    # Dead-man for RUN-WHILE-HELD controls only (the gamepad re-announces a held
+    # control several times a second; stop hearing it and the mechanism stops).
+    # A latched command — a press-once toggle, a routine's preset — is never
+    # subject to it, so one intake can toggle IN and be held to SPIT. 0 disables.
+    auto_stop_seconds: float = 0.0
+    # Max change in power per second on the way UP, as DriveConfig.slew_rate is
+    # for the drivetrain. 0 = step straight to the commanded value, which is
+    # what every mechanism did before this existed.
+    #
+    # This is for high-inertia loads — a flywheel above all. Commanding one from
+    # neutral to full in a single PWM step asks its ESC for a current it cannot
+    # deliver, and the ESC's own protection cuts out: the wheel spins up hard
+    # and then dies, while the software still believes it is running. Ramping is
+    # the same reason the drivetrain has never driven its ESCs with a step.
+    #
+    # Only the ramp UP is limited. Stopping is always immediate — a mechanism
+    # that eased itself to a halt through an e-stop would be a bug.
+    slew_rate: float = 0.0
 
     # --- pulse ---
     rest_angle: float = -30.0

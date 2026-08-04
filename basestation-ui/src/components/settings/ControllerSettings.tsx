@@ -41,12 +41,22 @@ function derive(axes: number[]) {
   const deadzone = (v: number) => (Math.abs(v) < dz ? 0 : v);
   const clamp1 = (v: number) => (v < -1 ? -1 : v > 1 ? 1 : v);
 
-  const r2 = trigger(axes[num("controller.axis_r2", 5)] ?? rest);
-  const l2 = trigger(axes[num("controller.axis_l2", 4)] ?? rest);
+  // Same fork as controller_input.py: a bound throttle axis is a stick, and it
+  // takes the drivetrain off the triggers entirely.
+  const throttleAxis = num("controller.axis_throttle", UNBOUND);
+  let throttleRaw: number;
+  if (throttleAxis >= 0) {
+    throttleRaw = axes[throttleAxis] ?? 0;
+    if (fieldValue("controller.invert_throttle") === true) throttleRaw = -throttleRaw;
+  } else {
+    const r2 = trigger(axes[num("controller.axis_r2", 5)] ?? rest);
+    const l2 = trigger(axes[num("controller.axis_l2", 4)] ?? rest);
+    throttleRaw = r2 - l2;
+  }
   const steerRaw = axes[num("controller.axis_steer", 2)] ?? 0;
   const invert = fieldValue("controller.invert_steer") === true;
   return {
-    throttle: clamp1(deadzone(r2 - l2) * num("controller.throttle_gain", 1)),
+    throttle: clamp1(deadzone(throttleRaw) * num("controller.throttle_gain", 1)),
     steer: clamp1(
       deadzone(steerRaw) * num("controller.steer_gain", 1) * (invert ? -1 : 1),
     ),
@@ -262,11 +272,16 @@ export function ControllerSettings() {
         <div class="group-body">
           {AXIS_FIELDS.map((field) => {
             const waiting = listening === field.path;
+            const idx = num(field.path, UNBOUND);
+            // Only an axis the mapping lets you unbind gets a Clear — for the
+            // throttle that is the switch back to trigger drive, and for the
+            // rest an empty binding would just be a dead control.
+            const clearable = field.min !== undefined && field.min <= UNBOUND;
             return (
               <div class={`bind-row${waiting ? " listening" : ""}`} key={field.path}>
                 <span class="field-label">{field.label}</span>
                 <span class="bind-value">
-                  {waiting ? "move it…" : `axis ${num(field.path, -1)}`}
+                  {waiting ? "move it…" : idx < 0 ? "unbound" : `axis ${idx}`}
                 </span>
                 <button
                   type="button"
@@ -276,12 +291,25 @@ export function ControllerSettings() {
                 >
                   {waiting ? "Cancel" : "Detect"}
                 </button>
+                {clearable && (
+                  <button
+                    type="button"
+                    class="btn ghost small"
+                    disabled={idx < 0}
+                    onClick={() => commit(field.path, UNBOUND)}
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
             );
           })}
           <p class="group-blurb">
-            Detect binds whichever axis you move first. Triggers rest at one end
-            of their travel, so pull and release the one you want.
+            Detect binds whichever axis you move first. Drive is two-stick by
+            default — left stick for throttle, right stick for steering.
+            Clearing the throttle axis moves the throttle onto the triggers;
+            those rest at one end of their travel, so pull and release the one
+            you want.
           </p>
         </div>
       </section>

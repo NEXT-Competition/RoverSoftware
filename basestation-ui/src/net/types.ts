@@ -164,6 +164,7 @@ export interface ActuatorSpec {
   deadband?: number;
   max_forward?: number;
   max_reverse?: number;
+  speed_scale?: number; // per-motor speed trim, both directions
 }
 
 export type DriveKind = "tank" | "servo_steer" | "single" | "none";
@@ -196,6 +197,7 @@ export interface MechanismSpec {
   actuators: ActuatorSpec[];
   presets?: Record<string, Record<string, number>>; // power
   auto_stop_seconds?: number; // power
+  slew_rate?: number; // power: spin-up ramp, units/s; 0 = step
   rest_angle?: number; // pulse
   active_angle?: number;
   active_seconds?: number;

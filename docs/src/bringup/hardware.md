@@ -68,7 +68,18 @@ assume it is zero.
 : The ends of the throw. The throw is **symmetric about neutral**, so whichever
 endpoint is closer to neutral sets the usable range — which is what keeps a
 normal and a mirrored motor starting together and matching speed even when
-neutral is not centred.
+neutral is not centred. It is also what decides whether a mechanism preset can
+*reach* an angle: pushing a preset past ±1.0 only clamps, so widen the endpoint
+instead.
+
+**Speed trim** (*Settings → Tuning*, not this page)
+: Two motors given the same throttle rarely turn at the same rate, and on a tank
+drive that is a robot that will not hold a straight line. Scale the **faster**
+side down until it tracks — `0.9` runs it at 90%. There is no way to speed the
+slower one up; it is already being asked for everything it has. Trim is applied
+after the dead band, so evening the sides up does not move where either one
+starts to move. It lives with the tuning sliders rather than here because you
+find it by driving, not by wiring.
 
 > **Order matters**
 >
@@ -84,8 +95,15 @@ mechanism owns one or more actuators and comes in two kinds.
 **Powered**
 : Holds a value until told otherwise — an intake that spins, an arm that holds
 an angle. Give it named **presets** like `in`, `out` and `stow`, so a routine
-asks for *"intake → in"* rather than a column of numbers. *Auto-stop* ends the
-motion after N seconds; `0` runs until stopped.
+asks for *"intake → in"* rather than a column of numbers.
+
+*Auto-stop* is the dead-man for **run-while-held** gamepad controls: those
+re-announce themselves several times a second, so if the robot stops hearing
+one it stops the mechanism after N seconds rather than running on with nobody
+holding the button. It does **not** apply to a press-once toggle or to a
+routine's preset — those mean "run until told to stop", and the same mechanism
+can be driven both ways (an intake that toggles *in* and is held to *spit*).
+`0` disables it.
 
 **Pulse**
 : Owns a cycle: rest angle, active angle, active time, recover time, cooldown
