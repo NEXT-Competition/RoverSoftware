@@ -172,6 +172,29 @@ doesn't name"*.)
 time has passed *and* its condition is satisfied. Leave the condition off and
 the floor is all there is, which is an ordinary timed sequence.
 
+**How fast it gets there.**
+: *Ramp over* is acceleration, and it answers a different question from the one
+above: not how long the step holds, but how long the actuators take to **arrive**.
+Leave it at 0 and the step writes its values instantly, which is what every step
+did before this field existed. Set it, and each actuator the step names is walked
+from where it actually was to its target over that many seconds — a flywheel
+eased up to speed instead of slammed there, a feeder arm that arrives at the ball
+instead of hitting it.
+
+: It is per-step because a shooter wants both in one cycle: a long, gentle
+spin-up, then a feeder that must move *now*, before the wheel bleeds speed.
+
+: **Deceleration is a ramp downward** — a step whose target is lower than the
+current value, which the same linear walk handles in either direction. A shooter
+that should wind down rather than cut out ends with `flywheel 0` over 1 s. Note
+that this is the *only* way to get a soft stop: e-stop, a mode change and
+shutdown all park instantly and always will, because a mechanism that eased
+itself down over a second is one that ignores the button for a second.
+
+: The ramp counts as part of the hold: a step cannot hand over while its own
+actuators are still travelling, so the effective floor is whichever of *hold for
+at least* and *ramp over* is longer.
+
 **What else it waits for.**
 : *"A motor reaching a speed"* is the one a shooter wants. Timing a spin-up
 works at one battery charge and fires early at every other; waiting for the
@@ -191,17 +214,29 @@ rather than a safety condition.
 
 The finished thing for the three-actuator launcher:
 
-| # | Step | Moves | Holds ≥ | Waits for |
-|---|------|-------|---------|-----------|
-| 1 | spin up | flywheel `1.0` | 0.2 s | flywheel ≥ 3000 rpm |
-| 2 | feed | feeder `40°` | 0.35 s | — |
-| 3 | advance | belt `0.8` | 0.6 s | — |
+| # | Step | Moves | Ramp | Holds ≥ | Waits for |
+|---|------|-------|------|---------|-----------|
+| 1 | spin up | flywheel `1.0` | 1.2 s | 0.2 s | flywheel ≥ 3000 rpm |
+| 2 | feed | feeder `40°` | 0.35 s | 0.25 s | — |
+| 3 | advance | belt `0.8` | 0.2 s | 0.6 s | — |
+| 4 | spin down | flywheel `0` | 1.0 s | — | — |
 
-Start it from a routine with **start a sequence**, or bind it to a gamepad
-button. It returns immediately and advances itself off the control loop, so
-nothing here ever blocks driving — asking again while it runs does nothing, so
-it is safe on a button that stays held. To wait for it to finish, transition on
-**mechanism is ready**, which stays false for exactly as long as it is running.
+Start it from a routine with **start a sequence**. It returns immediately and
+advances itself off the control loop, so nothing here ever blocks driving —
+asking again while it runs does nothing, so it is safe on a button that stays
+held. To wait for it to finish, transition on **mechanism is ready**, which stays
+false for exactly as long as it is running.
+
+> **A sequence cannot go straight onto a gamepad button**
+>
+> The **mechanism preset** button slots bind a *preset*, and only `power`
+> mechanisms have presets — a sequence has steps. Binding one to a preset slot
+> gets you `preset refused: 'launcher' is not a powered mechanism` on the
+> robot's console and nothing else.
+>
+> To fire one from the pad, put it in a one-state routine (**start a sequence**)
+> and bind *that* to a **routine** button. Give the state `drive: teleop` and you
+> keep stick control while it fires. See [Routines](routines.md).
 
 > **Every way of stopping parks it**
 >

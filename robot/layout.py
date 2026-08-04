@@ -143,6 +143,8 @@ def _step_doc(step: SequenceStep) -> dict:
     """
     doc: Dict[str, Any] = {"name": step.name, "values": dict(step.values),
                            "seconds": step.seconds}
+    if step.ramp:
+        doc["ramp"] = step.ramp
     if step.wait_for:
         doc["wait_for"] = dict(step.wait_for)
         doc["on_timeout"] = step.on_timeout
@@ -566,7 +568,8 @@ def _validate_step(raw: Any, index: int, what: str,
             errors.append(f"{where}: {act} must be a number "
                           f"({'degrees' if servo else 'throttle'}, {lo} to {hi})")
 
-    for fname, lo, hi in (("seconds", 0.0, 60.0), ("timeout", 0.0, 60.0)):
+    for fname, lo, hi in (("seconds", 0.0, 60.0), ("ramp", 0.0, 60.0),
+                          ("timeout", 0.0, 60.0)):
         if fname in raw:
             try:
                 setattr(step, fname, _clamp_float(raw[fname], lo, hi))
@@ -592,10 +595,14 @@ def _validate_step(raw: Any, index: int, what: str,
     # anything short of already-true aborts. Almost always a swapped pair of
     # numbers, and invisible at the field as a shooter that fires only when the
     # wheel happened to be up to speed anyway.
-    if step.wait_for and step.timeout and step.seconds >= step.timeout:
-        warnings.append(f"{where}: holds for {step.seconds:g}s but gives up "
+    dwell = max(step.seconds, step.ramp)
+    if step.wait_for and step.timeout and dwell >= step.timeout:
+        warnings.append(f"{where}: holds for {dwell:g}s but gives up "
                         f"after {step.timeout:g}s, so the condition gets one "
                         "look and no time to come true")
+    if step.ramp and not step.values:
+        warnings.append(f"{where}: ramps over {step.ramp:g}s but moves nothing, "
+                        "so the ramp has nothing to travel — it is just a wait")
     return step
 
 

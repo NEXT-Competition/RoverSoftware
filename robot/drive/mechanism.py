@@ -326,6 +326,16 @@ class SequenceMechanism(Mechanism):
         self._activations = 0
         self._gate_warned = False
         self._aborted = ""          # why the last run ended early; "" = it didn't
+        # What was last written to each actuator, in that actuator's own units
+        # (degrees for a servo, throttle for an ESC). Kept here rather than read
+        # back off ESCMotor because `set_angle` writes straight through and
+        # remembers nothing — and a ramp has to know where it is starting FROM.
+        # It is also the only place the two-unit convention already lives.
+        self._current: Dict[str, float] = {}
+        # The leg currently in flight: name -> (from, to), and how long it takes.
+        # Empty whenever nothing is travelling, which is every step with ramp 0.
+        self._ramp: Dict[str, tuple] = {}
+        self._ramp_s = 0.0
         self.stop()
 
     # --- what the operator and the routine engine see ---
@@ -384,16 +394,48 @@ class SequenceMechanism(Mechanism):
     # --- running it ---
 
     def _enter(self, index: int) -> None:
-        """Apply step `index` and start its clock."""
+        """Apply step `index` and start its clock.
+
+        A step with `ramp` set does not write its targets here — it records
+        where each actuator is and lets `update()` walk it across. `clear` still
+        parks instantly either way: it is the "everything this step doesn't name
+        stops" escape hatch, and easing an actuator out of a state a step has
+        explicitly disowned is the opposite of what it asks for.
+        """
         self._index = index
         step = self.cfg.steps[index]
         if step.clear:
             for name in self.motors:
                 if name not in step.values:
                     self._park(name)
+        self._step_at = time.monotonic()
+        self._ramp, self._ramp_s = {}, 0.0
+        if step.ramp > 0 and step.values:
+            self._ramp_s = step.ramp
+            for name, target in step.values.items():
+                self._ramp[name] = (self._current.get(name, self._rest_of(name)),
+                                    target)
+            self._advance_ramp(0.0)
+            return
         for name, value in step.values.items():
             self._write(name, value)
-        self._step_at = time.monotonic()
+
+    def _advance_ramp(self, elapsed: float) -> None:
+        """Walk every travelling actuator to where it should be at `elapsed`.
+
+        Linear, and deliberately so: an S-curve would need a second knob to
+        describe and buys nothing an ESC or a hobby servo can actually resolve.
+        The fraction is clamped at 1.0, so the last write of a ramp lands on the
+        target exactly rather than a hair short of it — which matters, because
+        that written value is what the NEXT step ramps away from.
+        """
+        if not self._ramp:
+            return
+        f = 1.0 if self._ramp_s <= 0 else _clamp(elapsed / self._ramp_s, 0.0, 1.0)
+        for name, (start, target) in self._ramp.items():
+            self._write(name, start + (target - start) * f)
+        if f >= 1.0:
+            self._ramp = {}
 
     def update(self) -> None:
         super().update()
@@ -401,8 +443,12 @@ class SequenceMechanism(Mechanism):
             return
         step = self.cfg.steps[self._index]
         elapsed = time.monotonic() - self._step_at
-        if elapsed < step.seconds:
-            return                        # inside the minimum dwell
+        self._advance_ramp(elapsed)
+        # The ramp is part of the dwell, not something served alongside it: a
+        # step must not hand over while its own actuators are still travelling,
+        # or the next one would ramp away from a value this one never reached.
+        if elapsed < max(step.seconds, step.ramp):
+            return                        # still arriving, or inside the dwell
         if not self._gate_open(step):
             timeout = step.timeout or self.cfg.step_timeout
             if elapsed < timeout:
@@ -496,9 +542,16 @@ class SequenceMechanism(Mechanism):
         if motor is None:
             return                       # validation refuses unknown names
         if self._is_servo(name):
-            motor.set_angle(_clamp(value, -90.0, 90.0))
+            value = _clamp(value, -90.0, 90.0)
+            motor.set_angle(value)
         else:
-            motor.set_throttle(_clamp(value))
+            value = _clamp(value)
+            motor.set_throttle(value)
+        self._current[name] = value
+
+    def _rest_of(self, name: str) -> float:
+        """Where `_park` puts this actuator, in its own units."""
+        return self.cfg.rest_angle if self._is_servo(name) else 0.0
 
     def _park(self, name: str) -> None:
         """One actuator to its safe resting state."""
@@ -509,6 +562,7 @@ class SequenceMechanism(Mechanism):
             motor.set_angle(self.cfg.rest_angle)
         else:
             motor.stop()
+        self._current[name] = self._rest_of(name)
 
     def _is_servo(self, name: str) -> bool:
         actuator = self.cfg.actuators.get(name)
@@ -520,8 +574,13 @@ class SequenceMechanism(Mechanism):
                 else f"{index + 1}/{len(self.cfg.steps)}")
 
     def stop(self) -> None:
+        # Instant, and it stays instant. This is the e-stop / mode-exit /
+        # shutdown path, and a mechanism that eased itself down over a second
+        # would be a mechanism that ignores the button for a second. A
+        # controlled spin-down is a STEP with a ramp to 0, not this.
         for name in self.motors:
             self._park(name)
+        self._ramp, self._ramp_s = {}, 0.0
         self._state = "rest"
         self._index = 0
 
