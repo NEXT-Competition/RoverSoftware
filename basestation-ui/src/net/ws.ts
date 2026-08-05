@@ -22,10 +22,12 @@ import type {
   ScriptConsole,
   SettingsMessage,
   SettingValue,
+  TrailsMessage,
   WifiState,
 } from "./types.ts";
 import { applyCommandFrame } from "../state/command.ts";
 import { recordPidTraces } from "../state/pid.ts";
+import { applyTrailDeltas, resetTrails } from "../state/trails.ts";
 
 export const conn = signal<ConnState>("connecting");
 export const robots = signal<Robot[]>([]);
@@ -118,7 +120,8 @@ export function connect(): void {
       | SettingsMessage
       | GamepadMessage
       | CommandMessage
-      | ConsoleMessage;
+      | ConsoleMessage
+      | TrailsMessage;
     try {
       msg = JSON.parse(ev.data);
     } catch {
@@ -150,7 +153,13 @@ export function connect(): void {
       scriptConsole.value = msg.console ?? {};
       return;
     }
+    if (msg.type === "trails") {
+      resetTrails(msg);
+      return;
+    }
     if (msg.type !== "fleet") return;
+    const fleetMsg = msg;
+    let trailGap = false;
     batch(() => {
       robots.value = msg.robots ?? [];
       controller.value = msg.controller ?? { connected: false, name: null };
@@ -165,8 +174,29 @@ export function connect(): void {
       // graph needs the ones before it — accumulation is not something a
       // derived value can do.
       recordPidTraces(msg.robots ?? [], Date.now());
+      // Same shape of accumulation for the breadcrumbs: the frame carries the
+      // points added since the last broadcast, not the trail itself.
+      trailGap = applyTrailDeltas(fleetMsg.robots ?? [], fleetMsg.trail_max);
     });
+    // Outside the batch: this puts a frame on the wire, and doing that while
+    // signals are mid-update is how a send ends up reading half-applied state.
+    if (trailGap) requestTrails();
   };
+}
+
+// When we last asked the bridge to resend every trail. A gap persists across
+// frames until the answer lands, so without this one dropped frame would ask
+// thirty times a second — turning a hiccup into the very congestion that caused
+// it. One request per second is well inside the time a reply takes to arrive.
+let lastTrailRequest = 0;
+const TRAIL_RESYNC_MS = 1000;
+
+/** Ask for every breadcrumb in full, at most once a second. */
+function requestTrails(): void {
+  const now = Date.now();
+  if (now - lastTrailRequest < TRAIL_RESYNC_MS) return;
+  lastTrailRequest = now;
+  send({ action: "get_trails" });
 }
 
 /** Send an action to the bridge (no-op if the socket isn't open). */

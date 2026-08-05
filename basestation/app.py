@@ -23,6 +23,15 @@ at 30 times a second would be the single largest thing on this socket.
 (There is a third, `{"type":"command"}`, but it is event-driven rather than a
 channel: it goes out when somebody says something, and is silent otherwise.)
 
+Breadcrumb trails are the one thing on the hot path sent as a DELTA. A rover's
+trail is hundreds of points and gains one per telemetry frame, so restating it
+at ui_hz made it ~94% of the snapshot and scaled with the fleet: three rovers
+came to 37 KB thirty times a second, per browser. Now `{"type":"trails"}` sends
+each trail once on connect and the hot frame carries `trail_add` — the points
+since the last broadcast — plus `trail_seq`, the count they bring the client to.
+A client whose arithmetic doesn't match has missed points and asks for a fresh
+`trails` frame; that is the only way this can fail and it repairs itself.
+
 --- Voice, and the sockets that carry it ---
 This endpoint takes binary frames as well as JSON. A binary frame is raw 16 kHz
 mono PCM from a held microphone button (basestation/command/stt.py explains the
@@ -600,6 +609,92 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             clients.discard(ws)
             watchers.discard(ws)
 
+    async def send_text_to(ws: WebSocket, text: str) -> None:
+        try:
+            await ws.send_text(text)
+        except Exception:
+            clients.discard(ws)
+            watchers.discard(ws)
+
+    def encode(msg: dict) -> str:
+        """One frame, encoded once.
+
+        `ws.send_json` re-runs json.dumps per socket, so the cost of a broadcast
+        was the frame's size times the number of open browsers — and that work
+        happens on the event loop, ahead of the drive actions those same
+        browsers are sending up it. Every client gets identical bytes, so
+        encoding more than once was only ever waste.
+        """
+        return json.dumps(msg, separators=(",", ":"))
+
+    async def broadcast(msg: dict, targets: "Set[WebSocket]") -> None:
+        if not targets:
+            return
+        text = encode(msg)
+        for ws in list(targets):
+            await send_text_to(ws, text)
+
+    def trails_frame() -> dict:
+        """Every robot's breadcrumb in full — the baseline the hot frame's
+        deltas append to. Sent on connect and on request, never on a timer."""
+        return {"type": "trails", "trails": fleet.trails()}
+
+    # ---- who is actually watching a camera ----
+    # robot_id -> number of MJPEG streams open on it right now. Counted from the
+    # /video endpoint rather than inferred from the selection, because the
+    # selection is a guess and this is the fact: a pit board, a second tablet and
+    # a driver's dashboard are three viewers of possibly three different rovers,
+    # and only the thing serving the streams knows that.
+    _viewers: dict = {}
+    # What we last TOLD each rover about it, so the command goes out on a change
+    # rather than every cycle.
+    _fpv_told: dict = {}
+    # ...and a slow re-statement regardless, because this is the one instruction
+    # whose loss is silent: a rover that misses an "on" shows no picture and a
+    # rover that misses an "off" keeps spending the Wi-Fi. ~35 bytes per rover
+    # per interval is a rounding error against one frame of video.
+    FPV_REFRESH = 5.0
+    _fpv_refreshed = {"t": 0.0}
+
+    def _fpv_watchers(robot_id: str) -> int:
+        return _viewers.get(robot_id, 0)
+
+    async def push_fpv_demand(robot_ids) -> None:
+        """Tell each rover whether anybody has its camera open.
+
+        Over the RADIO, deliberately, even though the rover it is aimed at must
+        be on WiFi for the answer to matter. "Stop streaming" is the instruction
+        you need most when the WiFi is drowning in streams, and routing it over
+        that same link would make it least likely to arrive exactly then. It is
+        ~35 bytes on a change, so the airtime argument that moves configuration
+        off the radio does not apply here.
+
+        Not a config write either: this is not the operator's setting and must
+        not be persisted (see robot/robot.py::_set_fpv_wanted).
+
+        Silent on a base station with no video receiver (`--no-video`): the UDP
+        port is not even bound there, so there is nothing to switch a camera on
+        FOR, and a rover left to its own `fpv.enabled` is the documented
+        behaviour of that flag rather than something this should override.
+        """
+        if video_rx is None:
+            return
+        now = time.monotonic()
+        refresh = (now - _fpv_refreshed["t"]) >= FPV_REFRESH
+        if refresh:
+            _fpv_refreshed["t"] = now
+        for rid in robot_ids:
+            want = _fpv_watchers(rid) > 0
+            if not refresh and _fpv_told.get(rid) is want:
+                continue
+            _fpv_told[rid] = want
+            dispatch(rid, {"type": "fpv", "on": want})
+        # Forget rovers that have left, so a long match doesn't accumulate them
+        # and a rover that comes back is told afresh.
+        for rid in list(_fpv_told):
+            if rid not in robot_ids:
+                del _fpv_told[rid]
+
     async def broadcast_loop() -> None:
         # Config revisions we've already pushed; a change means a robot answered
         # a get_config/set_config and the open settings page should see it.
@@ -610,9 +705,17 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         # console is a few hundred bytes and the frame it would have ridden on
         # is kilobytes.
         seen_console: dict = {}
+        # robot_id -> the trail_seq we last put on the wire. The whole breadcrumb
+        # used to ride every frame at ui_hz, which at three rovers was ~94% of a
+        # 37 KB snapshot thirty times a second; now each frame carries the point
+        # or two that actually moved. Server-wide rather than per-client so the
+        # frame stays identical for everyone and can be encoded once — a client
+        # that joins mid-stream is caught up by the trails frame it gets on
+        # connect, and one that falls behind asks for another.
+        trail_cursors: dict = {}
         try:
             while True:
-                snap = fleet.snapshot(time.monotonic())
+                snap = fleet.snapshot(time.monotonic(), trail_cursors)
                 snap["controller"] = {
                     "connected": getattr(controller, "connected", False) if controller else False,
                     "name": getattr(controller, "name", None) if controller else None,
@@ -629,8 +732,20 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                 # Which robots currently have a live feed, so the UI shows the
                 # FPV panel only when there's actually something to show.
                 snap["video"] = video_rx.robots() if video_rx is not None else []
-                for ws in list(clients):
-                    await send_to(ws, snap)
+                # The cap the client trims its own copy of each trail to, so it
+                # drops the same oldest points this end does rather than growing
+                # a breadcrumb the base station has already forgotten.
+                snap["trail_max"] = fleet.trail_max
+                await broadcast(snap, clients)
+                # Only once the frame is actually out: a cursor advanced before
+                # the send would turn a dropped frame into points no client ever
+                # receives and none of them can tell are missing.
+                for robot in snap["robots"]:
+                    if "trail_seq" in robot:
+                        trail_cursors[robot["robot_id"]] = robot["trail_seq"]
+
+                # Start and stop cameras to match who is actually looking.
+                await push_fpv_demand({r["robot_id"] for r in snap["robots"]})
 
                 # Outbound document fragments, a couple per cycle.
                 await drain_documents()
@@ -644,9 +759,7 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                     _settings_dirty["v"] = True
                 if _settings_dirty["v"]:
                     _settings_dirty["v"] = False
-                    frame = settings_frame()
-                    for ws in list(clients):
-                        await send_to(ws, frame)
+                    await broadcast(settings_frame(), clients)
 
                 # Script console output. Its own frame and its own revision,
                 # so a script that logs every tick pushes a few hundred bytes
@@ -655,25 +768,21 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                 if console_revs != seen_console or _console_dirty["v"]:
                     seen_console = console_revs
                     _console_dirty["v"] = False
-                    frame = {"type": "console", "console": fleet.script_console()}
-                    for ws in list(clients):
-                        await send_to(ws, frame)
+                    await broadcast({"type": "console",
+                                     "console": fleet.script_console()}, clients)
 
                 # Raw gamepad state streams only to pages that asked for it —
                 # it is useless anywhere but the mapping editor, and it would
                 # otherwise be dead weight on every driving client's socket.
                 if watchers and controller is not None:
-                    gp = {"type": "gamepad", "gamepad": controller.state()}
-                    for ws in list(watchers):
-                        await send_to(ws, gp)
+                    await broadcast({"type": "gamepad",
+                                     "gamepad": controller.state()}, watchers)
 
                 # Command outcomes queued by worker threads. Everyone sees them,
                 # not just whoever spoke: on a two-tablet setup, the person who
                 # did not give the order is the one who needs to know it was given.
                 while _command_out:
-                    frame = _command_out.popleft()
-                    for ws in list(clients):
-                        await send_to(ws, frame)
+                    await broadcast(_command_out.popleft(), clients)
 
                 await asyncio.sleep(1.0 / max(settings.base.ui_hz, 1.0))
         except asyncio.CancelledError:
@@ -728,6 +837,11 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         # renders filled in, rather than blank until the next edit.
         await send_to(ws, settings_frame())
         await send_to(ws, command_frame())
+        # The breadcrumbs in full, once. From here the hot frame carries only
+        # the points added since the last broadcast, and this is what they
+        # append to — without it a page that opened mid-match would draw a trail
+        # starting from the moment it connected.
+        await send_to(ws, trails_frame())
         try:
             while True:
                 # receive() rather than receive_json(): this socket now carries
@@ -762,6 +876,13 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                 action = data.get("action")
                 if action == "watch_gamepad":
                     (watchers.add if data.get("on") else watchers.discard)(ws)
+                    continue
+                if action == "get_trails":
+                    # A client noticed a gap between the points it holds and the
+                    # count the frame claims. Answered to that socket alone —
+                    # every other browser is up to date, and a full breadcrumb
+                    # is the one thing on this channel worth not broadcasting.
+                    await send_to(ws, trails_frame())
                     continue
                 if action == "mic":
                     # Push-to-talk. The button going down opens a buffer; going
@@ -812,15 +933,32 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         period = 1.0 / max(settings.base.video_hz, 1.0)
 
         async def frames():
+            # Opening this stream is what asks the rover to switch its camera on
+            # (see push_fpv_demand); closing it is what lets the rover stop. The
+            # count has to be taken here rather than at the route, because a
+            # StreamingResponse's body may outlive the handler that built it and
+            # it is the BODY whose lifetime means "somebody is watching".
+            _viewers[robot_id] = _viewers.get(robot_id, 0) + 1
+            # Never re-send a JPEG we have already sent: the rover streams at
+            # fpv.fps and we poll at video_hz, so with the defaults a quarter of
+            # what went to the browser was the previous frame over again.
+            last = None
             try:
                 while True:
                     jpeg = video_rx.latest(robot_id)
-                    if jpeg is not None:
+                    if jpeg is not None and jpeg is not last:
+                        last = jpeg
                         yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                                + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
                     await asyncio.sleep(period)
             except asyncio.CancelledError:  # client closed the stream
                 pass
+            finally:
+                remaining = _viewers.get(robot_id, 1) - 1
+                if remaining > 0:
+                    _viewers[robot_id] = remaining
+                else:
+                    _viewers.pop(robot_id, None)
 
         return StreamingResponse(
             frames(), media_type="multipart/x-mixed-replace; boundary=frame")
@@ -844,4 +982,8 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # bridge without a browser, and tests that need to interleave a browser
     # action with a gamepad frame without standing up a WebSocket.
     app.state.handle_action = handle_action
+    # Who is watching which camera, for the same reason: an embedder driving the
+    # bridge without a browser has no other way to say "show me this feed", and
+    # a test has no other way to see that opening one asked the rover for it.
+    app.state.video_viewers = _viewers
     return app

@@ -355,6 +355,10 @@ class Robot:
             Callable[[], Optional[Tuple[float, float, Optional[float]]]]
         ] = self.pose_estimator.pose if (self.gps is not None) else None
         self._last_telem = 0.0
+        # When the slow tier of the telemetry frame last went out. Zero so the
+        # first frame carries everything: a base station that has just come up
+        # should have a full picture immediately, not a second later.
+        self._last_detail = 0.0
 
         # One camera, shared by every frame consumer (the detector and the FPV
         # streamer) — a V4L2/CSI device can't be opened twice. Only spun up if
@@ -701,6 +705,11 @@ class Robot:
             # seconds (see _wifi_task).
             elif mtype in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
                 self._wifi_command(msg)
+            # Whether a browser currently has this rover's camera open. Not a
+            # config change — it is not the operator's setting and must not be
+            # persisted — so it reaches the streamer directly, like a jog.
+            elif mtype == "fpv":
+                self._set_fpv_wanted(msg)
             elif mtype == "jog":
                 self._jog(msg)
             # Applying a preset reaches past the active controller for the same
@@ -1253,6 +1262,30 @@ class Robot:
             for message in result.errors:
                 print(f"[Robot] routines REJECTED at boot: {message}")
 
+    def _set_fpv_wanted(self, msg: dict) -> None:
+        """Start or stop the camera feed on the base station's demand.
+
+        Distinct from `fpv.enabled`, which is the operator's setting and says
+        whether this rover HAS a feed at all. This says whether anyone is
+        looking at it right now, and only the base station knows that — it is
+        the end holding the browsers. A rover streamed regardless, so on a
+        multi-rover field the unwatched ones were spending the shared Wi-Fi on
+        frames that were decoded by nobody.
+
+        Missing `on` is treated as True: an ambiguous frame should leave the
+        feed working, not silently switch it off.
+        """
+        if self.fpv is None:
+            return
+        if not self.fpv.set_wanted(bool(msg.get("on", True))):
+            return  # already in that state; nothing to start or stop
+        if self.cfg.fpv.enabled and self.fpv.wanted():
+            self.fpv.start()
+        else:
+            # Not joined — this is the control loop, and waiting out a frame
+            # interval to save nothing would stall a tick.
+            self.fpv.stop(wait=False)
+
     def _jog(self, msg: dict) -> None:
         """Move one actuator briefly, for bring-up from the Hardware tab.
 
@@ -1544,7 +1577,21 @@ class Robot:
             self.ultrasonic.samples = cfg.ultrasonic.samples
             self.ultrasonic.max_age = cfg.ultrasonic.max_age
 
-    def _telemetry(self, cmd) -> dict:
+    def _telemetry(self, cmd, detail: bool = True) -> dict:
+        """One status frame for the base station.
+
+        `detail=False` leaves out the slow tier — GPS fix health, the vision
+        summary, mechanism states, IMU calibration — and lists what it left out
+        under `keep`. See RobotConfig.telemetry_detail_hz for why: the frame had
+        grown to ~600 bytes, and one rover at 5 Hz was already two thirds of a
+        shared 57600-baud channel.
+
+        `keep` rather than a bare omission because these blocks do not all mean
+        the same thing by their absence. A missing `imu_calib` means the IMU has
+        stopped answering and the pips must come off the screen; a missing `mech`
+        means the layout has no mechanisms. Neither may be confused with "this
+        did not change since the last frame", which is all `keep` says.
+        """
         t = {
             "type": "telemetry",
             "from": self.cfg.robot_id,
@@ -1553,6 +1600,7 @@ class Robot:
             "left": round(cmd.left, 3),
             "right": round(cmd.right, 3),
         }
+        held: list = []
         # What the wheels ACTUALLY did with those two numbers, which is the
         # whole reason encoders exist: `left`/`right` above are what the robot
         # was told, and on real hardware they are not the same thing. Absent
@@ -1570,7 +1618,10 @@ class Robot:
         # to believe it, which is the difference between "the GPS is broken" and
         # "it has 3 satellites under a tree".
         if self.gps is not None:
-            t["gps"] = self.gps.telemetry()
+            if detail:
+                t["gps"] = self.gps.telemetry()
+            else:
+                held.append("gps")
         # Surface IMU calibration so the base station can tell whether the
         # heading is trustworthy or still falling back to the GPS track angle.
         #
@@ -1580,11 +1631,16 @@ class Robot:
         # bearing is the dashboard being reassuring about a sensor that stopped
         # answering, which is the exact failure sample_timeout exists to catch.
         if self.imu is not None:
-            t["imu_calib"] = self.imu.calibration() if self.imu.fresh() else None
+            if detail:
+                t["imu_calib"] = self.imu.calibration() if self.imu.fresh() else None
+            else:
+                held.append("imu_calib")
         # Vision summary (target, error, size, fps) so the base station can see
         # what the model sees — this is what makes standoff tunable in the field.
         # A summary, never boxes or frames: the radio is 57600 baud and shared.
-        if self.detector is not None:
+        if self.detector is not None and not detail:
+            held.append("vision")
+        elif self.detector is not None:
             t["vision"] = self.detector.telemetry()
             # Estimated metres to the target, alongside the box height it was
             # derived from. Both, deliberately: `size` is what the model actually
@@ -1624,7 +1680,10 @@ class Robot:
         # the controller that owns its firing policy). Only when the build has
         # any, and only a summary — the radio is 57600 baud and shared.
         if self.mechanisms:
-            t["mech"] = {name: m.status() for name, m in self.mechanisms.items()}
+            if detail:
+                t["mech"] = {name: m.status() for name, m in self.mechanisms.items()}
+            else:
+                held.append("mech")
         # Which state the FSM is in, so the Routines tab can highlight the live
         # card. Rides the hot path because that is the whole point of it — a
         # state highlight that lags by a second is worse than none.
@@ -1658,6 +1717,11 @@ class Robot:
                 traces = {**traces, "drive.trim.pid": trace}
             if traces:
                 t["pid"] = traces
+        # Only when something was actually withheld: on a build with no GPS, no
+        # detector and no mechanisms there is nothing to say, and an empty list
+        # would be bytes spent saying it five times a second.
+        if held:
+            t["keep"] = held
         return t
 
     def start(self) -> None:
@@ -1763,7 +1827,15 @@ class Robot:
                     and (now - self._last_telem) >= 1.0 / self.cfg.telemetry_hz
                 ):
                     self._last_telem = now
-                    self.link.send(self._telemetry(cmd))
+                    # The slow tier rides along at telemetry_detail_hz, not on
+                    # every frame. Its own timer rather than a frame counter, so
+                    # changing telemetry_hz from the dashboard doesn't silently
+                    # change how often the diagnostics update too.
+                    detail_period = 1.0 / max(self.cfg.telemetry_detail_hz, 0.01)
+                    detail = (now - self._last_detail) >= detail_period
+                    if detail:
+                        self._last_detail = now
+                    self.link.send(self._telemetry(cmd, detail=detail))
                 self._drain_script_output(now)
                 self._drain_outbox()
                 t4 = time.monotonic()

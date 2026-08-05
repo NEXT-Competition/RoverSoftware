@@ -192,7 +192,16 @@ export interface Robot {
   pid?: Record<string, PidTrace> | null;
   online: boolean;
   age: number | null; // seconds since last telemetry, or null
-  trail: LatLon[]; // breadcrumb of past positions
+  /**
+   * Breadcrumb points appended since the bridge's last broadcast — NOT the whole
+   * trail, which is why this is not the thing to draw. The full breadcrumb is
+   * assembled client-side in state/trails.ts from the `trails` frame plus these;
+   * read it from `trailOf(robot_id)`.
+   */
+  trail_add?: LatLon[];
+  /** How many points have EVER been appended to this robot's trail, after
+   *  `trail_add`. The client checks its own count against this to notice a gap. */
+  trail_seq?: number;
 }
 
 export interface ControllerStatus {
@@ -689,6 +698,17 @@ export interface FleetMessage {
   tiles_attribution: string | null; // basemap credit line, derived from the source URL
   video?: string[]; // robot_ids with a live FPV feed right now
   drive_hz?: number; // server's radio airtime budget; the touch joystick obeys it
+  trail_max?: number; // cap to trim our copy of each trail to, as the bridge does
+}
+
+/**
+ * Every robot's breadcrumb in full. Sent once on connect and again only when we
+ * ask (`get_trails`), because it is the one frame on this socket that is
+ * genuinely large — the hot frame carries deltas against it.
+ */
+export interface TrailsMessage {
+  type: "trails";
+  trails: Record<string, { trail: LatLon[]; seq: number }>;
 }
 
 // ---- Outbound actions (browser -> bridge). ----
@@ -703,6 +723,9 @@ export type Action =
   | { action: "arm_shooter"; robot_id: string }
   | { action: "disarm_shooter"; robot_id: string }
   | { action: "fire"; robot_id: string }
+  // Resend every breadcrumb in full. Sent when our point count and the bridge's
+  // `trail_seq` disagree, i.e. we dropped frames and can no longer append.
+  | { action: "get_trails" }
   // Ask a robot for its full tunable config. Explicit rather than polled: the
   // reply is ~2.4 KB over a radio shared with telemetry.
   | { action: "get_config"; robot_id: string }
