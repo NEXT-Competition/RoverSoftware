@@ -297,6 +297,13 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         rid = fleet.selected
         if name == "estop":
             dispatch(rid, {"type": "estop"})
+        elif name == "select_next":
+            # Selection is a base-station concept: nothing is sent to any robot,
+            # so this is safe to press at any time and cannot interrupt whatever
+            # the current one is doing.
+            now_sel = fleet.select_next()
+            if now_sel:
+                print(f"[base] controller -> {now_sel}")
         elif name == "clear":
             dispatch(rid, {"type": "clear_estop"})
         elif name.startswith("mode:"):

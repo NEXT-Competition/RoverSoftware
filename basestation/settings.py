@@ -124,6 +124,10 @@ class ControllerMapping:
     # and means two ways to run one mechanism, not two mechanisms.
     btn_agitator: int = UNBOUND
     btn_agitator_rev: int = UNBOUND
+    # Walk the selection to the next robot. The gamepad always drives whichever
+    # robot is SELECTED, so without this the only way to change robots is the
+    # touchscreen — which is the one thing you are not holding while driving.
+    btn_select_next: int = UNBOUND
 
     # --- analog triggers used as buttons ---
     # A DS4 reports L2/R2 as AXES, not buttons: SDL gives them no button index
@@ -152,6 +156,7 @@ class ControllerMapping:
         """
         pairs = (
             (self.btn_estop, "estop"),
+            (self.btn_select_next, "select_next"),
             (self.btn_clear, "clear"),
             (self.btn_teleop, "mode:teleop"),
             (self.btn_object_align, "mode:object_align"),
@@ -243,6 +248,7 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.btn_feeder", "int", lo=UNBOUND, hi=31),
     Param("controller.hat_agitator", "int", lo=UNBOUND, hi=3),
     Param("controller.btn_agitator", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_select_next", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_agitator_rev", "int", lo=UNBOUND, hi=31),
     Param("controller.hat_agitator_rev", "int", lo=UNBOUND, hi=3),
     Param("controller.axis_throttle", "int", lo=UNBOUND, hi=15),

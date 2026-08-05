@@ -406,6 +406,29 @@ class FleetManager:
             if robot_id in self._robots:
                 self._selected = robot_id
 
+    def select_next(self) -> Optional[str]:
+        """Move the selection to the next robot, wrapping. Returns the new one.
+
+        Ordered by robot_id rather than by when each was first heard from, so
+        the same button press walks the fleet in the same order every time —
+        discovery order changes with whichever rover powered up first, and a
+        selector that reshuffles itself between matches is one nobody trusts.
+
+        Offline robots stay in the rotation on purpose: selecting one is how you
+        see why it is offline, and skipping it would make a rover that had just
+        dropped out unreachable from the gamepad exactly when you want it.
+        """
+        with self._lock:
+            ids = sorted(self._robots)
+            if not ids:
+                return None
+            try:
+                i = ids.index(self._selected) + 1
+            except ValueError:
+                i = 0  # nothing selected, or it went away: start at the top
+            self._selected = ids[i % len(ids)]
+            return self._selected
+
     def clear_trails(self) -> None:
         """Wipe breadcrumb history for every robot — needed after a site switch,
         else the trail draws a straight line from the old site to the new one."""

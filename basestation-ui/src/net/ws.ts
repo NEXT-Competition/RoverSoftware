@@ -44,6 +44,8 @@ export const driveHz = signal<number | null>(null);
 // Locally-owned selection so a tap feels instant; seeded from the server the
 // first time it tells us who's selected (matches the old app.js behaviour).
 export const selected = signal<string | null>(null);
+// The selection we have asked the bridge for but not yet seen echoed back.
+let pendingSelect: string | null = null;
 
 // ---- the cold channel (see basestation/app.py::settings_frame) ----
 /** Base-station settings and gamepad mapping, by flat dotted path. */
@@ -143,7 +145,19 @@ export function connect(): void {
       tilesAttribution.value = msg.tiles_attribution ?? null;
       videoRobots.value = msg.video ?? [];
       driveHz.value = typeof msg.drive_hz === "number" && msg.drive_hz > 0 ? msg.drive_hz : null;
-      if (selected.value == null) selected.value = msg.selected;
+      // Follow the bridge's selection, not just the first one it ever sent.
+      // The bridge owns which robot is selected and the GAMEPAD can change it
+      // (btn_select_next), so a UI that adopted it once and then ignored it
+      // left the operator driving one rover while the screen showed another —
+      // the camera, telemetry and mode buttons all belonged to the wrong robot.
+      //
+      // `pendingSelect` holds off a frame that was already in flight when
+      // somebody tapped a card, which would otherwise flick the highlight back
+      // for one frame before the bridge caught up.
+      if (msg.selected === pendingSelect) pendingSelect = null;
+      if (pendingSelect == null && msg.selected != null) {
+        selected.value = msg.selected;
+      }
       // Fold the frame's closed-loop traces into their history. Here rather
       // than in a computed, because the robot sends one step per frame and a
       // graph needs the ones before it — accumulation is not something a
@@ -180,5 +194,6 @@ export function sendAudio(pcm: ArrayBuffer): void {
 /** Select a robot: instant locally, and tell the bridge. */
 export function selectRobot(id: string): void {
   selected.value = id;
+  pendingSelect = id;
   send({ action: "select", robot_id: id });
 }
