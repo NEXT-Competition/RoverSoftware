@@ -2173,7 +2173,7 @@ from environment variables / CLI flags, and hands it to <code>Robot</code>.</p>
 <tr><td><code>DriveConfig</code></td><td><code>kind="tank"</code>, <code>actuators</code> (a dict, <code>left</code>→ch0 and <code>right</code>→ch1 by default), <code>roles</code>, <code>arm_seconds=2.0</code>, <code>slew_rate=4.0</code>, <code>steer_gain</code>, <code>min_pivot_throttle=0.15</code></td><td>The drivetrain: any number of named actuators, plus who plays which role.</td></tr>
 <tr><td><code>MechanismConfig</code></td><td><code>name</code>, <code>kind</code> (<code>power</code>|<code>pulse</code>), <code>actuators</code>, <code>presets</code>, plus the pulse geometry</td><td>A non-drivetrain subsystem: an intake, an arm, a second launcher.</td></tr>
 <tr><td><code>RoutineConfig</code></td><td><code>state_timeout_default=60</code>, <code>allow_arm=False</code></td><td>What a UI-authored state machine is allowed to do.</td></tr>
-<tr><td><code>CommsConfig</code></td><td><code>port="/dev/ttyUSB0"</code>, <code>baud=57600</code>, <code>command_timeout=0.5</code></td><td>XBee serial + teleop failsafe window. Must match the base station and the radios' <code>BD</code>.</td></tr>
+<tr><td><code>CommsConfig</code></td><td><code>port="/dev/ttyUSB0"</code>, <code>baud=115200</code>, <code>command_timeout=0.5</code></td><td>XBee serial + teleop failsafe window. Must match the base station and the radios' <code>BD</code>.</td></tr>
 <tr><td><code>ShooterConfig</code></td><td><code>enabled=False</code>, <code>channel=2</code>, <code>rest_angle=-30</code>, <code>fire_angle=30</code>, <code>fire_seconds=0.35</code>, <code>retract_seconds=0.35</code>, <code>dwell=0.5</code>, <code>cooldown=2.0</code>, <code>require_arm=True</code>, <code>require_arrived=True</code>, <code>max_shots=0</code></td><td>Servo launcher geometry + the firing policy for <code>shooter_align</code>. Off by default.</td></tr>
 <tr><td><code>GPSConfig</code></td><td><code>enabled</code>, <code>port="/dev/ttyAMA0"</code>, <code>baud=57600</code>, <code>fix_timeout=5.0</code>, <code>min_move_mps=0.5</code>, <code>update_rate_ms=200</code></td><td>Adafruit Ultimate GPS reader settings. 5 Hz fixes; the baud is raised over <code>PMTK251</code> to carry them.</td></tr>
 <tr><td><code>PIDConfig</code></td><td><code>kp</code>, <code>ki</code>, <code>kd</code>, <code>out_limit</code>, <code>i_limit</code></td><td>Gains for one loop, so they are tunable rather than edit-and-redeploy constants.</td></tr>
@@ -2661,7 +2661,7 @@ the accumulated drift never matters.</p>
 <h2 id="5-wire-protocol-xbee"><a class="header" href="#5-wire-protocol-xbee">5. Wire protocol (XBee)</a></h2>
 <p>Newline-delimited JSON over one shared serial channel. <code>to</code> addresses a robot (or
 <code>"all"</code>); robots stamp telemetry with <code>from</code>. The base station's baud
-(<code>basestation.env</code>, default <strong>57600</strong>) <strong>must match each robot's</strong> <code>RS_XBEE_BAUD</code>
+(<code>basestation.env</code>, default <strong>115200</strong>) <strong>must match each robot's</strong> <code>RS_XBEE_BAUD</code>
 — a mismatch delivers only garbage frames.</p>
 <blockquote>
 <p>Only the realtime half of this message set actually travels on the radio:
@@ -3451,7 +3451,7 @@ tuning them over ssh is how they end up never tuned at all.</p>
 </blockquote>
 <p><strong>Base station (<code>run_basestation.py</code>):</strong></p>
 <div class="table-wrapper"><table><thead><tr><th>Env</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
-<tr><td><code>RS_XBEE_PORT</code> / <code>RS_XBEE_BAUD</code></td><td><code>/dev/ttyUSB0</code> / <code>57600</code></td><td>Radio (or use <code>RS_SIM=1</code>).</td></tr>
+<tr><td><code>RS_XBEE_PORT</code> / <code>RS_XBEE_BAUD</code></td><td><code>/dev/ttyUSB0</code> / <code>115200</code></td><td>Radio (or use <code>RS_SIM=1</code>).</td></tr>
 <tr><td><code>RS_WEB_HOST</code> / <code>RS_WEB_PORT</code></td><td><code>127.0.0.1</code> / <code>8000</code></td><td>Dashboard bind.</td></tr>
 <tr><td><code>RS_SIM</code> / <code>RS_SIM_ROBOTS</code> / <code>RS_SIM_ORIGIN</code></td><td><code>0</code> / <code>3</code> / SF</td><td>Simulator.</td></tr>
 <tr><td><code>RS_NO_CONTROLLER</code></td><td><code>0</code></td><td>Touch-only (no gamepad).</td></tr>
