@@ -1047,10 +1047,11 @@ class RobotConfig:
     # the vision summary, mechanism states and the IMU calibration level.
     #
     # A telemetry frame has grown to ~600 bytes. At 5 Hz that is one rover using
-    # roughly two thirds of a 57600-baud channel — and the channel is shared, so
-    # a second rover oversubscribes it and a third puts it at 170%. That is what
-    # laggy steering on a multi-rover field actually is: drive frames queued
-    # behind telemetry on a line that cannot carry it.
+    # ~17% of a 115200-baud channel — and the channel is shared, so four rovers
+    # oversubscribe it and three leave almost no headroom. That is what laggy
+    # steering on a multi-rover field actually is: drive frames queued behind
+    # telemetry on a line that cannot carry it. (At 57600 it is twice that, and
+    # two rovers are already over.)
     #
     # The four blocks above are diagnostics. They are worth having on screen and
     # they are not worth five updates a second each: a satellite count and a

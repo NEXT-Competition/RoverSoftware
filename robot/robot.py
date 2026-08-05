@@ -1583,8 +1583,8 @@ class Robot:
         `detail=False` leaves out the slow tier — GPS fix health, the vision
         summary, mechanism states, IMU calibration — and lists what it left out
         under `keep`. See RobotConfig.telemetry_detail_hz for why: the frame had
-        grown to ~600 bytes, and one rover at 5 Hz was already two thirds of a
-        shared 57600-baud channel.
+        grown to ~600 bytes, and the channel it shares with every other rover
+        does not grow when one joins.
 
         `keep` rather than a bare omission because these blocks do not all mean
         the same thing by their absence. A missing `imu_calib` means the IMU has

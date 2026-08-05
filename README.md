@@ -579,16 +579,27 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
 ### Running more than one rover
 
 The XBee channel is shared, and it is the one resource that does not grow when
-you add a rover. A full telemetry frame is ~600 bytes; at `telemetry_hz` = 5 that
-is one rover using about two thirds of a 57600-baud line, so a second one
-oversubscribes it and drive commands start queueing behind status updates. That
-is what "steering lags, and it gets worse with more rovers" is.
+you add a rover. A full telemetry frame is ~600 bytes, so at `telemetry_hz` = 5
+each rover costs about 17% of a 115200-baud line before anything is sent *to* it.
+Add the drive stream and the channel fills up fast — and once it is full, drive
+commands queue behind status updates, which is what "steering lags, and it gets
+worse with more rovers" is.
 
-Three things keep it in budget, and all three are tunable:
+Utilisation at 115200 with `--drive-hz 15`, before and after the slow-tier split
+described below:
+
+| Rovers | Full frames | With `telemetry_detail_hz` = 1 |
+| --- | --- | --- |
+| 1 | 34% | 25% |
+| 2 | 60% | 42% |
+| 3 | 86% | 59% |
+| 4 | 112% — oversubscribed | 76% |
+
+Three knobs, in the order worth reaching for them:
 
 | Knob | Where | What it does |
 | --- | --- | --- |
-| `comms.baud` | robot + base station (**must match**) | 115200 roughly doubles the headroom. This is the first thing to change for a three-rover field. |
+| `comms.baud` | robot + base station (**must match**, and must match the radios' own `BD`) | 115200 is the shipped default on both ends. At 57600 the table above roughly doubles and two rovers already oversubscribe the line — so if steering lags, check this first. |
 | `telemetry_detail_hz` | robot | How often GPS health, the vision summary, mechanism states and IMU calibration ride along. Default 1 Hz against `telemetry_hz` 5, which takes ~35% off the average frame. The readings you drive on are unaffected. |
 | `telemetry_hz` | robot | The whole frame rate. Lower it last — it slows everything, including the readings that need to be current. |
 

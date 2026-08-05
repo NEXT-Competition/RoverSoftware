@@ -2,10 +2,10 @@
 holding a block back different from saying it is gone.
 
 A telemetry frame had grown to ~600 bytes. At telemetry_hz=5 that is one rover
-using about two thirds of a 57600-baud channel, and the channel is SHARED — so a
-second rover oversubscribes it and drive commands start queueing behind status
-updates. That is what "the base station lags once more than one rover connects"
-is, on the radio side.
+using ~17% of a 115200-baud channel, and the channel is SHARED — so by the third
+rover there is almost no headroom left and drive commands start queueing behind
+status updates. That is what "the base station lags once more than one rover
+connects" is, on the radio side.
 
 The fix is that not every reading needs restating five times a second. GPS fix
 health, the vision summary, mechanism states and the IMU calibration level ride
@@ -210,3 +210,33 @@ def test_the_first_frame_after_boot_carries_everything(rover):
     a full picture immediately rather than a second of blanks."""
     assert rover._last_detail == 0.0
     assert time.monotonic() - rover._last_detail >= 1.0 / rover.cfg.telemetry_detail_hz
+
+
+# --- the two ends of the radio -----------------------------------------------
+
+def test_both_ends_of_the_link_default_to_the_same_baud():
+    """A mismatch here does not fail loudly: the link still passes some traffic,
+    so what you see is the slower side's buffer backing up and command latency
+    growing without bound while you drive. The shipped defaults had drifted
+    apart — the robot at 115200, the base station at 57600 — which is exactly
+    the shape of bug worth a test rather than a comment.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+
+    def env_baud(path):
+        text = (root / path).read_text()
+        return int(re.search(r"^RS_XBEE_BAUD=(\d+)", text, re.M).group(1))
+
+    base_default = int(re.search(
+        r'"--baud", type=int, default=int\(_env\("RS_XBEE_BAUD", (\d+)\)\)',
+        (root / "run_basestation.py").read_text()).group(1))
+
+    assert RobotConfig().comms.baud == base_default, \
+        "robot/config.py and run_basestation.py disagree"
+    assert env_baud("packaging/robot.env") == base_default, \
+        "packaging/robot.env disagrees with the code default"
+    assert env_baud("packaging/basestation/basestation.env") == base_default, \
+        "packaging/basestation/basestation.env disagrees with the code default"
