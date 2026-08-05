@@ -330,6 +330,95 @@ body {
   font-size: 12px;
   color: var(--faint);
 }
+.fpv-guide-line {
+  position: absolute;
+  background: rgba(255, 80, 80, 0.85);
+  pointer-events: none;
+}
+.fpv-guide-horizontal {
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+.fpv-guide-vertical {
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+.fpv-guide-panel {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fpv-guide-controls {
+  display: grid;
+  gap: 8px;
+  padding: 0 4px;
+}
+.fpv-guide-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.fpv-guide-row label {
+  min-width: 34px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.fpv-guide-slider {
+  width: 100%;
+}
+.fpv-guide-switches {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.fpv-scope-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.fpv-scope-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.fpv-scope-track {
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--hairline);
+  position: relative;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.fpv-scope-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.2s ease;
+}
+.fpv-scope-switch input:checked + .fpv-scope-track {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.fpv-scope-switch input:checked + .fpv-scope-track::after {
+  transform: translateX(20px);
+}
+.fpv-scope-label {
+  font-size: 12px;
+  color: var(--text);
+}
 .dock {
   grid-area: dock;
   justify-self: end;
