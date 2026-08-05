@@ -83,7 +83,7 @@ The `.deb` is the right answer for a machine that stays built. Two others exist:
   over SSH. This is the development loop, not a distribution channel. `just
   sync` is faster still: it rsyncs changed code straight into `/opt` and
   restarts, with no packaging round-trip. See
-  [step 9](../bringup/deploy.md).
+  [step 10](../bringup/deploy.md).
 - **From a clone** — `pip install -r requirements.txt` and run
   `python run_robot.py` directly. Right for a laptop you are developing on,
   wrong for a rover that has to come up on its own after a power cut.

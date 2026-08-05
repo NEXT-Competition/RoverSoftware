@@ -27,17 +27,22 @@ from typing import Callable, Dict, List, Optional, Tuple
 from robot import layout, tuning
 from robot.comms.doc_transfer import Reassembler, split
 from robot.config import PIDConfig, RobotConfig
+from robot.control.commands import DriveCommand
 from robot.control.pid import PID
 from robot.control.rpm_trim import RpmTrim
 from robot.control.waypoint import bearing_deg, haversine_m
+from robot.control.script_controller import ScriptController
 from robot.routine import schema as routine_schema
 from robot.routine import store as routine_store
 from robot.routine.conditions import RoutineContext
 from robot.routine.engine import RoutineEngine
+from robot.script import schema as script_schema
+from robot.script import store as script_store
 
 # The modes a simulated robot advertises, so a routine that delegates to one is
 # accepted by the same validator the rover uses.
-SIM_CONTROLLERS = ("teleop", "object_align", "shooter_align", "waypoint", "routine")
+SIM_CONTROLLERS = ("teleop", "object_align", "shooter_align", "waypoint",
+                   "routine", "script")
 
 V_MAX = 3.0          # m/s at full throttle
 YAW_MAX = 60.0       # deg/s at full turn-in-place
@@ -106,14 +111,24 @@ class _SimRobot:
         # engine — see the module docstring. A state-machine editor you can only
         # test on a rover is a state-machine editor that ships broken.
         self.routine_doc: dict = routine_store.empty_doc()
+        # And the other authoring surface, run with the REAL ScriptController
+        # and the REAL sandbox for the same reason: a code editor you can only
+        # test on a rover is a code editor that ships broken.
+        self.script_doc: dict = script_store.empty_doc()
         self.layout_rev = 0
         self.routines_rev = 0
+        self.scripts_rev = 0
         self.jogging: Dict[str, float] = {}
         # Wall-clock until which this rover is "rebooting" and says nothing.
         # See SimulatedFleet._loop and the `restart` branch of send().
         self.rebooting_until = 0.0
         self.routines: Dict[str, object] = {}
         self.engine = None
+        # The real ScriptController, built lazily: constructing one per rover at
+        # startup would spin up nothing, but it holds a mechanism set that only
+        # exists once a layout has landed.
+        self.scripts: Dict[str, object] = {}
+        self.script: Optional[ScriptController] = None
         self.mech_power: Dict[str, float] = {}
         self._events: set = set()
         # The heading loop, the real one. A fake rover always knows its own
@@ -254,6 +269,103 @@ class _SimRobot:
             return {"kind": self._owner.cfg.mechanisms[self.name].kind,
                     "values": {"*": round(self._owner.mech_power.get(self.name, 0.0), 3)}}
 
+    # --- scripts -------------------------------------------------------------
+
+    class _SimWaypointMode:
+        """Enough of WaypointController for `rover.hand_over("waypoint")`.
+
+        The simulator has no real controllers — it integrates a unicycle model
+        directly — so delegation needs something with the Controller shape that
+        drives the clicked route. Everything else a script can hand over to
+        holds the rover still, which is what those modes do here anyway.
+        """
+
+        def __init__(self, owner):
+            self._owner = owner
+
+        def on_activate(self):
+            pass
+
+        def on_deactivate(self):
+            pass
+
+        def on_message(self, message):
+            if message.get("type") == "route":
+                self._owner.waypoints = [tuple(p) for p in
+                                         message.get("waypoints") or []]
+                self._owner.wp_idx = 0
+
+        def update(self, dt):
+            self._owner._auto_waypoint(dt)
+            return DriveCommand.tank(self._owner.left, self._owner.right)
+
+        def route_done(self):
+            return self._owner.wp_idx >= len(self._owner.waypoints)
+
+        def pid_traces(self):
+            return {}
+
+    def _script_controller(self) -> ScriptController:
+        """Build the real controller against this fake rover's parts.
+
+        Same providers the rover wires (robot/robot.py::_wire_script_controller),
+        pointed at the simulation instead of at hardware — so a script that
+        reads `rover.heading()` here reads the fake heading through exactly the
+        code path it will read the IMU through on the bench.
+        """
+        controller = ScriptController(
+            {"waypoint": self._SimWaypointMode(self)},
+            {name: self._SimMech(name, self) for name in self.cfg.mechanisms},
+            self.cfg.scripts)
+        controller.set_pose_provider(lambda: (self.lat, self.lon, self.heading))
+        controller.set_estop_provider(lambda: self.estop)
+        controller.set_command_provider(lambda: (self.left, self.right))
+        controller.set_imu_provider(lambda: {"heading": self.heading,
+                                             "calib": 3})
+        controller.set_gps_provider(lambda: {"fix": 1, "sats": 9, "hdop": 0.9,
+                                             "speed": 0.0})
+        controller.set_encoder_provider(
+            lambda: {"rpm": {"left": round(self.meas_rpm["left"], 1),
+                             "right": round(self.meas_rpm["right"], 1)},
+                     "l": round(self.meas_rpm["left"], 1),
+                     "r": round(self.meas_rpm["right"], 1)})
+        return controller
+
+    def _script_mode(self) -> ScriptController:
+        if self.script is None:
+            self.script = self._script_controller()
+            self.script.set_scripts(self.scripts)
+        return self.script
+
+    def select_script(self, script_id: str) -> None:
+        """Choose one. Starts it only if this rover is ALREADY in script mode.
+
+        The rover's own rule (robot/control/script_controller.py): selecting
+        while something else is driving must not start a thread nothing is
+        draining. The dashboard sends `select_script` and then `mode`, and the
+        mode change below is what starts it.
+        """
+        self._script_mode().on_message({"type": "select_script", "id": script_id})
+
+    def start_script(self, script_id: str = "") -> None:
+        script = self._script_mode()
+        if script_id:
+            script.select(script_id)
+        script.on_activate()
+
+    def script_command(self, cmd: str, script_id: str = "") -> None:
+        message = {"type": "script_cmd", "cmd": cmd}
+        if script_id:
+            message["id"] = script_id
+        self._script_mode().on_message(message)
+
+    def _run_script(self, dt: float) -> None:
+        if self.script is None:
+            self.left = self.right = 0.0
+            return
+        command = self.script.update(dt)
+        self.left, self.right = command.left, command.right
+
     def _routine_ctx(self) -> RoutineContext:
         mechanisms = {name: self._SimMech(name, self)
                       for name in self.cfg.mechanisms}
@@ -349,10 +461,14 @@ class _SimRobot:
             if self.engine is not None:
                 self.engine.stop("e-stopped")
                 self.engine = None
+            if self.script is not None:
+                self.script.on_estop()
         elif self.mode == "waypoint":
             self._auto_waypoint(dt)
         elif self.mode == "routine":
             self._run_routine(dt)
+        elif self.mode == "script":
+            self._run_script(dt)
 
         # Motion comes from the WHEELS, not the command — that gap is the entire
         # subject of the encoder feature, and a simulator that skipped it could
@@ -390,6 +506,9 @@ class _SimRobot:
         if self.mode == "routine":
             t["routine"] = (self.engine.status() if self.engine is not None
                             else {"id": None, "state": None, "done": True})
+        if self.mode == "script":
+            t["script"] = (self.script.status() if self.script is not None
+                           else {"id": None, "run": False})
         # The heading loop, on the same switch and in the same shape the rover
         # uses (robot/robot.py::_telemetry) — keyed by the loop's tuning path,
         # and only while a loop is actually steering.
@@ -520,6 +639,28 @@ class SimulatedFleet:
                          "ssid": r.wifi_ssid, "ip": r.wifi_ip(),
                          "signal": 71 if r.wifi_ssid else None})
 
+    def _apply_scripts(self, r: _SimRobot, doc: dict) -> None:
+        """Validate scripts with the REAL validator and install them.
+
+        Which means a syntax error is refused here exactly as it would be on a
+        rover, with the same line number — so the editor's error path is
+        something you can see working before there is any hardware to see it on.
+        """
+        result = script_schema.parse(doc)
+        if result.ok:
+            r.script_doc = doc
+            r.scripts = result.scripts
+            r.scripts_rev += 1
+            if r.script is None:
+                r.script = r._script_controller()
+            r.script.set_scripts(result.scripts)
+        self.on_message({
+            "type": "scripts_result", "from": r.rid, "ok": result.ok,
+            "errors": result.errors, "warnings": result.warnings,
+            "rev": r.scripts_rev, "save_error": None})
+        if result.ok:
+            self._emit(r, r.script_doc, "scripts", rev=r.scripts_rev)
+
     def _receive_doc(self, r: _SimRobot, mtype: str, msg: dict) -> None:
         rx = self._rx.setdefault(r.rid, {}).setdefault(mtype, Reassembler())
         doc = rx.feed(msg)
@@ -546,6 +687,9 @@ class SimulatedFleet:
                 # Echo the stored document, as the rover does — the validator
                 # clamps, so what was saved is not always what was sent.
                 self._emit(r, layout.to_doc(r.cfg), "layout", rev=r.layout_rev)
+            return
+        if mtype == "put_scripts":
+            self._apply_scripts(r, doc)
             return
         result = routine_schema.parse(doc, r.cfg.routines, SIM_CONTROLLERS)
         if result.ok:
@@ -589,11 +733,20 @@ class SimulatedFleet:
         if t == "get_routines":
             self._emit(r, r.routine_doc, "routines", rev=r.routines_rev)
             return
-        if t in ("put_layout", "put_routines"):
+        if t == "get_scripts":
+            self._emit(r, r.script_doc, "scripts", rev=r.scripts_rev)
+            return
+        if t in ("put_layout", "put_routines", "put_scripts"):
             self._receive_doc(r, t, msg)
             return
         if t in ("get_wifi", "scan_wifi", "set_wifi", "forget_wifi"):
             self._wifi(r, t, msg)
+            return
+        if t == "select_script":
+            r.select_script(str(msg.get("id", "")))
+            return
+        if t == "script_cmd":
+            r.script_command(str(msg.get("cmd", "")), str(msg.get("id", "")))
             return
         if t == "select_routine":
             r.start_routine(str(msg.get("id", "")))
@@ -658,7 +811,7 @@ class SimulatedFleet:
                 r.set_arcade(float(msg.get("throttle", 0)), float(msg.get("steer", 0)))
         elif t == "mode":
             previous, r.mode = r.mode, msg.get("mode", r.mode)
-            if r.mode not in ("waypoint", "routine"):
+            if r.mode not in ("waypoint", "routine", "script"):
                 r.left = r.right = 0.0
                 # No loop is steering any more, so stop reporting one. A frozen
                 # trace left on screen is a graph that lies about what the rover
@@ -669,6 +822,17 @@ class SimulatedFleet:
                 r.start_routine()
             elif previous == "routine" and r.mode != "routine":
                 r.engine = None
+                r.mech_power = {k: 0.0 for k in r.mech_power}
+            if r.mode == "script" and previous != "script":
+                r.start_script()
+            elif previous == "script" and r.mode != "script":
+                # Through the controller's own hook, not by dropping the
+                # reference: leaving the mode has to unwind the script thread
+                # and stop the mechanisms, which is exactly what on_deactivate
+                # does on a rover.
+                if r.script is not None:
+                    r.script.on_deactivate()
+                r.left = r.right = 0.0
                 r.mech_power = {k: 0.0 for k in r.mech_power}
         elif t == "estop":
             r.estop = True

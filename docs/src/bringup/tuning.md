@@ -1,4 +1,4 @@
-# 7 · Tune it in the field
+# 8 · Tune it in the field
 
 *Settings → Tuning. Over the radio, live, and saved on the robot.*
 

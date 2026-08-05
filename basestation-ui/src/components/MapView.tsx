@@ -9,6 +9,7 @@ import {
   tilesUrl,
 } from "../net/ws.ts";
 import { addWaypoint, routeMode, routePts } from "../state/route.ts";
+import { trails } from "../state/trails.ts";
 import {
   addPlaceAt,
   editingPlace,
@@ -34,7 +35,10 @@ const BLANK_TILE =
 
 function robotIcon(r: Robot, isSel: boolean): L.DivIcon {
   const cls = "robot-icon" + (r.online ? "" : " offline") + (isSel ? " sel" : "");
-  const heading = r.heading ?? 0;
+  // Whole degrees: this is what iconKey() compares on, and a fraction of a
+  // degree is not a rotation anyone can see on a 20-pixel arrow. Rounding is
+  // what stops GPS jitter from rebuilding every marker's DOM at 30 Hz.
+  const heading = Math.round(r.heading ?? 0);
   return L.divIcon({
     className: cls,
     html:
@@ -47,6 +51,18 @@ function robotIcon(r: Robot, isSel: boolean): L.DivIcon {
 interface MarkerEntry {
   marker: L.Marker;
   trail: L.Polyline;
+  // What we last actually drew. The fleet frame arrives at ui_hz whether or not
+  // anything on it moved, and both of the Leaflet calls below are expensive:
+  // setIcon tears the marker's DOM node down and builds a new one, setLatLngs
+  // rebuilds an SVG path of up to trail_max points. Doing either on a value that
+  // has not changed is pure cost, and it is paid per robot per frame — which is
+  // how a tablet ends up dropping frames the moment a third rover connects.
+  drawn: { lat: number; lon: number; icon: string; seq: number };
+}
+
+/** The inputs robotIcon() renders, as one comparable string. */
+function iconKey(r: Robot, isSel: boolean): string {
+  return `${r.online ? 1 : 0}|${isSel ? 1 : 0}|${Math.round(r.heading ?? 0)}|${r.robot_id}`;
 }
 
 // A saved place reads as permanent, a pending route waypoint as transient, so
@@ -93,6 +109,9 @@ export function MapView() {
   // Read signals so this component re-renders (and the sync effects run) on change.
   const robotList = robots.value;
   const sel = selected.value;
+  // Breadcrumbs are assembled client-side from the bridge's deltas, so they no
+  // longer ride on the robot objects above; see state/trails.ts.
+  const trailState = trails.value;
   const tUrl = tilesUrl.value;
   const tMax = tilesMaxZoom.value;
   const tAttr = tilesAttribution.value;
@@ -153,7 +172,11 @@ export function MapView() {
     tileRef.current = L.tileLayer(url, opts).addTo(map);
   }, [tUrl, tMax, tAttr]);
 
-  // ---- robots: markers + trails (runs each render) ----
+  // ---- robots: markers + trails ----
+  // Depends on the fleet, the selection and the trails, so it runs when one of
+  // those changes rather than on every render. It used to have no dependency
+  // array at all, which meant a full pass — including a DOM rebuild per marker —
+  // for every unrelated re-render this component had.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -166,18 +189,38 @@ export function MapView() {
       seen.add(r.robot_id);
       positioned.push([r.lat, r.lon]);
       const isSel = r.robot_id === sel;
+      const key = iconKey(r, isSel);
       let entry = markers[r.robot_id];
       if (!entry) {
         entry = {
           marker: L.marker([r.lat, r.lon], { icon: robotIcon(r, isSel) }).addTo(map),
           trail: L.polyline([], { color: "#4c9eff", weight: 2, opacity: 0.55 }).addTo(map),
+          drawn: { lat: r.lat, lon: r.lon, icon: key, seq: -1 },
         };
         entry.marker.on("click", () => selectRobot(r.robot_id));
         markers[r.robot_id] = entry;
       }
-      entry.marker.setLatLng([r.lat, r.lon]);
-      entry.marker.setIcon(robotIcon(r, isSel));
-      if (r.trail && r.trail.length) entry.trail.setLatLngs(r.trail as L.LatLngExpression[]);
+      const drawn = entry.drawn;
+      if (r.lat !== drawn.lat || r.lon !== drawn.lon) {
+        entry.marker.setLatLng([r.lat, r.lon]);
+        drawn.lat = r.lat;
+        drawn.lon = r.lon;
+      }
+      // setIcon replaces the marker's DOM element, so it is gated on the values
+      // the icon is actually built from — not called once per frame per robot.
+      if (key !== drawn.icon) {
+        entry.marker.setIcon(robotIcon(r, isSel));
+        drawn.icon = key;
+      }
+      // Likewise the polyline: rebuilding an SVG path of hundreds of points is
+      // the single most expensive thing on this pass, and `trail_seq` tells us
+      // exactly when a point was added without comparing the arrays.
+      const held = trailState[r.robot_id];
+      const seq = held?.seq ?? 0;
+      if (seq !== drawn.seq) {
+        entry.trail.setLatLngs((held?.points ?? []) as L.LatLngExpression[]);
+        drawn.seq = seq;
+      }
     }
 
     for (const id of Object.keys(markers)) {
@@ -193,7 +236,7 @@ export function MapView() {
       if (positioned.length === 1) map.setView(positioned[0], 18);
       else map.fitBounds(positioned as L.LatLngBoundsExpression, { padding: [70, 70] });
     }
-  });
+  }, [robotList, sel, trailState]);
 
   // ---- saved places ----
   // Draggable, because a bucket recorded from a rover parked beside it is a

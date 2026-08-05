@@ -9,6 +9,7 @@ export type Mode =
   | "shooter_align"
   | "waypoint"
   | "routine"
+  | "script"
   | (string & {});
 
 export type LatLon = [number, number];
@@ -140,6 +141,19 @@ export interface RoutineStatus {
   why?: string | null; // why it ended
 }
 
+/** Whether the operator's Python is still going, present only while `script` is
+ *  the active mode (robot/control/script_controller.py::status). Deliberately
+ *  tiny: it rides the hot radio frame, while the console the script printed
+ *  rides the bulk link and may not arrive at all. */
+export interface ScriptStatus {
+  id: string | null;
+  run: boolean; // is a run in progress right now
+  t?: number; // seconds it has been running
+  drive?: string | null; // the mode it handed driving to, if any
+  why?: string | null; // how the last run ended
+  err?: string | null; // the last line of the last error, truncated
+}
+
 /** GPS fix health (gps.py::GPS.telemetry). Optional fields are absent until
  * the module reports them — hdop/alt need a GGA, track needs the rover to move. */
 export interface GpsStatus {
@@ -169,6 +183,7 @@ export interface Robot {
   shooter?: ShooterStatus | null; // absent unless shooter_align is active
   mech?: Record<string, MechStatus> | null; // absent unless the layout has any
   routine?: RoutineStatus | null; // absent unless `routine` is active
+  script?: ScriptStatus | null; // absent unless `script` is active
   enc?: EncoderStatus | null; // absent unless the build has wheel encoders
   sonar?: SonarStatus | null; // absent unless the build has an ultrasonic fitted
   /** Live closed-loop traces, keyed by the loop's own tuning path
@@ -177,7 +192,16 @@ export interface Robot {
   pid?: Record<string, PidTrace> | null;
   online: boolean;
   age: number | null; // seconds since last telemetry, or null
-  trail: LatLon[]; // breadcrumb of past positions
+  /**
+   * Breadcrumb points appended since the bridge's last broadcast — NOT the whole
+   * trail, which is why this is not the thing to draw. The full breadcrumb is
+   * assembled client-side in state/trails.ts from the `trails` frame plus these;
+   * read it from `trailOf(robot_id)`.
+   */
+  trail_add?: LatLon[];
+  /** How many points have EVER been appended to this robot's trail, after
+   *  `trail_add`. The client checks its own count against this to notice a gap. */
+  trail_seq?: number;
 }
 
 export interface ControllerStatus {
@@ -439,8 +463,43 @@ export interface RobotDocuments {
   routines: RoutineDoc | null;
   routines_rev: number;
   routines_result: DocResult | null;
+  scripts: ScriptDoc | null;
+  scripts_rev: number;
+  scripts_result: DocResult | null;
   fields: FieldDescriptor[];
   fields_rev: number;
+}
+
+/** One operator-written Python program (robot/script/schema.py::Script).
+ *
+ *  The robot COMPILES every one of these when the document lands, so a save is
+ *  refused with a line number rather than succeeding and then dying the moment
+ *  somebody presses Run. `scripts_result.errors` is where that lands. */
+export interface ScriptSpec {
+  id: string;
+  name?: string;
+  code: string;
+}
+
+export interface ScriptDoc {
+  version: 1;
+  scripts: ScriptSpec[];
+}
+
+/** What a running script has printed, and the values it asked to be watched.
+ *
+ *  Its own frame rather than part of the cold `settings` one: a script prints
+ *  continuously, and folding it in would re-send every config and every
+ *  document alongside each new line. See basestation/app.py::broadcast_loop. */
+export interface ScriptConsole {
+  lines: string[];
+  watch: Record<string, unknown>;
+  rev: number;
+}
+
+export interface ConsoleMessage {
+  type: "console";
+  console: Record<string, ScriptConsole>; // by robot_id
 }
 
 /** The cold channel: sent on connect and then only when something changes.
@@ -639,6 +698,17 @@ export interface FleetMessage {
   tiles_attribution: string | null; // basemap credit line, derived from the source URL
   video?: string[]; // robot_ids with a live FPV feed right now
   drive_hz?: number; // server's radio airtime budget; the touch joystick obeys it
+  trail_max?: number; // cap to trim our copy of each trail to, as the bridge does
+}
+
+/**
+ * Every robot's breadcrumb in full. Sent once on connect and again only when we
+ * ask (`get_trails`), because it is the one frame on this socket that is
+ * genuinely large — the hot frame carries deltas against it.
+ */
+export interface TrailsMessage {
+  type: "trails";
+  trails: Record<string, { trail: LatLon[]; seq: number }>;
 }
 
 // ---- Outbound actions (browser -> bridge). ----
@@ -653,6 +723,9 @@ export type Action =
   | { action: "arm_shooter"; robot_id: string }
   | { action: "disarm_shooter"; robot_id: string }
   | { action: "fire"; robot_id: string }
+  // Resend every breadcrumb in full. Sent when our point count and the bridge's
+  // `trail_seq` disagree, i.e. we dropped frames and can no longer append.
+  | { action: "get_trails" }
   // Ask a robot for its full tunable config. Explicit rather than polled: the
   // reply is ~2.4 KB over a radio shared with telemetry.
   | { action: "get_config"; robot_id: string }
@@ -667,6 +740,7 @@ export type Action =
   // kilobytes on a radio shared with telemetry, and the editors ask on open.
   | { action: "get_layout"; robot_id: string }
   | { action: "get_routines"; robot_id: string }
+  | { action: "get_scripts"; robot_id: string }
   | { action: "get_fields"; robot_id: string }
   // WiFi. The one configuration path that reaches a rover with no network at
   // all — it goes over the radio when there is no WiFi to carry it, because
@@ -691,6 +765,10 @@ export type Action =
   // and the transfer is all-or-nothing to match.
   | { action: "set_layout"; robot_id: string; doc: LayoutDoc; save?: boolean }
   | { action: "set_routines"; robot_id: string; doc: RoutineDoc; save?: boolean }
+  | { action: "set_scripts"; robot_id: string; doc: ScriptDoc; save?: boolean }
+  | { action: "select_script"; robot_id: string; id: string }
+  | { action: "script_cmd"; robot_id: string; cmd: "start" | "stop" | "restart"; id?: string }
+  | { action: "clear_console"; robot_id: string }
   // Running a routine. Pass-through: the robot owns every rule about what one
   // may do, and the base station is the half that can be disconnected.
   | { action: "select_routine"; robot_id: string; id: string }

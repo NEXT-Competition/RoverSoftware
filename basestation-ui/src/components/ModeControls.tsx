@@ -3,10 +3,11 @@ import type { Mode } from "../net/types.ts";
 
 // The modes that are a way of DRIVING, and that an operator picks directly.
 //
-// Two of the five are deliberately absent. `routine` (net/types.ts, and MODES in
-// basestation/command/vocabulary.py) is not a button because "routine" on its
-// own is not a thing anyone wants — a particular routine is, and RoutineControls
-// lists them by name. `object_align` is not a button because bare "drive at the
+// Three of the six are deliberately absent. `routine` and `script`
+// (net/types.ts, and MODES in basestation/command/vocabulary.py) are not
+// buttons because neither word on its own is a thing anyone wants — a
+// particular routine or script is, and RoutineControls and ScriptControls list
+// them by name. `object_align` is not a button because bare "drive at the
 // thing you can see" is a step inside a sequence, not a way to drive a match: on
 // its own it creeps at whatever standoff Settings was last left on and then sits
 // there. It remains a drive mode for routine states (routines/vocab.ts), which

@@ -7,8 +7,10 @@ link to a base station.
 The build is described from the dashboard rather than compiled in: declare as
 many motors and servos as you have, pick a drivetrain (two-motor tank, one motor
 plus a steering servo, a single motor), and group the rest into mechanisms — an
-intake, an arm, a launcher. Then **program it without Python**: the Routines tab
-is a state-machine editor, and the machine runs on the robot itself.
+intake, an arm, a launcher. Then program it **either way you like**: the
+Routines tab is a state-machine editor for people who would rather draw it, and
+the Code tab is a Python editor over an API that names every sensor and every
+actuator the build actually has. Both run on the robot itself.
 
 Built teleop-first, but structured so the autonomy (object alignment, GPS
 waypoint navigation) and the multi-robot base station drop in without reworking
@@ -16,8 +18,9 @@ the core.
 
 > **📖 The handbook: <https://next-competition.github.io/RoverSoftware/>**
 > — an illustrated walkthrough of running the base station, driving a rover,
-> adding your own motors and mechanisms, and programming a routine without
-> Python. Source is [`docs/`](docs/); build it locally with `just book`.
+> adding your own motors and mechanisms, and programming it — as a state
+> machine you draw, or in Python. Source is [`docs/`](docs/); build it locally
+> with `just book`.
 >
 > Also in there: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how the
 > whole system works end to end (robot, base station, protocol, GPS, offline
@@ -97,7 +100,9 @@ robot/
     detection.py        the Detection contract the controller consumes
     waypoint.py         autonomy scaffold — inject a GPS pose provider
     routine_controller.py  the `routine` mode: runs a UI-authored state machine
+    script_controller.py   the `script` mode: runs operator-written Python
   routine/              the FSM engine: schema, conditions, actions, engine, store
+  script/               the Python runtime: the `rover` API, the sandbox, schema, store
   tuning.py             whitelist of what the dashboard may change, and its limits
   robot.py              wires it all together; the control loop
 run_robot.py            entry point (run on the Pi)
@@ -338,6 +343,23 @@ for the rest — so field tuning survives the next power cycle.
   naming a routine is how you invoke it. Transitions are checked in order, one per tick, and a condition
   can be required to hold continuously before it counts — the same reason the
   launcher waits half a second before firing.
+- **Code** — the other way to program it: real Python, written in the dashboard,
+  running on the robot. Everything hangs off one injected `rover` object —
+  `rover.forward(0.3, seconds=2)`, `rover.distance_ahead()`, `rover.vision.offset`,
+  `rover.mech("intake").power(0.8)`, `rover.align_to("bucket", within_m=1.0)` —
+  with a searchable reference panel beside the editor that types the call for
+  you. Not a replacement for routines: a graph is the better shape for a
+  sequence of states, code is the better shape for anything with arithmetic in
+  it, and `rover.align_to` hands the wheel to the very same `object_align`
+  controller a routine state delegates to. The robot **compiles** each script as
+  it lands, so a missing colon comes back as `line 12` with a marker in the
+  editor rather than as a Run that dies at a field. A script runs on its own
+  thread and reaches the hardware only through a mailbox the control loop
+  drains, so it can never block the 50 Hz loop and never writes a PWM value; it
+  can always be stopped, including `while True: pass`; and when it stops — for
+  any reason, including the e-stop — the motors and every mechanism stop with
+  it. `print` and `rover.watch(name, value)` stream to a console under the
+  editor over WiFi.
 - **Network** — put a rover on the WiFi in front of you, from the dashboard.
   Scan, pick, connect; it reports what NetworkManager said and the address it
   got. Works on a rover that is on **no network at all**, because the request
@@ -499,7 +521,7 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 // base station -> robot
 {"type": "drive", "throttle": 0.5, "steer": -0.2, "to": "rover1"}   // arcade
 {"type": "drive", "left": 0.4, "right": 0.6, "to": "rover1"}         // direct tank
-{"type": "mode", "mode": "teleop", "to": "rover1"}                   // or object_align / waypoint / routine
+{"type": "mode", "mode": "teleop", "to": "rover1"}                   // or object_align / waypoint / routine / script
 {"type": "route", "waypoints": [[lat, lon], ...], "to": "rover1"}    // waypoint mode
 {"type": "estop", "to": "rover1"}                                    // latch motors off
 {"type": "clear_estop", "to": "rover1"}
@@ -509,20 +531,31 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 // documents: structure rather than scalars, sent as numbered fragments
 {"type": "get_layout", "to": "rover1"}     // what this build HAS
 {"type": "get_routines", "to": "rover1"}   // its state machines
+{"type": "get_scripts", "to": "rover1"}    // its Python scripts
 {"type": "put_layout", "txid": "B1", "seq": 0, "n": 3, "part": "{\"vers…", "to": "rover1"}
 {"type": "select_routine", "id": "collect", "to": "rover1"}
 {"type": "routine_cmd", "cmd": "start", "to": "rover1"}   // start | stop | restart
 {"type": "routine_event", "name": "go", "to": "rover1"}   // advance a "when I press" transition
+{"type": "select_script", "id": "collect", "to": "rover1"}
+{"type": "script_cmd", "cmd": "start", "to": "rover1"}    // start | stop | restart
 {"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}   // bench test, teleop only
+{"type": "fpv", "on": true, "to": "rover1"}   // is anyone watching this camera?
 
 // robot -> base station (telemetry, ~5 Hz)
 {"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
  "left": 0.4, "right": 0.6, "battery": 87.0, "lat": 37.77, "lon": -122.41, "heading": 30.0}
+// the same frame between detail ticks: the slow blocks are named, not dropped
+{"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
+ "left": 0.4, "right": 0.6, "keep": ["gps", "vision", "mech", "imu_calib"]}
 {"type": "config", "from": "rover1", "config": {"align.pid.kp": 0.6},
  "rejected": {}, "restart": [], "save_error": null}
 {"type": "layout_result", "from": "rover1", "ok": true, "errors": [], "restart_required": true}
 {"type": "routines_result", "from": "rover1", "ok": false,
  "errors": ["state 'shoot': unknown mechanism 'intak'"]}
+{"type": "scripts_result", "from": "rover1", "ok": false,
+ "errors": ["script 'collect': line 12: expected ':'"]}
+{"type": "script_output", "from": "rover1", "id": "collect",   // WiFi only
+ "lines": ["stopped at 0.38 m"], "watch": {"ahead": 0.38}}
 ```
 
 `config` frames carry flat dotted paths into `RobotConfig`; `robot/tuning.py`
@@ -534,14 +567,52 @@ and never polled.
 
 **Documents are not merged.** A `config` payload can be, because it is
 independent scalars — half a snapshot is a valid smaller snapshot. A layout is a
-tree, and half a tree is a robot with one drive motor, so layouts and routines
-are sliced into numbered fragments and nothing is applied until every fragment
-arrives. The robot replies with a verdict and echoes the *stored* copy back,
+tree, and half a tree is a robot with one drive motor, so layouts, routines and
+scripts are sliced into numbered fragments and nothing is applied until every
+fragment arrives. The robot replies with a verdict and echoes the *stored* copy back,
 since the validator clamps and what was saved is not always what was sent.
 
 Safety built in: teleop stops if commands stop arriving (`command_timeout`), and
 e-stop overrides every mode until cleared. (Position fields appear in telemetry
 once a `pose_provider` — i.e. GPS — is attached on the robot.)
+
+### Running more than one rover
+
+The XBee channel is shared, and it is the one resource that does not grow when
+you add a rover. A full telemetry frame is ~600 bytes, so at `telemetry_hz` = 5
+each rover costs about 17% of a 115200-baud line before anything is sent *to* it.
+Add the drive stream and the channel fills up fast — and once it is full, drive
+commands queue behind status updates, which is what "steering lags, and it gets
+worse with more rovers" is.
+
+Utilisation at 115200 with `--drive-hz 15`, before and after the slow-tier split
+described below:
+
+| Rovers | Full frames | With `telemetry_detail_hz` = 1 |
+| --- | --- | --- |
+| 1 | 34% | 25% |
+| 2 | 60% | 42% |
+| 3 | 86% | 59% |
+| 4 | 112% — oversubscribed | 76% |
+
+Three knobs, in the order worth reaching for them:
+
+| Knob | Where | What it does |
+| --- | --- | --- |
+| `comms.baud` | robot + base station (**must match**, and must match the radios' own `BD`) | 115200 is the shipped default on both ends. At 57600 the table above roughly doubles and two rovers already oversubscribe the line — so if steering lags, check this first. |
+| `telemetry_detail_hz` | robot | How often GPS health, the vision summary, mechanism states and IMU calibration ride along. Default 1 Hz against `telemetry_hz` 5, which takes ~35% off the average frame. The readings you drive on are unaffected. |
+| `telemetry_hz` | robot | The whole frame rate. Lower it last — it slows everything, including the readings that need to be current. |
+
+The other shared resource is the WiFi, which carries the FPV video, the config
+link and the dashboard's own socket. Video dominates it by an order of
+magnitude, so rovers stream only while their feed is actually open (see FPV
+above), and the dashboard's fleet frame sends breadcrumb trails as deltas rather
+than restating every point at `ui_hz`.
+
+A quick way to tell which link is the problem: if the *map and dashboard* are
+sluggish, it is the WiFi or the browser; if *steering* is sluggish while the
+dashboard is fine, it is the radio. The base station logs XBee `Partials:` and
+`Drops:` once a second, and both climbing is the radio saying it is full.
 
 ## Roadmap (the seams are already here)
 
@@ -592,7 +663,11 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   Camera panel. When a model is loaded, detection boxes are drawn onto the feed
   (green = the object `object_align` is tracking, amber = others). Enable on the
   robot with `--fpv --fpv-host <base-ip>` (needs WiFi/LAN — the XBee radio can't
-  carry video). Shares the one camera with object detection.
+  carry video). Shares the one camera with object detection. A rover streams
+  only while somebody actually has its feed open: the base station counts the
+  MJPEG streams it is serving and tells each rover whether it has any, so on a
+  multi-rover field the ones nobody is watching are not spending the shared
+  WiFi on frames that get thrown away.
 - **Base station app** — ✅ done: map view + live multi-robot tracking, PS4
   teleop of the selected robot, mode switching, click-to-route waypoints, and the
   FPV camera feed. Next: offline tile caching and a telemetry/log panel.
@@ -607,6 +682,12 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   align, shooter align or waypoint, which is how the FSM composes the autonomy
   that already exists — what it does to the mechanisms, and what makes it move
   on. Routines run on the robot, so they survive losing the radio.
+- **Program it WITH code** — ✅ done: the Code tab is a Python editor over an API
+  that names every sensor and every actuator, with the same delegation to the
+  built-in autonomy. Scripts run on the robot on their own thread and reach the
+  hardware only through a mailbox the control loop drains, so one can never
+  block the 50 Hz loop, can always be stopped, and takes the motors and every
+  mechanism to rest with it however it ends.
 - **Voice commanding** — ✅ done: hold a key, say "send rover2 to bucket A" or
   "rover1 align to the cone", and it happens. Speech is recognised **on the base
   station** with faster-whisper and classified by a **local Gemma in LM Studio**,

@@ -139,13 +139,15 @@ def test_resolve_mode_refuses_a_non_mode(vocab):
 
 
 def test_modes_match_the_dashboards_list():
-    """The dashboard reaches all five. Four are buttons in
-    basestation-ui/src/components/ModeControls.tsx; `routine` is entered by
-    tapping one of the routines RoutineControls.tsx lists by name, because
-    "routine" on its own is not a thing an operator wants — a particular
-    routine is. If one list grows without the other, an operator can say a mode
-    they cannot click or click one they cannot say."""
-    assert MODES == ("teleop", "object_align", "shooter_align", "waypoint", "routine")
+    """The dashboard reaches all six. Three are buttons in
+    basestation-ui/src/components/ModeControls.tsx; `routine` and `script` are
+    entered by tapping one of the programs RoutineControls.tsx and
+    ScriptControls.tsx list BY NAME, because neither word on its own is a thing
+    an operator wants — a particular routine or script is. If one list grows
+    without the other, an operator can say a mode they cannot click or click
+    one they cannot say."""
+    assert MODES == ("teleop", "object_align", "shooter_align", "waypoint",
+                     "routine", "script")
 
 
 # --- routines and labels --------------------------------------------------

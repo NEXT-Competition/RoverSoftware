@@ -6,7 +6,7 @@
     #   then open http://127.0.0.1:8000
 
     # Talk to real robots over the XBee radio:
-    python run_basestation.py --port /dev/tty.usbserial-XXXX --baud 57600
+    python run_basestation.py --port /dev/tty.usbserial-XXXX --baud 115200
 
 Defaults come from the environment first (so the systemd service can be
 configured via /etc/roversoftware/basestation.env), then CLI flags override:
@@ -61,7 +61,7 @@ def main():
     # Matches robot/config.py CommsConfig.baud. These two MUST agree: the link
     # still passes traffic when they don't, but the slower side's serial buffer
     # backs up and command latency grows without bound while you drive.
-    p.add_argument("--baud", type=int, default=int(_env("RS_XBEE_BAUD", 57600)))
+    p.add_argument("--baud", type=int, default=int(_env("RS_XBEE_BAUD", 115200)))
     p.add_argument("--sim", action="store_true", default=_envbool("RS_SIM"),
                    help="run the built-in simulator with fake robots instead of a radio")
     p.add_argument("--robots", type=int, default=int(_env("RS_SIM_ROBOTS", 3)),
@@ -81,11 +81,15 @@ def main():
                    help="online source used to fill /tiles cache misses (unless --tiles-offline)")
     p.add_argument("--tiles-offline", action="store_true", default=_envbool("RS_TILES_OFFLINE"),
                    help="never fetch missing tiles online; serve only what's cached")
-    # An airtime budget, not a feel knob. A drive frame is ~62 B ≈ 11 ms at
-    # 57600; 5 Hz of telemetry already costs ~26% of a half-duplex channel, so
-    # 15 Hz lands near 40% utilisation with headroom for retries. The old
-    # default of 30 oversubscribed a 9600 link 2x — which is what "laggy steering
-    # that gets worse the longer you hold the stick" actually was.
+    # An airtime budget, not a feel knob. A drive frame is ~62 B ≈ 5 ms at
+    # 115200; one rover's 5 Hz of telemetry already costs ~17% of a half-duplex
+    # channel, so 15 Hz lands near 25% utilisation with headroom for retries.
+    # The old default of 30 oversubscribed a 9600 link 2x — which is what "laggy
+    # steering that gets worse the longer you hold the stick" actually was.
+    #
+    # The channel is SHARED, so that telemetry cost is per rover: three of them
+    # is ~50% before a single drive frame. This is the knob to lower on a
+    # crowded field, alongside the robots' telemetry_detail_hz.
     p.add_argument("--drive-hz", type=float, default=float(_env("RS_DRIVE_HZ", 15)),
                    help="max drive-command send rate over the radio (lower for slow/9600 links)")
     p.add_argument("--ui-hz", type=float, default=float(_env("RS_UI_HZ", 30)),

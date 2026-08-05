@@ -153,6 +153,12 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # ~20 Hz the slew limiter stops interpolating and teleop turns choppy.
     _f("loop_hz", 1, 200),
     _f("telemetry_hz", 0, 20),
+    # How often the diagnostic half of a frame rides along. The knob to reach
+    # for when a third rover joins the channel and steering starts to lag —
+    # lower it and the frame shrinks without giving up any of the readings that
+    # have to be current. Bounded by telemetry_hz in practice: asking for detail
+    # more often than there are frames to carry it just means every frame.
+    _f("telemetry_detail_hz", 0.1, 20),
     _e("heading_source", ("auto", "gps", "imu")),
     _e("start_mode", ("teleop", "object_align", "shooter_align", "waypoint", "routine"), live=False),
     _t("robot_id", live=False),
@@ -365,6 +371,18 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # Even on, arming is only accepted inside a state that drives with
     # shooter_align, and is dropped on every state exit, mode exit and e-stop.
     _b("routines.allow_arm", live=False),
+
+    # --- scripts (operator-written Python; the code lives in scripts.json) ---
+    # All live: these are the knobs you reach for WHILE bringing a script up,
+    # and one that needed a service restart is one nobody would turn down
+    # before the first run.
+    _b("scripts.enabled"),
+    _f("scripts.max_runtime", 5, 3600),
+    # Turn this down to bench-test a new script at a crawl. It scales the
+    # command rather than clamping each track, so the arc the script asked for
+    # is the arc it drives — just slower.
+    _f("scripts.drive_limit", 0.05, 1.0),
+    _i("scripts.output_lines", 20, 2000),
 
     # --- FPV ---
     _i("fpv.fps", 1, 60),
