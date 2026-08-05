@@ -119,14 +119,28 @@ def test_the_claim_lapses_so_letting_go_hands_the_channel_back(rig):
         "the pad kept the channel after the operator let go"
 
 
-def test_the_claim_is_scoped_to_the_robot_the_pad_is_driving(rig):
-    """Driving rover1 with the pad must not mute a second operator on rover2."""
+def test_a_second_rover_cannot_be_driven_at_the_same_time(rig):
+    """This test used to assert the opposite — that a browser naming rover2
+    could drive it while the pad drove rover1 — and the policy has since been
+    reversed deliberately.
+
+    Two rovers being driven at once is two drive streams on one shared radio
+    channel, and drive is the only traffic the base station STREAMS: it repeats
+    at drive_hz and keeps repeating at the keepalive while a stick is held. The
+    second stream comes out of the airtime of the rover somebody is actually
+    driving. So the stream goes to the selected rover in teleop, and to nobody
+    else — see app.py::update_drive_target.
+
+    Note this is enforced on the BRIDGE, not in the browser: `robot_id` arrives
+    off the wire, so a client could otherwise drive any rover it named
+    regardless of what the dashboard has selected.
+    """
     app, link, controller, _ = rig
     controller.on_drive(1.0, 0.0)  # selected robot is rover1
     app.state.handle_action(
         {"action": "drive", "robot_id": "rover2", "throttle": 0.6, "steer": 0.0})
-    assert drives(link, "rover2") == [
-        {"type": "drive", "throttle": 0.6, "steer": 0.0, "to": "rover2"}]
+    assert drives(link, "rover2") == []
+    assert drives(link, "rover1"), "the selected rover still drives"
 
 
 def test_estop_is_never_gated_on_who_holds_the_stick(rig):
