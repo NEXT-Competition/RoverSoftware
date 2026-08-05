@@ -105,6 +105,25 @@ def select_box(boxes: List[Box], mode: str, frame_w: int) -> Optional[Box]:
     return max(boxes, key=lambda b: b[2] * b[3])
 
 
+def _flip_box(box: Box, frame_w: int, frame_h: int) -> Box:
+    """One box, turned 180 degrees with the frame it belongs to.
+
+    The AI Camera runs its network INSIDE the sensor, so a Pi-side rotation
+    cannot reach it: the frame arrives upside down, gets turned upright by
+    sensors/camera.py, and these boxes still describe where things were in the
+    original. Rotating a box by 180 degrees about the frame centre reflects both
+    axes, so the far corner becomes the near one:
+
+        x' = frame_w - (x + w)      y' = frame_h - (y + h)
+
+    Width and height are unchanged — a rectangle is the same size upside down —
+    which is what keeps `size`, and therefore every range estimate built on it,
+    correct without a second correction.
+    """
+    x, y, w, h, label, conf = box
+    return (frame_w - (x + w), frame_h - (y + h), w, h, label, conf)
+
+
 def to_detection(box: Box, frame_w: int, frame_h: int, stamp: float) -> Detection:
     """Full-frame pixel box -> the controller's normalized units.
 
@@ -332,6 +351,10 @@ class IMX500Detector:
 
     def __init__(self, cfg, camera):
         self.cfg = cfg
+        # A camera fact, read from CameraConfig rather than VisionConfig: the
+        # mounting is the same whoever is looking at the frames.
+        self._rotate_180 = bool(getattr(getattr(camera, "cfg", None),
+                                        "rotate_180", False))
         # Shared, and the OWNER of the IMX500 handle — this class never opens a
         # device. Both the FPV streamer and this read from it.
         self.camera = camera
@@ -453,6 +476,8 @@ class IMX500Detector:
                 last_stamp = stamp
                 h, w = frame.shape[0], frame.shape[1]
                 boxes = self._decoder.parse(meta, w, h)  # type: ignore[union-attr]
+                if self._rotate_180:
+                    boxes = [_flip_box(b, w, h) for b in boxes]
                 errors = 0
             except Exception as e:
                 # If the sensor has wedged, EVERY iteration raises; an unguarded

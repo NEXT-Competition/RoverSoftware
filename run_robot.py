@@ -194,6 +194,11 @@ def main():
     cfg.camera.width = int(os.environ.get("RS_CAMERA_WIDTH", cfg.camera.width))
     cfg.camera.height = int(os.environ.get("RS_CAMERA_HEIGHT", cfg.camera.height))
     cfg.camera.fps = int(os.environ.get("RS_CAMERA_FPS", cfg.camera.fps))
+    # Per-robot, because it describes how THIS camera is bolted on. Reaches
+    # the detector as well as the video — see CameraConfig.rotate_180.
+    cfg.camera.rotate_180 = os.environ.get(
+        "RS_CAMERA_ROTATE_180", "1" if cfg.camera.rotate_180 else "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
     cfg.vision.min_confidence = float(os.environ.get("RS_VISION_CONF", cfg.vision.min_confidence))
     cfg.vision.max_fps = float(os.environ.get("RS_VISION_FPS", cfg.vision.max_fps))
     cfg.vision.standoff_size = float(os.environ.get("RS_VISION_STANDOFF", cfg.vision.standoff_size))

@@ -265,6 +265,18 @@ class CameraConfig:
     width: int = 640
     height: int = 480
     fps: int = 15
+    # Turn every frame 180 degrees, for a camera bolted on upside down.
+    #
+    # A device fact, not a preference, which is why it lives beside the width
+    # and the fps rather than in VisionConfig: the mounting is the same whether
+    # anyone is running a model or just watching the video.
+    #
+    # This has to reach the DETECTOR as well as the picture. On the AI Camera
+    # the network runs inside the sensor, ahead of anything the Pi can
+    # transform, so its boxes come out in un-rotated coordinates and are flipped
+    # to match (sensors/imx500.py). Rotating only the video would leave a rover
+    # that shows an upright picture and drives away from the thing in it.
+    rotate_180: bool = False
 
 
 @dataclass

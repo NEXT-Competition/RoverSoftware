@@ -52,10 +52,13 @@ from typing import Optional, Tuple
 class _Picamera2Source:
     """Pi Camera (CSI) via picamera2."""
 
-    def __init__(self, w: int, h: int, fps: int):
+    def __init__(self, w: int, h: int, fps: int, index: int = 0):
         from picamera2 import Picamera2
 
-        self._picam = Picamera2()
+        # Which CSI slot. The Pi 5 has two (CAM/DISP 0 and 1) and picamera2
+        # numbers them in `Picamera2.global_camera_info()` order, so this is the
+        # only thing separating "the camera" from "the other camera".
+        self._picam = Picamera2(index)
         # picamera2's "RGB888" is a misnomer: the buffer it hands back through
         # capture_array() is BGR-ordered in numpy. Naming here is inverted
         # relative to byte order, which is exactly the trap the module docstring
@@ -244,10 +247,13 @@ def open_source(cfg, vision=None):
             except Exception as e:
                 print(f"[camera] IMX500 unavailable ({e}) — falling back to a plain camera")
         dev = "picamera2"
-    # Pi Camera (auto, or asked for by name).
-    if dev in ("auto", "picamera2", "picamera", "csi"):
+    # Pi Camera (auto, or asked for by name). "picamera2:1" / "csi:1" pick the
+    # second CSI slot; a bare name means slot 0, as before.
+    name, _, slot = dev.partition(":")
+    if name in ("auto", "picamera2", "picamera", "csi"):
         try:
-            return _Picamera2Source(cfg.width, cfg.height, cfg.fps)
+            return _Picamera2Source(cfg.width, cfg.height, cfg.fps,
+                                    index=int(slot) if slot.isdigit() else 0)
         except Exception as e:
             if dev != "auto":
                 print(f"[camera] picamera2 unavailable: {e}")
@@ -383,6 +389,18 @@ class Camera:
                 time.sleep(0.2)
                 continue
             if frame is not None:
+                if getattr(self.cfg, "rotate_180", False):
+                    # Turn the picture the right way up ONCE, here, so every
+                    # consumer downstream (FPV, the Edge Impulse detector, the
+                    # selftest) sees an upright frame and none of them has to
+                    # know how the camera is bolted on. A reversed slice rather
+                    # than a rotate call: it is a view, not a copy, and this runs
+                    # at frame rate on a Pi.
+                    #
+                    # The IMX500's boxes are NOT covered by this — its network
+                    # runs inside the sensor, upstream of anything here — so
+                    # sensors/imx500.py flips those separately.
+                    frame = frame[::-1, ::-1]
                 with self._lock:
                     self._frame = frame
                     self._meta = meta
