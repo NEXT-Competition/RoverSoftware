@@ -34,6 +34,7 @@ from .drive.drivetrain import build_drivetrain
 from .drive.mechanism import Mechanism, build_mechanism
 from .drive.shooter import Shooter
 from .sensors.imu import build_imu
+from .sensors.imu_common import HeadingSource
 from .sensors.camera import Camera
 from .sensors.detector import MockDetector, ObjectDetector
 from .sensors.fpv import FPVStreamer
@@ -285,21 +286,13 @@ class Robot:
 
         # cached lookup. Disabled/uncalibrated -> heading falls back to the track
         # angle (see heading_source).
-        self.imu: Optional[IMU] = (
-            IMU(
-                config.imu.i2c_address,
-                config.imu.heading_offset_deg,
-                config.imu.invert,
-                config.imu.min_calib,
-                config.imu.persist_calibration,
-                sample_timeout=config.imu.sample_timeout,
-                transport=config.imu.transport,
-                serial_port=config.imu.serial_port,
-                serial_baud=config.imu.serial_baud,
-            )
-            if config.imu.enabled
-            else None
-        )
+        # Through `build_imu`, which is what picks the reader the config asks
+        # for. Constructing `IMU` directly here always built the I2C one, so a
+        # `mode: uart_rvc` build advertised itself as RVC in the startup banner
+        # (which reads `mode`/`port`) and then opened I2C — and on a rover with
+        # no device at 0x4a that is an IMU which disables itself at boot with a
+        # message about the wrong bus entirely.
+        self.imu: Optional[HeadingSource] = build_imu(config.imu)
 
         # Ultrasonic rangefinder: how far away the thing straight ahead is.
         # Pings on its own thread; distance_m() is a cached lookup, so a ping

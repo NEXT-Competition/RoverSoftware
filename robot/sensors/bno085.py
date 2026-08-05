@@ -75,7 +75,11 @@ import threading
 import time
 from typing import Optional
 
-from .imu_common import DEFAULT_SAMPLE_TIMEOUT, HeadingSource
+from .imu_common import (
+    DEFAULT_SAMPLE_TIMEOUT,
+    ERROR_LOG_INTERVAL,
+    HeadingSource,
+)
 
 try:  # pragma: no cover - hardware/deps optional on a dev laptop
     import board
@@ -361,7 +365,7 @@ class IMU(HeadingSource):
             self._errors += 1
             errors = self._errors
             last_good = max(self._heading_at, self._rate_at)
-            due = (now - self._last_error_log) >= _ERROR_LOG_INTERVAL
+            due = (now - self._last_error_log) >= ERROR_LOG_INTERVAL
             if due:
                 self._last_error_log = now
             went_stale = (
