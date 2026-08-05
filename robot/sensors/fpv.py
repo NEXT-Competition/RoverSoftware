@@ -41,9 +41,42 @@ class FPVStreamer:
         # aim the feed at a new host on the old port.
         self._lock = threading.Lock()
         self._target = (cfg.base_host, cfg.base_port)
+        # Is anyone actually looking? Separate from cfg.enabled, which is the
+        # operator's persistent "this rover has a feed" setting — this is the
+        # base station's live "and somebody has it open right now".
+        #
+        # Starts True, and that default is the important part: a rover that has
+        # not heard from the base station streams, exactly as it always did. The
+        # gate can only ever be CLOSED by an explicit instruction, so a lost
+        # command or an old base station costs bandwidth, never the feed.
+        self._wanted = True
 
     def set_overlay_provider(self, provider) -> None:
         self.overlay_provider = provider
+
+    def set_wanted(self, wanted: bool) -> bool:
+        """Tell the streamer whether anyone is watching. True if that changed.
+
+        Every rover used to stream the moment `fpv.enabled` was set, whether or
+        not a browser had the feed open — and the dashboard only ever displays
+        one at a time. On a three-rover field that is two unwatched 640x480
+        streams, several Mbit/s of unpaced UDP each, on the same Wi-Fi carrying
+        the config link and the dashboard's own socket. The frames were being
+        encoded, transmitted and thrown away.
+
+        Only the flag is set here; starting and stopping is left to the caller
+        on the control loop, because `stop()` is not something a socket's own
+        thread should be doing to itself.
+        """
+        with self._lock:
+            if self._wanted == wanted:
+                return False
+            self._wanted = wanted
+        return True
+
+    def wanted(self) -> bool:
+        with self._lock:
+            return self._wanted
 
     def retarget(self, host: str, port: int) -> bool:
         """Point the feed at a different base station. True if it moved.
@@ -65,7 +98,7 @@ class FPVStreamer:
             return self._target
 
     def start(self) -> None:
-        """Begin streaming, if the feed is switched on.
+        """Begin streaming, if the feed is switched on and someone is watching.
 
         Safe to call at any time and any number of times — this is also the
         base station's on switch, so it runs long after boot, from the control
@@ -75,6 +108,8 @@ class FPVStreamer:
             if self.cfg.enabled:
                 print("[fpv] no camera — live view disabled")
             return
+        if not self.wanted():
+            return  # configured, but nobody has the feed open
         # The device may not be open: on a robot with no detector, nothing
         # wanted frames at boot. Idempotent, and Camera.start() opens on its own
         # thread, so this never blocks the caller.

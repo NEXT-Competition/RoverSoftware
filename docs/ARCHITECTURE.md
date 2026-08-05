@@ -173,7 +173,7 @@ from environment variables / CLI flags, and hands it to `Robot`.
 | `DriveConfig` | `kind="tank"`, `actuators` (a dict, `left`→ch0 and `right`→ch1 by default), `roles`, `arm_seconds=2.0`, `slew_rate=4.0`, `steer_gain`, `min_pivot_throttle=0.15` | The drivetrain: any number of named actuators, plus who plays which role. |
 | `MechanismConfig` | `name`, `kind` (`power`\|`pulse`), `actuators`, `presets`, plus the pulse geometry | A non-drivetrain subsystem: an intake, an arm, a second launcher. |
 | `RoutineConfig` | `state_timeout_default=60`, `allow_arm=False` | What a UI-authored state machine is allowed to do. |
-| `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=57600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. Must match the base station and the radios' `BD`. |
+| `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=115200`, `command_timeout=0.5` | XBee serial + teleop failsafe window. Must match the base station and the radios' `BD`. |
 | `ShooterConfig` | `enabled=False`, `channel=2`, `rest_angle=-30`, `fire_angle=30`, `fire_seconds=0.35`, `retract_seconds=0.35`, `dwell=0.5`, `cooldown=2.0`, `require_arm=True`, `require_arrived=True`, `max_shots=0` | Servo launcher geometry + the firing policy for `shooter_align`. Off by default. |
 | `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=57600`, `fix_timeout=5.0`, `min_move_mps=0.5`, `update_rate_ms=200` | Adafruit Ultimate GPS reader settings. 5 Hz fixes; the baud is raised over `PMTK251` to carry them. |
 | `PIDConfig` | `kp`, `ki`, `kd`, `out_limit`, `i_limit` | Gains for one loop, so they are tunable rather than edit-and-redeploy constants. |
@@ -725,7 +725,7 @@ the accumulated drift never matters.
 
 Newline-delimited JSON over one shared serial channel. `to` addresses a robot (or
 `"all"`); robots stamp telemetry with `from`. The base station's baud
-(`basestation.env`, default **57600**) **must match each robot's** `RS_XBEE_BAUD`
+(`basestation.env`, default **115200**) **must match each robot's** `RS_XBEE_BAUD`
 — a mismatch delivers only garbage frames.
 
 > Only the realtime half of this message set actually travels on the radio:
@@ -1579,7 +1579,7 @@ Each maps to a CLI flag on the respective entry point.
 
 | Env | Default | Meaning |
 |---|---|---|
-| `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `57600` | Radio (or use `RS_SIM=1`). |
+| `RS_XBEE_PORT` / `RS_XBEE_BAUD` | `/dev/ttyUSB0` / `115200` | Radio (or use `RS_SIM=1`). |
 | `RS_WEB_HOST` / `RS_WEB_PORT` | `127.0.0.1` / `8000` | Dashboard bind. |
 | `RS_SIM` / `RS_SIM_ROBOTS` / `RS_SIM_ORIGIN` | `0` / `3` / SF | Simulator. |
 | `RS_NO_CONTROLLER` | `0` | Touch-only (no gamepad). |

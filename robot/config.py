@@ -1043,3 +1043,26 @@ class RobotConfig:
     telemetry_hz: float = (
         5.0  # rate of status frames back to the base station (0 disables)
     )
+    # How often the SLOW half of a telemetry frame rides along: GPS fix health,
+    # the vision summary, mechanism states and the IMU calibration level.
+    #
+    # A telemetry frame has grown to ~600 bytes. At 5 Hz that is one rover using
+    # ~17% of a 115200-baud channel — and the channel is shared, so four rovers
+    # oversubscribe it and three leave almost no headroom. That is what laggy
+    # steering on a multi-rover field actually is: drive frames queued behind
+    # telemetry on a line that cannot carry it. (At 57600 it is twice that, and
+    # two rovers are already over.)
+    #
+    # The four blocks above are diagnostics. They are worth having on screen and
+    # they are not worth five updates a second each: a satellite count and a
+    # detector's frame rate do not change meaningfully in 200 ms, whereas the
+    # sonar distance, the encoder RPM and the shooter's arm latch do — those
+    # stay on every frame, because a stale one of those is a dashboard that lies
+    # about something moving. Roughly halves the average frame.
+    #
+    # Held-back blocks are NAMED in the frame's `keep` list rather than simply
+    # omitted, because for some of them an omission already means "this sensor
+    # is gone" and clearing a reading is not the same as not restating it (see
+    # basestation/fleet.py::update_from_telemetry). Set equal to telemetry_hz to
+    # put everything back on every frame.
+    telemetry_detail_hz: float = 1.0

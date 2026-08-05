@@ -94,6 +94,14 @@ class RobotState:
     wifi_rev: int = 0
     last_seen: float = 0.0
     trail: List[Tuple[float, float]] = field(default_factory=list)
+    # How many points have EVER been appended to `trail`, which is not the same
+    # as how many it holds — the oldest are dropped once it reaches trail_max.
+    # This is what lets the hot frame carry only the points added since the last
+    # broadcast instead of restating the whole breadcrumb thirty times a second:
+    # a client that knows the count it is holding can tell "I am two points
+    # behind" from "I have missed some", and only the second needs a resend.
+    # Monotonic for the life of the process, so it never repeats a value.
+    trail_seq: int = 0
     # The robot's tunable parameters (robot/tuning.py), flat dotted paths ->
     # values, as last reported by the robot itself. Merged rather than replaced:
     # a robot answers `get_config` with everything but acknowledges a `set_config`
@@ -160,6 +168,14 @@ class FleetManager:
         robot_id = msg.get("from") or msg.get("robot_id")
         if not robot_id:
             return
+        # Blocks the robot is deliberately HOLDING BACK this frame, because it
+        # sends them on a slower tier than the rest (robot/robot.py::_telemetry).
+        # This is the difference between "the sensor stopped answering" and "you
+        # already have this" — which for the non-sticky blocks below is the
+        # difference between clearing a reading and keeping it. Absent on a robot
+        # running older code, which is exactly the old behaviour: nothing is
+        # held, so every block is read straight off the frame.
+        keep = msg.get("keep") or ()
         with self._lock:
             st = self._ensure(robot_id)
             st.mode = msg.get("mode", st.mode)
@@ -170,17 +186,19 @@ class FleetManager:
                 st.battery = float(msg["battery"])
             if "heading" in msg and msg["heading"] is not None:
                 st.heading = float(msg["heading"])
-            if msg.get("vision") is not None:
+            if "vision" not in keep and msg.get("vision") is not None:
                 st.vision = msg["vision"]
             # Assigned unconditionally rather than only when present, unlike the
             # sticky fields above it. The robot sends null the moment the IMU
             # stops answering, and the whole point of that null is to take the
             # calibration pips off the screen — a sticky copy would hold them
             # there, which is the reassurance-about-a-dead-sensor this is meant
-            # to prevent.
-            calib = msg.get("imu_calib")
-            st.imu_calib = int(calib) if calib is not None else None
-            if msg.get("gps") is not None:
+            # to prevent. Naming it in `keep` is how the robot says "unchanged"
+            # WITHOUT saying "gone", which a bare omission cannot express.
+            if "imu_calib" not in keep:
+                calib = msg.get("imu_calib")
+                st.imu_calib = int(calib) if calib is not None else None
+            if "gps" not in keep and msg.get("gps") is not None:
                 st.gps = msg["gps"]
             # Assigned unconditionally, breaking the "only overwrite when present"
             # pattern above on purpose. The robot omits this field entirely once
@@ -188,7 +206,11 @@ class FleetManager:
             # UI showing ARMED for a mode the robot has already left — the one
             # piece of stale telemetry here that could get someone hurt.
             st.shooter = msg.get("shooter")
-            st.mech = msg.get("mech")
+            # Non-sticky like `shooter`, and on the slow tier — so unlike it,
+            # this one has to distinguish an omission that means "the layout has
+            # no mechanisms" from one that means "nothing about them changed".
+            if "mech" not in keep:
+                st.mech = msg.get("mech")
             st.routine = msg.get("routine")
             # Assigned unconditionally, like `routine` above it: the robot omits
             # this entirely once `script` is no longer the active mode, and a
@@ -200,6 +222,7 @@ class FleetManager:
             if msg.get("lat") is not None and msg.get("lon") is not None:
                 st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
                 st.trail.append((st.lat, st.lon))
+                st.trail_seq += 1
                 if len(st.trail) > self.trail_max:
                     del st.trail[: len(st.trail) - self.trail_max]
             st.last_seen = now
@@ -487,7 +510,29 @@ class FleetManager:
             if robot_id in self._robots:
                 self._selected = robot_id
 
-    def snapshot(self, now: float) -> dict:
+    def trails(self) -> Dict[str, dict]:
+        """Every robot's breadcrumb in full, with the count it is current as of.
+
+        The cold counterpart to the deltas `snapshot` emits: sent once when a
+        browser connects and again only if one asks to resync. A client cannot
+        start appending to a trail it has never seen, and reconstructing one from
+        deltas would mean keeping every point the base station has ever dropped.
+        """
+        with self._lock:
+            return {st.robot_id: {"trail": list(st.trail), "seq": st.trail_seq}
+                    for st in self._robots.values() if st.trail}
+
+    def snapshot(self, now: float, trail_cursors: Optional[Dict[str, int]] = None
+                 ) -> dict:
+        """The hot frame. `trail_cursors` maps robot_id -> the trail_seq the
+        caller last sent out; each robot then carries only the points appended
+        since, under `trail_add`.
+
+        Passing None omits breadcrumb data altogether, which is what the callers
+        that only want current state (the command layer) actually want — the
+        trail is for drawing a map, and restating it is the single largest thing
+        this frame used to carry.
+        """
         with self._lock:
             robots = [
                 {
@@ -512,8 +557,29 @@ class FleetManager:
                     "sonar": st.sonar,
                     "online": st.online(now),
                     "age": round(now - st.last_seen, 2) if st.last_seen else None,
-                    "trail": st.trail,
+                    **self._trail_delta(st, trail_cursors),
                 }
                 for st in self._robots.values()
             ]
             return {"type": "fleet", "selected": self._selected, "robots": robots}
+
+    def _trail_delta(self, st: RobotState, cursors: Optional[Dict[str, int]]) -> dict:
+        """The breadcrumb points `cursors` has not seen yet, and the count they
+        bring it to. Called with the lock held.
+
+        `trail_seq` is sent even when there is nothing to add, because it is what
+        a client checks itself against: if the arithmetic doesn't work out it has
+        missed points and asks for a full trail, which is the only failure this
+        scheme can have and the only one it needs to detect.
+        """
+        if cursors is None:
+            return {}
+        behind = st.trail_seq - cursors.get(st.robot_id, 0)
+        if behind <= 0:
+            add: List[Tuple[float, float]] = []
+        else:
+            # Never more than we still hold: a client further behind than
+            # trail_max cannot be caught up by appending, and asks for the
+            # whole trail instead once it sees the arithmetic fail.
+            add = st.trail[-behind:] if behind <= len(st.trail) else list(st.trail)
+        return {"trail_seq": st.trail_seq, "trail_add": add}

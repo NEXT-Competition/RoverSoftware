@@ -539,10 +539,14 @@ Newline-delimited JSON over the shared XBee channel. `to` addresses a robot (or
 {"type": "select_script", "id": "collect", "to": "rover1"}
 {"type": "script_cmd", "cmd": "start", "to": "rover1"}    // start | stop | restart
 {"type": "jog", "mech": "intake", "power": 0.3, "to": "rover1"}   // bench test, teleop only
+{"type": "fpv", "on": true, "to": "rover1"}   // is anyone watching this camera?
 
 // robot -> base station (telemetry, ~5 Hz)
 {"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
  "left": 0.4, "right": 0.6, "battery": 87.0, "lat": 37.77, "lon": -122.41, "heading": 30.0}
+// the same frame between detail ticks: the slow blocks are named, not dropped
+{"type": "telemetry", "from": "rover1", "mode": "teleop", "estop": false,
+ "left": 0.4, "right": 0.6, "keep": ["gps", "vision", "mech", "imu_calib"]}
 {"type": "config", "from": "rover1", "config": {"align.pid.kp": 0.6},
  "rejected": {}, "restart": [], "save_error": null}
 {"type": "layout_result", "from": "rover1", "ok": true, "errors": [], "restart_required": true}
@@ -571,6 +575,44 @@ since the validator clamps and what was saved is not always what was sent.
 Safety built in: teleop stops if commands stop arriving (`command_timeout`), and
 e-stop overrides every mode until cleared. (Position fields appear in telemetry
 once a `pose_provider` — i.e. GPS — is attached on the robot.)
+
+### Running more than one rover
+
+The XBee channel is shared, and it is the one resource that does not grow when
+you add a rover. A full telemetry frame is ~600 bytes, so at `telemetry_hz` = 5
+each rover costs about 17% of a 115200-baud line before anything is sent *to* it.
+Add the drive stream and the channel fills up fast — and once it is full, drive
+commands queue behind status updates, which is what "steering lags, and it gets
+worse with more rovers" is.
+
+Utilisation at 115200 with `--drive-hz 15`, before and after the slow-tier split
+described below:
+
+| Rovers | Full frames | With `telemetry_detail_hz` = 1 |
+| --- | --- | --- |
+| 1 | 34% | 25% |
+| 2 | 60% | 42% |
+| 3 | 86% | 59% |
+| 4 | 112% — oversubscribed | 76% |
+
+Three knobs, in the order worth reaching for them:
+
+| Knob | Where | What it does |
+| --- | --- | --- |
+| `comms.baud` | robot + base station (**must match**, and must match the radios' own `BD`) | 115200 is the shipped default on both ends. At 57600 the table above roughly doubles and two rovers already oversubscribe the line — so if steering lags, check this first. |
+| `telemetry_detail_hz` | robot | How often GPS health, the vision summary, mechanism states and IMU calibration ride along. Default 1 Hz against `telemetry_hz` 5, which takes ~35% off the average frame. The readings you drive on are unaffected. |
+| `telemetry_hz` | robot | The whole frame rate. Lower it last — it slows everything, including the readings that need to be current. |
+
+The other shared resource is the WiFi, which carries the FPV video, the config
+link and the dashboard's own socket. Video dominates it by an order of
+magnitude, so rovers stream only while their feed is actually open (see FPV
+above), and the dashboard's fleet frame sends breadcrumb trails as deltas rather
+than restating every point at `ui_hz`.
+
+A quick way to tell which link is the problem: if the *map and dashboard* are
+sluggish, it is the WiFi or the browser; if *steering* is sluggish while the
+dashboard is fine, it is the radio. The base station logs XBee `Partials:` and
+`Drops:` once a second, and both climbing is the radio saying it is full.
 
 ## Roadmap (the seams are already here)
 
@@ -621,7 +663,11 @@ once a `pose_provider` — i.e. GPS — is attached on the robot.)
   Camera panel. When a model is loaded, detection boxes are drawn onto the feed
   (green = the object `object_align` is tracking, amber = others). Enable on the
   robot with `--fpv --fpv-host <base-ip>` (needs WiFi/LAN — the XBee radio can't
-  carry video). Shares the one camera with object detection.
+  carry video). Shares the one camera with object detection. A rover streams
+  only while somebody actually has its feed open: the base station counts the
+  MJPEG streams it is serving and tells each rover whether it has any, so on a
+  multi-rover field the ones nobody is watching are not spending the shared
+  WiFi on frames that get thrown away.
 - **Base station app** — ✅ done: map view + live multi-robot tracking, PS4
   teleop of the selected robot, mode switching, click-to-route waypoints, and the
   FPV camera feed. Next: offline tile caching and a telemetry/log panel.

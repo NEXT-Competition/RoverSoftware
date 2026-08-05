@@ -153,6 +153,12 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # ~20 Hz the slew limiter stops interpolating and teleop turns choppy.
     _f("loop_hz", 1, 200),
     _f("telemetry_hz", 0, 20),
+    # How often the diagnostic half of a frame rides along. The knob to reach
+    # for when a third rover joins the channel and steering starts to lag —
+    # lower it and the frame shrinks without giving up any of the readings that
+    # have to be current. Bounded by telemetry_hz in practice: asking for detail
+    # more often than there are frames to carry it just means every frame.
+    _f("telemetry_detail_hz", 0.1, 20),
     _e("heading_source", ("auto", "gps", "imu")),
     _e("start_mode", ("teleop", "object_align", "shooter_align", "waypoint", "routine"), live=False),
     _t("robot_id", live=False),

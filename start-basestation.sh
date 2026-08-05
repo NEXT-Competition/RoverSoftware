@@ -5,13 +5,13 @@
 #
 #   ./start-basestation.sh                                  # simulator (fake robots)
 #   ./start-basestation.sh --port /dev/tty.usbserial-XXXX   # real robots over XBee
-#   ./start-basestation.sh --port /dev/tty.usbserial-XXXX --baud 57600
+#   ./start-basestation.sh --port /dev/tty.usbserial-XXXX --baud 115200
 #   ./start-basestation.sh --dev                            # Vite hot-reload UI (for UI dev)
 #
 # Flags:
 #   --sim                 use the built-in simulator (default if no --port)
 #   --port <dev>          talk to real robots over this serial device
-#   --baud <n>            serial baud for --port (default 57600)
+#   --baud <n>            serial baud for --port (default 115200)
 #   --drive-hz <n>        max drive-command send rate over the radio (default 15)
 #   --dev                 serve the UI via Vite with hot reload (else a prod build)
 #   --no-open             don't open a browser
