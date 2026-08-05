@@ -12,7 +12,7 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_IMU_ENABLED/MODE/PORT/BAUD/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/BACKEND/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
-    RS_VISION_RANGE_AT_M/RANGE_SIZE,
+    RS_VISION_RANGE_AT_M/RANGE_SIZE, RS_VISION_STANDOFF_M,
     RS_VISION_IMX500_MODEL/LABELS/IOU/MAX_DET,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
@@ -304,6 +304,10 @@ def main():
     cfg.vision.min_confidence = float(os.environ.get("RS_VISION_CONF", cfg.vision.min_confidence))
     cfg.vision.max_fps = float(os.environ.get("RS_VISION_FPS", cfg.vision.max_fps))
     cfg.vision.standoff_size = float(os.environ.get("RS_VISION_STANDOFF", cfg.vision.standoff_size))
+    # The same standoff in metres, converted through the calibration below by
+    # whichever align controller uses it. 0 leaves STANDOFF in charge.
+    cfg.vision.standoff_m = float(
+        os.environ.get("RS_VISION_STANDOFF_M", cfg.vision.standoff_m))
     cfg.vision.range_at_m = float(os.environ.get("RS_VISION_RANGE_AT_M", cfg.vision.range_at_m))
     cfg.vision.range_size = float(os.environ.get("RS_VISION_RANGE_SIZE", cfg.vision.range_size))
     cfg.vision.hfov_deg = float(os.environ.get("RS_VISION_HFOV", cfg.vision.hfov_deg))

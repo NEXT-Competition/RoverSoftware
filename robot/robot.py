@@ -192,6 +192,9 @@ class Robot:
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
                     standoff_size=v.standoff_size,
+                    # A standoff said in metres, converted through the
+                    # rangefinder on the way in. 0 leaves standoff_size alone.
+                    standoff_m=v.standoff_m,
                     rangefinder=self.rangefinder,
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
@@ -206,6 +209,9 @@ class Robot:
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
                     standoff_size=v.standoff_size,
+                    # Same standoff as object_align, so `require_arrived` gates
+                    # firing at the same distance with no shooter-side change.
+                    standoff_m=v.standoff_m,
                     rangefinder=self.rangefinder,
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
@@ -1511,6 +1517,14 @@ class Robot:
                 c.search_after = cfg.align.search_after
                 c.search_timeout = cfg.align.search_timeout
                 c.standoff_size = cfg.vision.standoff_size
+                # Not pushed while a routine is running: a routine state BORROWS
+                # this same field for its `stop_within_m` and hands it back when
+                # the state ends (control/routine_controller.py). Writing it
+                # here mid-routine would move a stop distance the routine chose,
+                # and the routine would hand back the old value regardless — so
+                # the edit lands the moment the rover is the operator's again.
+                if self.manager.mode != "routine":
+                    c.standoff_m = cfg.vision.standoff_m
                 c.search_speed = cfg.vision.search_speed
                 c.hfov_deg = cfg.vision.hfov_deg
                 _retune(c.pid, cfg.align.pid)

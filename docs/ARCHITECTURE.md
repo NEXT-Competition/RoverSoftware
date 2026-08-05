@@ -1550,6 +1550,7 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_VISION_LABEL` / `RS_VISION_CONF` | `` / `0.6` | Label to track (empty = any); score floor. |
 | `RS_VISION_STANDOFF` / `RS_VISION_HFOV` | `0.45` / `50` | **Both backend-dependent** — calibrate with `tools/detector_selftest.py`; HFOV is post-crop on Edge Impulse, the real ~66° on the IMX500. |
 | `RS_VISION_RANGE_AT_M` / `RS_VISION_RANGE_SIZE` | `1.0` / `0.45` | The bounding-box rangefinder's one calibration pair: "at this distance, the box measured this". **Shipped values are a placeholder** — measure them. `0` disables metre estimates. |
+| `RS_VISION_STANDOFF_M` | `0` | Stop this many metres short instead of at `RS_VISION_STANDOFF`'s box-height fraction. Converted through the pair above, so it needs that measured; without it `RS_VISION_STANDOFF` still applies. Also where `shooter_align` fires from. |
 | `RS_CAMERA_DEVICE` | `auto` | `auto` \| `imx500` \| `picamera2` \| `/dev/videoN` \| index. Set for you when the IMX500 backend is selected. |
 | `RS_SHOOTER_ENABLED` / `RS_SHOOTER_CHANNEL` | `0` / `2` | Servo launcher. Channels 0–1 are the drive ESCs. |
 | `RS_SHOOTER_REST` / `RS_SHOOTER_FIRE` | `-30` / `30` | Home and fire angles (find with `tools/servo_sweep.py`). |
