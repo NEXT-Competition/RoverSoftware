@@ -393,6 +393,9 @@ class Robot:
         # Bench-jog failsafe; see _jog.
         self._jog_mech = ""
         self._jog_until = 0.0
+        # Was the agitator running because of the flywheel last tick? Edge
+        # state, so a hand-driven agitator is not stopped every tick.
+        self._agitator_on = False
 
     def _all_mechanisms(self) -> Dict[str, Mechanism]:
         """Layout mechanisms plus the built-in launcher, keyed by name."""
@@ -953,6 +956,44 @@ class Robot:
         print(f"[Robot] shooter flywheel -> "
               f"{f'{self.cfg.shooter.target_rpm:.0f} rpm' if want else 'stop'}")
 
+    def _agitator_follows_shooter(self) -> None:
+        """Keep the agitator turning for as long as the flywheel is spinning.
+
+        They are one operation on the hardware: the agitator exists to keep
+        balls moving into a wheel that is already up to speed, so a flywheel
+        spinning over a stalled hopper is the jam it was fitted to prevent.
+        Tying it here rather than to a second button means the two cannot get
+        out of step — there is no state where an operator has spun up and
+        forgotten the agitator, or stopped the wheel and left it stirring.
+
+        --- why this runs every tick instead of once on the press ---
+        A mechanism can carry `auto_stop_seconds` (larp's agitator has 0.5),
+        which stops it when nobody is refreshing it. That dead-man is right and
+        stays: it is what makes a base station that goes away leave a stirring
+        motor stopped. So the refresh is what has to change, not the timeout —
+        the ROBOT becomes the thing refreshing it, for exactly as long as its
+        own flywheel is spinning. Applying the preset once would give half a
+        second of agitator and then silence, mid-shot, with nothing in the log.
+
+        Idempotent: re-applying a preset the mechanism is already in writes the
+        same value and resets its timer, which is the whole point.
+
+        Silent on a build with no agitator, and on one with no shooter. It is
+        one mechanism in one rover's layout, not a promise about the fleet.
+        """
+        mech = self._registry.get("agitator")
+        if mech is None:
+            return
+        shooter = getattr(self, "shooter", None)
+        spinning = bool(shooter is not None and getattr(shooter, "spinning", False))
+        if spinning and not self.manager.estop:
+            mech.apply_preset("run")
+        elif self._agitator_on:
+            # Only on the falling edge, so a rover whose agitator an operator is
+            # driving by hand is not fought for the channel every tick.
+            mech.stop()
+        self._agitator_on = spinning
+
     def _push_live_config(self) -> None:
         """Copy config onto the objects that cached it at construction.
 
@@ -1215,6 +1256,7 @@ class Robot:
                 self._drain_inbox()
                 self._apply_estop()
                 self._expire_jog()
+                self._agitator_follows_shooter()
                 t1 = time.monotonic()
                 cmd = self.manager.update(dt)
                 # Unconditional, and deliberately outside the controller: a mode
