@@ -510,6 +510,16 @@ class FleetManager:
             if robot_id in self._robots:
                 self._selected = robot_id
 
+    def mode_of(self, robot_id: Optional[str]) -> Optional[str]:
+        """The mode a robot last reported, or None if we have never heard from
+        it. Its own accessor because the drive gate asks this per frame, and
+        building a whole snapshot to read one string is not what that is for."""
+        if not robot_id:
+            return None
+        with self._lock:
+            st = self._robots.get(robot_id)
+            return st.mode if st is not None else None
+
     def trails(self) -> Dict[str, dict]:
         """Every robot's breadcrumb in full, with the count it is current as of.
 

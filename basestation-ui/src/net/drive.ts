@@ -25,7 +25,7 @@
 // identical, even though they now reach the radio by different routes. The touch
 // pad hands this sender a throttle already in -1..1, from its Y offset.
 
-import { driveHz, selected, send } from "./ws.ts";
+import { driveHz, selected, selectedRobot, send } from "./ws.ts";
 
 export const DRIVE_EPS = 0.01;
 /** Used only until the first snapshot lands; matches run_basestation.py. */
@@ -63,6 +63,14 @@ export function makeDriveSender() {
   function push(throttle: number, steer: number, force: boolean): void {
     const rid = selected.value;
     if (!rid) return;
+    // The bridge streams drive frames to the selected rover and only while it
+    // is in teleop, and drops anything else (app.py::send_drive). Not sending
+    // what would be dropped keeps the socket quiet — but the check is
+    // PERMISSIVE: a rover we have no telemetry for yet still gets its frames,
+    // because the bridge is the authority and a UI guessing wrong here would
+    // cost the operator control rather than a few bytes.
+    const robot = selectedRobot.value;
+    if (robot && robot.mode !== "teleop") return;
     const now = performance.now();
     const dt = now - last.t;
     const changed = Math.abs(throttle - last.throttle) > DRIVE_EPS ||

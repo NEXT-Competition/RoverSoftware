@@ -286,6 +286,109 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         return (rid is not None and rid == _pad_claim["rid"]
                 and (time.monotonic() - _pad_claim["t"]) < GAMEPAD_HOLD)
 
+    # ---- one rover at a time gets the drive stream ----
+    # Drive is the ONLY streamed traffic the base station puts on the radio.
+    # Everything else — mode, e-stop, jogs, routine and script commands, config —
+    # goes out when somebody presses something and is silent otherwise. Drive
+    # repeats: at drive_hz while a stick moves, and at DRIVE_KEEPALIVE even while
+    # it is held perfectly still, because teleop's command_timeout deliberately
+    # stops a rover that stops hearing from us.
+    #
+    # That stream now goes to exactly one rover — the selected one, and only
+    # while it is in teleop. The channel is shared, so a second rover being
+    # streamed at is a second rover's worth of airtime taken from the one
+    # somebody is actually driving.
+    #
+    # Withholding drive frames is safe in a way worth being explicit about,
+    # because it is the sort of thing that looks like it should be dangerous:
+    #
+    #   - E-STOP, clear_estop and mode are handled by ControlManager ITSELF and
+    #     never reach a controller (robot/control/manager.py), so nothing here
+    #     can delay or gate an e-stop. It is not a drive frame and never was.
+    #   - A rover in routine, waypoint or script mode is driven by its own
+    #     controller and ignores `drive` entirely, and command_timeout lives only
+    #     in TeleopController. So a rover in any autonomous mode is completely
+    #     unaffected by losing this stream — it does not stop, it does not
+    #     notice.
+    #   - A rover in TELEOP that loses the stream stops, which is the whole point
+    #     of command_timeout and exactly what should happen to a rover nobody is
+    #     driving any more.
+    _drive_target: dict = {"rid": None}
+    # A mode we have just commanded, believed over telemetry until telemetry has
+    # had time to catch up. Telemetry is 5 Hz, so without this, pressing TELEOP
+    # and immediately pushing the stick does nothing for up to 200 ms — which is
+    # precisely the moment an operator decides the controls are not working.
+    # Short, because if the rover REFUSED the mode we want the truth back
+    # quickly; being wrong for this long only means drive frames a non-teleop
+    # controller throws away.
+    MODE_OPTIMISM = 1.0  # seconds
+    _mode_sent: dict = {}
+
+    def dispatch_mode(rid, mode: str) -> None:
+        """Send a mode change, and remember we sent it. Every path that changes
+        a rover's mode goes through here, so the drive gate below cannot be left
+        believing an old mode by a caller that forgot to say."""
+        if not rid:
+            return
+        _mode_sent[rid] = (mode, time.monotonic())
+        dispatch(rid, {"type": "mode", "mode": mode})
+
+    def _believed_mode(rid):
+        pending = _mode_sent.get(rid)
+        if pending is not None:
+            if (time.monotonic() - pending[1]) < MODE_OPTIMISM:
+                return pending[0]
+            del _mode_sent[rid]  # telemetry has had its chance; trust it now
+        return fleet.mode_of(rid)
+
+    def update_drive_target() -> None:
+        """Point the drive stream at the selected rover if it is in teleop, and
+        stop whoever just lost it.
+
+        The explicit stop is not strictly required — command_timeout would halt
+        the rover within 0.5 s on its own — but "within 0.5 s" is not something
+        to leave to a failsafe when one 62-byte frame makes it immediate and
+        certain. The failsafe stays as the backstop for the case this frame
+        cannot cover: the rover being out of range.
+
+        It is sent only to a rover that is still in TELEOP, which is the only
+        rover it can mean anything to. A rover that lost the stream by leaving
+        teleop is now driven by a controller that ignores `drive` outright, and
+        TeleopController resets itself to stopped in on_activate whenever it
+        comes back — so a stop there would be a frame on the shared channel that
+        no rover anywhere acts on.
+        """
+        rid = fleet.selected
+        wanted = rid if rid and _believed_mode(rid) == "teleop" else None
+        if wanted == _drive_target["rid"]:
+            return
+        previous = _drive_target["rid"]
+        _drive_target["rid"] = wanted
+        if previous is not None and _believed_mode(previous) == "teleop":
+            dispatch(previous, {"type": "drive", "throttle": 0.0, "steer": 0.0})
+
+    def send_drive(rid, throttle: float, steer: float) -> bool:
+        """The one door a drive frame leaves by. False means it was not sent.
+
+        Both inputs come through here — the base station's gamepad and a
+        browser's {"action":"drive"} — so the rule cannot be bypassed by a
+        client naming a robot_id of its own choosing.
+
+        The target is recomputed here rather than only in the broadcaster, so
+        the gate is correct for whoever asks and whenever: a stick pushed in the
+        first tick after startup, or an embedder driving `handle_action` with no
+        broadcast loop running at all, would otherwise find the stream pointed
+        at nobody. The broadcaster still calls it too, because a rover has to be
+        RELEASED the moment it stops being the target and nothing about that
+        depends on somebody touching a stick.
+        """
+        update_drive_target()
+        if not rid or rid != _drive_target["rid"]:
+            return False
+        dispatch(rid, {"type": "drive", "throttle": round(throttle, 3),
+                       "steer": round(steer, 3)})
+        return True
+
     def on_drive(throttle: float, steer: float) -> None:
         rid = fleet.selected
         if not rid:
@@ -302,8 +405,12 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                    or abs(throttle - _drive["throttle"]) > DRIVE_EPS
                    or abs(steer - _drive["steer"]) > DRIVE_EPS)
         if (changed and dt >= min_interval) or dt >= DRIVE_KEEPALIVE:
-            _drive.update(throttle=throttle, steer=steer, t=now)
-            dispatch(rid, {"type": "drive", "throttle": round(throttle, 3), "steer": round(steer, 3)})
+            # Recorded only if it actually went out. Marking a gated frame as
+            # sent would start the keepalive clock on a transmission that never
+            # happened, so the first real frame after the gate opens could wait
+            # a further quarter second.
+            if send_drive(rid, throttle, steer):
+                _drive.update(throttle=throttle, steer=steer, t=now)
 
     def on_action(name: str) -> None:
         rid = fleet.selected
@@ -312,7 +419,7 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         elif name == "clear":
             dispatch(rid, {"type": "clear_estop"})
         elif name.startswith("mode:"):
-            dispatch(rid, {"type": "mode", "mode": name.split(":", 1)[1]})
+            dispatch_mode(rid, name.split(":", 1)[1])
         elif name in ("arm_shooter", "disarm_shooter", "fire", "shooter_spin"):
             # A bindable button reaches the same pass-through the on-screen
             # controls use; the robot still owns every firing rule.
@@ -339,7 +446,7 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # binding that stopped working because a rover was off would be
             # worse than one the robot rejects out loud.
             dispatch(rid, {"type": "select_routine", "id": name[len("routine:"):]})
-            dispatch(rid, {"type": "mode", "mode": "routine"})
+            dispatch_mode(rid, "routine")
         elif name.startswith("mech_preset:"):
             # `mech_preset:<mechanism>:<preset>`. Both names are layout names,
             # which validation constrains to [a-z][a-z0-9_]* (robot/layout.py),
@@ -391,7 +498,7 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         if action == "select":
             fleet.select(data.get("robot_id"))
         elif action == "mode":
-            dispatch(rid, {"type": "mode", "mode": data.get("mode", "teleop")})
+            dispatch_mode(rid, str(data.get("mode", "teleop")))
         elif action == "estop":
             dispatch(rid, {"type": "estop"})
         elif action == "clear_estop":
@@ -402,10 +509,14 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
             # Dropped, not queued, while the base-station pad has this robot:
             # a stale drive frame is worth nothing a moment later, and the whole
             # point is to keep it off the wire. See GAMEPAD_HOLD above.
+            #
+            # `send_drive` then drops it again unless this robot is the one
+            # holding the drive stream. That second check is the one that
+            # matters here: `rid` comes off the wire, so without it any client
+            # could drive any rover by naming it, whatever the dashboard shows.
             if not _pad_owns_drive(rid):
-                dispatch(rid, {"type": "drive",
-                               "throttle": float(data.get("throttle", 0)),
-                               "steer": float(data.get("steer", 0))})
+                send_drive(rid, float(data.get("throttle", 0)),
+                           float(data.get("steer", 0)))
         elif action in ("arm_shooter", "disarm_shooter", "fire"):
             # Pass-through: the robot owns every firing rule (arm latch, dwell,
             # cooldown, magazine). Duplicating any of that here would give two
@@ -646,20 +757,22 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
     # a driver's dashboard are three viewers of possibly three different rovers,
     # and only the thing serving the streams knows that.
     _viewers: dict = {}
-    # What we last TOLD each rover about it, so the command goes out on a change
-    # rather than every cycle.
+    # What we last TOLD each rover, so the command goes out on a CHANGE and is
+    # silent otherwise — like every other command the base station sends, and
+    # unlike the drive stream, which is the only thing here that repeats.
     _fpv_told: dict = {}
-    # ...and a slow re-statement regardless, because this is the one instruction
-    # whose loss is silent: a rover that misses an "on" shows no picture and a
-    # rover that misses an "off" keeps spending the Wi-Fi. ~35 bytes per rover
-    # per interval is a rounding error against one frame of video.
-    FPV_REFRESH = 5.0
-    _fpv_refreshed = {"t": 0.0}
+    # Which rovers we have seen online, so one coming BACK can be re-told. That
+    # is the case a change-driven command cannot otherwise cover: a rover that
+    # rebooted, or drove out of range and back, has forgotten what it was last
+    # told and would either sit streaming to nobody or show no picture. An
+    # offline->online transition is an event, so this stays event-driven rather
+    # than becoming a timer.
+    _fpv_online: dict = {}
 
     def _fpv_watchers(robot_id: str) -> int:
         return _viewers.get(robot_id, 0)
 
-    async def push_fpv_demand(robot_ids) -> None:
+    async def push_fpv_demand(online_by_id: dict) -> None:
         """Tell each rover whether anybody has its camera open.
 
         Over the RADIO, deliberately, even though the rover it is aimed at must
@@ -679,21 +792,20 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
         """
         if video_rx is None:
             return
-        now = time.monotonic()
-        refresh = (now - _fpv_refreshed["t"]) >= FPV_REFRESH
-        if refresh:
-            _fpv_refreshed["t"] = now
-        for rid in robot_ids:
+        for rid, online in online_by_id.items():
+            returned = online and not _fpv_online.get(rid, False)
+            _fpv_online[rid] = online
             want = _fpv_watchers(rid) > 0
-            if not refresh and _fpv_told.get(rid) is want:
+            if _fpv_told.get(rid) is want and not returned:
                 continue
             _fpv_told[rid] = want
             dispatch(rid, {"type": "fpv", "on": want})
         # Forget rovers that have left, so a long match doesn't accumulate them
         # and a rover that comes back is told afresh.
         for rid in list(_fpv_told):
-            if rid not in robot_ids:
+            if rid not in online_by_id:
                 del _fpv_told[rid]
+                _fpv_online.pop(rid, None)
 
     async def broadcast_loop() -> None:
         # Config revisions we've already pushed; a change means a robot answered
@@ -744,8 +856,15 @@ def build_app(fleet: FleetManager, link, controller, web_cfg: dict, video_rx=Non
                     if "trail_seq" in robot:
                         trail_cursors[robot["robot_id"]] = robot["trail_seq"]
 
+                # Move the drive stream if the selection or the selected rover's
+                # mode has changed. Here rather than at the input: a rover has to
+                # be released the moment it stops being the target, and nothing
+                # about that depends on somebody touching a stick.
+                update_drive_target()
+
                 # Start and stop cameras to match who is actually looking.
-                await push_fpv_demand({r["robot_id"] for r in snap["robots"]})
+                await push_fpv_demand({r["robot_id"]: r["online"]
+                                       for r in snap["robots"]})
 
                 # Outbound document fragments, a couple per cycle.
                 await drain_documents()

@@ -595,6 +595,19 @@ described below:
 | 3 | 86% | 59% |
 | 4 | 112% — oversubscribed | 76% |
 
+**Only one rover is driven at a time.** Drive is the only traffic the base
+station streams — it repeats at `--drive-hz`, and keeps repeating at a 250 ms
+keepalive even while a stick is held still, because teleop's `command_timeout`
+stops a rover that stops hearing from us. That stream goes to the rover selected
+in the dashboard, and only while it is in teleop; every other rover gets frames
+only when you press something. Deselecting a rover you were driving sends it one
+immediate stop rather than waiting out the failsafe.
+
+Rovers in `routine`, `waypoint` or `script` are unaffected — they ignore `drive`
+outright and their `command_timeout` isn't running — so an autonomous rover
+keeps running while you drive another one. E-stop and mode changes are handled
+by `ControlManager` itself and are never gated by any of this.
+
 Three knobs, in the order worth reaching for them:
 
 | Knob | Where | What it does |
