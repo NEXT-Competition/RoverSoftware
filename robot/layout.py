@@ -50,11 +50,21 @@ DEFAULT_LAYOUT_PATH = "/var/lib/roversoftware/layout.json"
 
 VERSION = 1
 
-# Caps. The radio is the binding constraint, not memory: a layout crosses a
-# 57600-baud link shared with telemetry, so a document that can't be sent is
-# worse than one that was refused with a message.
+# Caps. Not memory: a document that cannot be sent is worse than one refused
+# with a message, and `MAX_DOC_BYTES` below is the guard that actually enforces
+# that. These are the per-thing limits that turn "6144 bytes" into a sentence
+# about the thing you added.
 MAX_DRIVE_ACTUATORS = 16
-MAX_MECHANISMS = 8
+# What actually runs out first is PWM channels, not bytes: there are 16, the
+# drivetrain claims at least two and the built-in launcher reserves another, so
+# a build cannot reach even this many single-actuator mechanisms without running
+# out of somewhere to plug them in. Sized against that rather than against the
+# radio, which no longer carries layouts at all — they go over WiFi (see
+# Robot._drain_outbox), which is what made the old limit of 8 outlive its
+# reason. A dozen fat mechanisms will still hit MAX_DOC_BYTES first, and that
+# is the correct order: the byte cap is about the transfer, this one is about
+# the build.
+MAX_MECHANISMS = 12
 MAX_ACTUATORS_PER_MECHANISM = 8
 MAX_PRESETS = 8
 # A sequence long enough to need more legs than this is a routine, not a

@@ -231,13 +231,35 @@ def test_an_oversized_document_is_refused():
     assert "at most" in " ".join(layout.validate(doc).errors)
 
 
+def _mechs(count):
+    """`count` power mechanisms on DISTINCT channels, starting past the drive.
+
+    Distinct matters: every one of these on channel 2 is refused for a channel
+    conflict whether or not the count cap exists, so the old version of this
+    test passed for the wrong reason and would have kept passing if somebody
+    deleted the cap it was named after.
+    """
+    return [{"name": f"m{i}", "kind": "power",
+             "actuators": [{"name": "a", "channel": 2 + i}]}
+            for i in range(count)]
+
+
 def test_too_many_mechanisms_are_refused():
     doc = tank_doc()
-    doc["mechanisms"] = [
-        {"name": f"m{i}", "kind": "power",
-         "actuators": [{"name": "a", "channel": 2}]}
-        for i in range(layout.MAX_MECHANISMS + 1)]
-    assert not layout.validate(doc).ok
+    doc["mechanisms"] = _mechs(layout.MAX_MECHANISMS + 1)
+    result = layout.validate(doc)
+    assert not result.ok
+    assert "at most" in " ".join(result.errors)
+
+
+def test_exactly_the_cap_is_accepted():
+    """The other half: a cap nobody can reach is indistinguishable from a bug,
+    and there must be enough PWM channels left to actually wire this many."""
+    doc = tank_doc()
+    doc["mechanisms"] = _mechs(layout.MAX_MECHANISMS)
+    result = layout.validate(doc)
+    assert result.errors == []
+    assert len(result.mechanisms) == layout.MAX_MECHANISMS
 
 
 def test_an_unsupported_version_is_refused():
