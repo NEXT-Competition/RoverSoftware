@@ -176,6 +176,9 @@ class ControllerReader:
         self._hold_refresh = {}   # action name -> last time we re-announced it
         self._l2 = Trigger(self._map.trigger_rest)
         self._r2 = Trigger(self._map.trigger_rest)
+        # Was each analog trigger past the press threshold last tick? Edges are
+        # tracked here rather than through _edge(), which indexes buttons.
+        self._trig_down = {"l2": False, "r2": False}
         self._thread = None
         self._running = False
         # Raw sample published for the settings page's bind-by-pressing flow.
@@ -239,6 +242,39 @@ class ControllerReader:
             return False
         return tuple(self._js.get_hat(idx)) == tuple(direction)
 
+    def _fire_triggers(self, m: ControllerMapping, axes) -> None:
+        """L2/R2 as one-shot buttons, for pads that report them as axes.
+
+        Pull past `trigger_press` fires the action once; it does not fire again
+        until the trigger has been released back under the threshold. Without
+        that edge a held trigger would re-fire at the poll rate, which on a
+        toggle like `shooter_spin` is a flywheel switching on and off 40 times a
+        second.
+
+        The value goes through the same `Trigger` normaliser the throttle uses,
+        so a driver that rests these at 0 rather than -1 is handled once, here
+        and in mix(), instead of twice differently.
+        """
+        for side, idx, trig, action in (
+            ("l2", m.axis_l2, self._l2, m.trig_l2),
+            ("r2", m.axis_r2, self._r2, m.trig_r2),
+        ):
+            if not action or idx is None or idx < 0 or idx >= len(axes):
+                self._trig_down[side] = False
+                continue
+            down = trig.value(axes[idx]) >= m.trigger_press
+            if down and not self._trig_down[side] and self.on_action:
+                # Comma-separated actions all fire. One pad drives a fleet whose
+                # robots carry different mechanisms, and a robot refuses the ones
+                # it does not have — out loud, harmlessly — so "shooter_spin,
+                # dumper" means "whichever of these this rover actually has"
+                # without needing a mapping per robot.
+                for one in action.split(","):
+                    one = one.strip()
+                    if one:
+                        self.on_action(one)
+            self._trig_down[side] = down
+
     def _pump_holds(self, held: dict) -> None:
         """Turn a held/not-held map into on/off callbacks for the robot.
 
@@ -301,6 +337,7 @@ class ControllerReader:
                 for idx, name in m.actions():
                     if self._edge(idx) and self.on_action:
                         self.on_action(name)
+                self._fire_triggers(m, axes)
                 # Run-while-held controls, buttons and hat directions alike.
                 held = {name: self._held(idx) for idx, name in m.holds()}
                 for hat, direction, name in m.hat_holds():

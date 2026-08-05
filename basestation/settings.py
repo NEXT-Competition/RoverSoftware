@@ -117,6 +117,32 @@ class ControllerMapping:
     # — so these name the hat and the directions are fixed.
     hat_agitator: int = UNBOUND
     hat_agitator_rev: int = UNBOUND
+    # The same two, on BUTTONS. A D-pad is a hat on some drivers and four
+    # ordinary buttons on others — SDL reports a DS4 over USB on macOS with
+    # zero hats and the pad on b11..b14 — so the hat fields above simply cannot
+    # be reached on those builds. Whichever pair is set works; both is allowed
+    # and means two ways to run one mechanism, not two mechanisms.
+    btn_agitator: int = UNBOUND
+    btn_agitator_rev: int = UNBOUND
+
+    # --- analog triggers used as buttons ---
+    # A DS4 reports L2/R2 as AXES, not buttons: SDL gives them no button index
+    # at all, so they cannot go in the btn_* fields above however much they feel
+    # like buttons. Naming an action here fires it when the trigger is pulled
+    # past `trigger_press`, on the pull edge only — the same one-shot a button
+    # gives, so `shooter_spin` toggles once per pull rather than once per frame
+    # while held.
+    #
+    # Blank = unused, which is the default and leaves the triggers free for
+    # throttle (see axis_l2/axis_r2 and mix(): they only drive when
+    # axis_throttle is UNBOUND). Binding an action here does NOT stop them
+    # driving; on a build that steers with the sticks they are simply spare.
+    trig_l2: str = ""
+    trig_r2: str = ""
+    # How far a trigger travels before it counts as pressed. Well clear of both
+    # rest positions (-1 on SDL, 0 on some drivers) so a resting trigger cannot
+    # read as a press, and short of the stop so a worn spring still fires.
+    trigger_press: float = 0.5
 
     def actions(self):
         """(button index, action name) for every bound button.
@@ -150,6 +176,8 @@ class ControllerMapping:
         """
         pairs = (
             (self.btn_feeder, "feeder"),
+            (self.btn_agitator, "agitator"),
+            (self.btn_agitator_rev, "agitator_rev"),
             # Spitting is held, not toggled: it clears a jam, and the operator
             # wants it to stop the moment they let go rather than needing a
             # second press while the robot is throwing something out.
@@ -190,6 +218,9 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.axis_l2", "int", lo=0, hi=15),
     Param("controller.axis_r2", "int", lo=0, hi=15),
     Param("controller.trigger_rest", "float", lo=-1, hi=1),
+    Param("controller.trig_l2", "text"),
+    Param("controller.trig_r2", "text"),
+    Param("controller.trigger_press", "float", lo=0.1, hi=0.95),
     Param("controller.deadzone", "float", lo=0, hi=0.5),
     Param("controller.invert_steer", "bool"),
     # Floored at 0.1 rather than 0: a gain slider that can reach zero is a
@@ -211,6 +242,8 @@ PARAMS: Tuple[Param, ...] = (
     Param("controller.btn_intake_spit", "int", lo=UNBOUND, hi=31),
     Param("controller.btn_feeder", "int", lo=UNBOUND, hi=31),
     Param("controller.hat_agitator", "int", lo=UNBOUND, hi=3),
+    Param("controller.btn_agitator", "int", lo=UNBOUND, hi=31),
+    Param("controller.btn_agitator_rev", "int", lo=UNBOUND, hi=31),
     Param("controller.hat_agitator_rev", "int", lo=UNBOUND, hi=3),
     Param("controller.axis_throttle", "int", lo=UNBOUND, hi=15),
     Param("controller.invert_throttle", "bool"),
