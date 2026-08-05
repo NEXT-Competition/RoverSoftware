@@ -13,7 +13,9 @@
         "min_angle": -25.0,
         "name": "left",
         "neutral_angle": 5.0,
-        "speed_scale": 1.0
+        "speed_scale": 1.0,
+        "speed_scale_forward": 1.0,
+        "speed_scale_reverse": 1.0
       },
       {
         "channel": 1,
@@ -27,7 +29,9 @@
         "min_angle": -25.0,
         "name": "right",
         "neutral_angle": 5.0,
-        "speed_scale": 1.0
+        "speed_scale": 1.0,
+        "speed_scale_forward": 1.0,
+        "speed_scale_reverse": 1.0
       }
     ],
     "arm_seconds": 2.0,
@@ -61,7 +65,9 @@
           "min_angle": -30.0,
           "name": "roller",
           "neutral_angle": 5.0,
-          "speed_scale": 1.0
+          "speed_scale": 1.0,
+          "speed_scale_forward": 1.0,
+          "speed_scale_reverse": 1.0
         }
       ],
       "auto_stop_seconds": 0.5,
@@ -93,7 +99,9 @@
           "min_angle": -30.0,
           "name": "motor",
           "neutral_angle": 5.0,
-          "speed_scale": 1.0
+          "speed_scale": 1.0,
+          "speed_scale_forward": 1.0,
+          "speed_scale_reverse": 1.0
         }
       ],
       "auto_stop_seconds": 0.0,

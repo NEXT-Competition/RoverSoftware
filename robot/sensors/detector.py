@@ -45,7 +45,7 @@ import threading
 import time
 from typing import Optional
 
-from ..control.detection import Detection
+from ..control.detection import Detection, distance_m
 
 try:  # pragma: no cover - Linux/Pi-only dependency, absent on a dev laptop
     from edge_impulse_linux.image import ImageImpulseRunner
@@ -327,6 +327,12 @@ class ObjectDetector:
         if mode == "centermost":
             mw = self._model_wh[0] or 1
             return min(boxes, key=lambda b: abs((b["x"] + b["width"] / 2.0) - mw / 2.0))
+        if mode == "lowest":
+            # Nearest the bottom of the frame = nearest the robot, for anything
+            # resting on the floor. Keyed on the box's BOTTOM edge rather than
+            # its centre so a big box close up beats a small one whose middle
+            # happens to sit lower.
+            return max(boxes, key=lambda b: b.get("y", 0) + b.get("height", 0))
         return max(boxes, key=lambda b: b.get("width", 0) * b.get("height", 0))
 
     # --- accessors (cheap; safe to call every control tick) ----------------
@@ -372,6 +378,12 @@ class ObjectDetector:
                     size=round(d.size, 3) if d.size is not None else None,
                     age=round(age, 2),
                 )
+                # Metres, only on a calibrated build — the key is absent (not
+                # null-padded) so an uncalibrated robot costs zero radio bytes.
+                dist = distance_m(d.size, self.cfg.focal_frac,
+                                  self.cfg.target_height_m)
+                if dist is not None:
+                    t["dist"] = round(dist, 2)
         return t
 
 

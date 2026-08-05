@@ -40,11 +40,29 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # +40 the throw is 35 either way, and +-1.0 lands exactly on the two endpoints.
 NEUTRAL = 5.0
 
+# *** An endpoint past +-45 is not more speed; it is a dead motor. ***
+# The HAT maps -90..+90 onto 500..2500us because that is a SERVO's range. An
+# ESC listens to 1000..2000us only, which is +-45 here, and reads anything
+# outside it as a lost signal: it cuts the motor and re-arms, beeping, partway
+# through the throw. So the widest legal throw about neutral 5 is
+# min(45 - 5, 5 + 45) = 40, and that is what the wide mechanisms below use.
+# robot/layout.py warns about any actuator that breaks this rule.
+ESC_MIN = -45.0
+ESC_MAX = 45.0
 
-def motor(channel, name, label, lo=-30.0, hi=40.0, scale=1.0):
+
+def motor(channel, name, label, lo=-30.0, hi=40.0, scale=1.0, scale_reverse=None):
+    """One ESC motor. `scale` trims it forward, `scale_reverse` backwards.
+
+    Reverse defaults to whatever forward is, because a motor with no measured
+    mismatch has the same (absent) mismatch both ways — pass it only when the
+    rover tracks differently going backwards.
+    """
     return MotorConfig(channel=channel, name=name, label=label, kind="esc",
                        neutral_angle=NEUTRAL, min_angle=lo, max_angle=hi,
-                       speed_scale=scale)
+                       speed_scale_forward=scale,
+                       speed_scale_reverse=scale if scale_reverse is None
+                       else scale_reverse)
 
 
 def power(name, label, actuators, presets, auto_stop=0.0, slew=0.0):
@@ -94,8 +112,11 @@ def shooter() -> dict:
     cfg = RobotConfig()
     # This rover's right track runs faster than its left, so trim the FASTER
     # side down until it tracks straight. There is no way to speed the slower
-    # one up — it is already being asked for everything it has.
-    cfg.drive.actuators["right"].speed_scale = 0.9
+    # one up — it is already being asked for everything it has. The mismatch is
+    # worse going forward than backing up, so the two directions get their own
+    # number rather than one compromise that is wrong both ways.
+    cfg.drive.actuators["right"].speed_scale_forward = 0.75
+    cfg.drive.actuators["right"].speed_scale_reverse = 0.8
     cfg.mechanisms = {
         "intake": power(
             "intake", "Intake",
@@ -104,26 +125,31 @@ def shooter() -> dict:
             {"in": {"roller": -1.0}, "out": {"roller": 1.0}},
             auto_stop=0.5,
         ),
-        "dumper": power(
-            "dumper", "Flywheel",
-            # Runs at -50: reaching it needs a throw of 55, so the endpoints are
-            # -50/+60 — pushing the preset past -1.0 would only clamp.
-            {"motor": motor(2, "motor", "Flywheel", lo=-50.0, hi=60.0)},
-            {"run": {"motor": -1.0}},
-            # Wind up over ~1 s instead of in one step. A flywheel is the one
-            # load here with real inertia, and a step from neutral to full asks
-            # its ESC for a current it cannot deliver — the wheel spins up and
-            # the ESC's own protection cuts it dead. Stopping is not ramped.
-            slew=1.0,
-        ),
+        # *** No mechanism on channel 2 on this rover. ***
+        # The flywheel there is driven by the BUILT-IN SHOOTER instead
+        # (RS_SHOOTER_ENABLED=1, RS_SHOOTER_TARGET_RPM=3400), because that is
+        # what owns the closed-loop speed controller in robot/drive/shooter.py.
+        # A mechanism can only hold a throttle; it cannot hold an RPM.
+        #
+        # The two CANNOT share the channel, and the failure is not graceful:
+        # layout.apply reserves the shooter's channel, a mechanism on it is a
+        # validation ERROR, and an error refuses the WHOLE document — so the
+        # rover loses its intake, feeder, agitator AND its drivetrain trim, and
+        # boots on the compiled-in defaults. Putting `dumper` back here means
+        # turning the built-in shooter off in the same breath.
+        #
+        # east.json keeps its `dumper`: that one really is a dumper, a motor
+        # that runs until it is switched off again, and it has no encoder and
+        # nothing to hold a speed against.
         "feeder": power(
             "feeder", "Feeder",
-            # Runs at +50: throw of 45, so endpoints -40/+50.
+            # Runs at +45 (2000us), the top of the band. Was +50 = 2055us, over
+            # the ceiling — mild next to the flywheel's -50, but the same fault.
             # The actuator names here and below match what this rover already
             # had, because an actuator name IS its tuning path
             # (mech.feeder.feeder.*) — renaming one orphans anything tuned
             # against it for no gain.
-            {"feeder": motor(4, "feeder", "Feeder", lo=-40.0, hi=50.0)},
+            {"feeder": motor(4, "feeder", "Feeder", lo=ESC_MIN, hi=ESC_MAX)},
             {"run": {"feeder": 1.0}},
             # RUN WHILE HELD, so this one wants the dead-man: the pad
             # re-announces a held control every 0.25 s, and if the robot stops
@@ -132,10 +158,11 @@ def shooter() -> dict:
         ),
         "agitator": power(
             "agitator", "Agitator",
-            # Neutral is 5, so +-90 is not reachable both ways: the throw is the
-            # narrower side. -80/+90 gives 85 each way, which is full speed in
-            # both directions and all this needs — it only has to stir.
-            {"agitator": motor(5, "agitator", "Agitator", lo=-80.0, hi=90.0)},
+            # Was -80/+90 — 611us and 2500us, both a long way outside the band,
+            # which is a stirrer that twitches and beeps rather than one that
+            # stirs. +-45 is the whole of what an ESC will take; the throw of 40
+            # about neutral is full speed both ways, and all this needs.
+            {"agitator": motor(5, "agitator", "Agitator", lo=ESC_MIN, hi=ESC_MAX)},
             {"run": {"agitator": 1.0}, "reverse": {"agitator": -1.0}},
             auto_stop=0.5,  # both directions are held (D-pad up / down)
         ),

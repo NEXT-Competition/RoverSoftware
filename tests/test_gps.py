@@ -181,6 +181,53 @@ def test_speed_falls_back_to_kmh():
     assert g.pose()[2] == pytest.approx(123.4)
 
 
+def test_held_heading_expires_even_though_the_fix_is_fresh():
+    """The circle bug: a course held forever is a heading steering can't move.
+
+    Position keeps updating (the rover IS driving), but every fix is under
+    min_move_mps, so the track angle is never refreshed. Held indefinitely, the
+    waypoint loop closes around an error that cannot change and drives a
+    constant-curvature circle. The heading has to expire on its own clock.
+    """
+    chip = FakeChip([MOVING])
+    g = make_gps(chip, heading_timeout=3.0)
+    chip.update()
+    g._snapshot()
+    assert g.pose()[2] == pytest.approx(123.4)
+
+    g._heading_at -= 10.0  # ten seconds of crawling, no fresh course
+    lat, lon, heading = g.pose()
+    assert (lat, lon) == (37.7749, -122.4194)  # position is still good
+    assert heading is None                     # the course is not
+    assert not g.has_heading()
+    assert g.track_angle() is None
+
+
+def test_a_briefly_held_heading_is_still_used():
+    """Riding out a slow patch between fixes is what the hold is FOR."""
+    chip = FakeChip([MOVING])
+    g = make_gps(chip, heading_timeout=3.0)
+    chip.update()
+    g._snapshot()
+
+    g._heading_at -= 1.5  # a second and a half without a fresh course
+    assert g.pose()[2] == pytest.approx(123.4)
+    assert g.has_heading()
+
+
+def test_an_expired_heading_is_still_reported_to_the_operator():
+    """pose() withholds it; telemetry doesn't. The age is the diagnosis."""
+    chip = FakeChip([MOVING])
+    g = make_gps(chip, heading_timeout=3.0)
+    chip.update()
+    g._snapshot()
+    g._heading_at -= 30.0
+
+    t = g.telemetry()
+    assert t["track"] == pytest.approx(123.4)
+    assert t["track_age"] >= 30.0
+
+
 def test_stale_fix_drops_to_none():
     """Antenna unplugged / satellites lost: the last fix must expire."""
     chip = FakeChip([MOVING])

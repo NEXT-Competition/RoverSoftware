@@ -6,6 +6,17 @@ longer = forward, shorter = reverse (for a bidirectional ESC).
 
 We map a normalized throttle in [-1.0, 1.0] onto a servo angle using the
 per-motor MotorConfig.
+
+--- the angles an ESC will actually listen to ---
+The HAT maps -90..+90 onto 500..2500us, which is a SERVO's range: a servo
+travels over the whole of it. An ESC does not. The RC throttle band is
+1000..2000us, i.e. +-45 in these angles, and an ESC treats a pulse outside it as
+a lost signal rather than as more throttle — it cuts the motor and drops back to
+waiting, which on most ESCs means replaying the arming tone. So an endpoint past
++-45 does not buy authority; it buys a motor that spins up and dies partway
+through the throw, beeping, with nothing in the log to say why. layout.py warns
+about it (see ESC_ANGLE_LIMIT); nothing clamps it, because which endpoint to
+give up is a question about the build.
 """
 
 from __future__ import annotations
@@ -89,13 +100,18 @@ class ESCMotor:
         # match, so full forward and full reverse are equal magnitudes.
         throw = max(0.0, min(self.cfg.max_angle - self.cfg.neutral_angle,
                              self.cfg.neutral_angle - self.cfg.min_angle))
-        cmd *= self.cfg.max_forward if cmd > 0 else self.cfg.max_reverse
-        # Speed trim last, and in both directions: it corrects a mechanical
-        # mismatch between two motors, which does not care which way they turn.
+        forward = cmd > 0
+        cmd *= self.cfg.max_forward if forward else self.cfg.max_reverse
+        # Speed trim last, and per direction: it corrects a mechanical mismatch
+        # between two motors, and that mismatch is rarely the same going forwards
+        # as backwards (see MotorConfig). Which direction is measured on the
+        # POST-inversion command, so it means the way this motor is actually
+        # turning — on a mirrored track motor that is the opposite of the stick.
         # After the dead band on purpose — trimming a motor to 0.9 must not also
         # move where its dead band starts, or the two sides would begin moving
         # at different stick positions, which is the very thing this fixes.
-        cmd *= _clamp(self.cfg.speed_scale, 0.0, 1.0)
+        trim = self.cfg.speed_scale_forward if forward else self.cfg.speed_scale_reverse
+        cmd *= _clamp(trim, 0.0, 1.0)
         self.servo.angle(self.cfg.neutral_angle + cmd * throw)
 
     def set_angle(self, degrees: float) -> None:

@@ -195,12 +195,42 @@ reformats those tensors — better here than on the rover.
 The Edge Impulse FOMO caveat in `requirements.txt` — centroids only, so the rover
 can turn to face a target but never approach it — **does not apply here**. This is
 a real bounding-box detector, so `to_detection()` reports a true `size` and
-approach/standoff work. Calibrate `RS_VISION_STANDOFF_SIZE` with
+approach/standoff work. Calibrate `RS_VISION_STANDOFF` with
 `tools/detector_selftest.py` rather than guessing.
 
 Set `RS_VISION_HFOV=66`. The 50° default is the *post-crop* figure for the Edge
 Impulse backend; the IMX500 path maps boxes back to the full frame, so it needs
 the camera's real FOV or the steering derivative is scaled wrong.
+
+## Metric range (optional, telemetry only)
+
+Standoff above stops on the raw `size` ratio and needs no calibration. If you
+also want **metres** in the telemetry (`dist`, shown on the base station), that
+needs a tape measure and a target of known height:
+
+```bash
+# 1. CALIBRATE — target centred, tape-measured, NOT touching the frame edge
+python tools/detector_selftest.py --backend imx500 \
+    --imx500-model /path/to/network/network.rpk \
+    --imx500-labels /path/to/labels.txt \
+    --label bucket --target-height 0.368 --distance 3.00
+#    -> prints RS_VISION_TARGET_HEIGHT / RS_VISION_FOCAL_FRAC to paste
+
+# 2. VERIFY at a distance you did NOT calibrate at
+python tools/detector_selftest.py --backend imx500 ... \
+    --target-height 0.368 --focal-frac <the number>
+#    -> `range=` per frame; a few percent off is right
+```
+
+`--imx500-labels` is **required for a custom export** — the `.rpk` this pipeline
+produces carries no embedded labels, so without it every box comes back `"0"`
+and `--label` never matches.
+
+The constant is specific to *this* network at *this* `imgsz`. It does not carry
+over from the Edge Impulse backend (which normalizes against a ~50° crop, a ~28%
+difference), and re-exporting at a different `--imgsz` is a new calibration.
+Both env vars default to `0`, which reports range as absent rather than as a
+plausible wrong number.
 
 ## Sensor memory is tight at 640
 

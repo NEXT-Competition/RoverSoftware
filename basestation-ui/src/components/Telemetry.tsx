@@ -15,8 +15,11 @@ function vision(v: VisionStatus): { text: string; color: string } {
   // size is null on FOMO models, which report centroids without a size.
   const size = v.size == null ? "n/a" : v.size.toFixed(2);
   const ex = v.ex == null ? "—" : (v.ex >= 0 ? "+" : "") + v.ex.toFixed(2);
+  // Metres are absent on an uncalibrated robot, and stay absent — showing a
+  // dash here would read as "range broken" when the truth is "never set up".
+  const dist = v.dist == null ? "" : ` · ${v.dist.toFixed(1)} m`;
   return {
-    text: `${v.label} ${((v.conf ?? 0) * 100).toFixed(0)}% · ex ${ex} · size ${size}`,
+    text: `${v.label} ${((v.conf ?? 0) * 100).toFixed(0)}% · ex ${ex} · size ${size}${dist}`,
     color: "var(--ok)",
   };
 }

@@ -30,7 +30,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # Modes the robot's ControlManager arbitrates between. Mirrors the MODES list in
 # basestation-ui/src/components/ModeControls.tsx — if one grows, so does the
 # other, and tests/test_command_vocabulary.py asserts the overlap.
-MODES: Tuple[str, ...] = ("teleop", "object_align", "shooter_align", "waypoint", "routine")
+MODES: Tuple[str, ...] = ("teleop", "object_align", "shooter_align", "ball_intake",
+                          "waypoint", "routine")
 
 # How an operator actually says a mode out loud. The model is given these, and
 # the resolver accepts them, because nobody says "object underscore align".
@@ -46,6 +47,11 @@ MODE_ALIASES: Dict[str, str] = {
     "align": "object_align",
     "track": "object_align",
     "tracking": "object_align",
+    "ball intake": "ball_intake",
+    "ball": "ball_intake",
+    "intake balls": "ball_intake",
+    "collect balls": "ball_intake",
+    "pick up balls": "ball_intake",
     "shooter align": "shooter_align",
     "shooter": "shooter_align",
     "aim": "shooter_align",

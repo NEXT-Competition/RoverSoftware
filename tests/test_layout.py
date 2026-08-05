@@ -210,6 +210,40 @@ def test_actuator_numbers_are_clamped_rather_than_refused():
     assert result.drive.actuators["left"].max_angle == 90
 
 
+# --- the ESC throttle band ---------------------------------------------------
+
+def test_an_esc_endpoint_outside_the_throttle_band_is_warned_about():
+    """The HAT spans 500..2500us; an ESC only listens to 1000..2000us.
+
+    An angle past +-45 therefore reads to the ESC as a lost signal, not as more
+    throttle: it cuts the motor and re-arms partway through the throw. It looks
+    like more authority in the document, which is exactly why it needs saying.
+    """
+    doc = tank_doc()
+    doc["drive"]["actuators"][0]["min_angle"] = -60
+    result = layout.validate(doc)
+    assert result.ok, result.errors      # a warning, not a refusal
+    assert any("min_angle -60" in w and "833us" in w for w in result.warnings), \
+        result.warnings
+
+
+def test_an_endpoint_inside_the_band_is_not_warned_about():
+    assert layout.validate(tank_doc()).warnings == []
+
+
+def test_a_positional_servo_may_use_the_hats_whole_range():
+    """Only ESCs are bound by the throttle band — a servo really does travel
+    the full 500..2500us, so warning about one would be noise."""
+    doc = tank_doc()
+    doc["mechanisms"] = [{"name": "hood", "kind": "power",
+                          "actuators": [{"name": "arm", "kind": "servo",
+                                         "channel": 7, "min_angle": -90,
+                                         "max_angle": 90}]}]
+    result = layout.validate(doc)
+    assert result.ok, result.errors
+    assert result.warnings == []
+
+
 def test_a_pulse_mechanism_keeps_its_geometry():
     doc = tank_doc()
     doc["mechanisms"] = [{"name": "kicker", "kind": "pulse",

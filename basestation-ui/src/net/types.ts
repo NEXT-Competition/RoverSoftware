@@ -7,6 +7,7 @@ export type Mode =
   | "teleop"
   | "object_align"
   | "shooter_align"
+  | "ball_intake"
   | "waypoint"
   | "routine"
   | (string & {});
@@ -23,6 +24,7 @@ export interface VisionStatus {
   conf?: number; // 0..1
   ex?: number; // horizontal error, -1..1 (0 = centered)
   size?: number | null; // bbox height fraction; null on FOMO (no size available)
+  dist?: number; // metres; ABSENT unless the robot is range-calibrated
   age?: number; // seconds since this detection
 }
 
@@ -33,6 +35,17 @@ export interface ShooterStatus {
   shots: number; // rounds fired this session
   ready: boolean; // on target and dwelling toward a shot
   cool: number; // seconds left on the cooldown, 0 when clear
+  // --- flywheel builds only (shooter.target_rpm > 0) ---
+  rpm?: number; // measured, or the modelled value when sensor is false
+  target_rpm?: number;
+  mps?: number; // rim speed — the units the competition limit is written in
+  // true once a real tachometer reading has arrived. Without it the numbers
+  // above are the feed-forward MODEL, not a measurement.
+  sensor?: boolean;
+  // Past the 12.0 m/s competition limit. Allowed and marked, never silently
+  // clamped — see robot/drive/shooter.py::muzzle_mps.
+  over?: boolean;
+  stalled?: boolean; // commanded but not turning; power was cut
 }
 
 /** One layout mechanism's live state (robot/drive/mechanism.py::status).
@@ -87,6 +100,17 @@ export interface GpsStatus {
 }
 
 /** One robot in a fleet snapshot (fleet.py::FleetManager.snapshot). */
+/** Flywheel tachometer (robot/sensors/encoder.py::telemetry).
+ *  Absent unless the build has an encoder AND the shooter is a flywheel. */
+export interface EncoderStatus {
+  ok: boolean; // the poll thread is alive
+  rpm: number; // 0 for a stopped wheel AND for a dead reader — see poll_khz
+  pulses: number;
+  // Achieved poll rate. A starved thread and a stopped wheel both read 0 rpm;
+  // this is what tells them apart. It must stay far above ~1.8 kHz.
+  poll_khz: number;
+}
+
 export interface Robot {
   robot_id: string;
   mode: Mode;
@@ -101,6 +125,7 @@ export interface Robot {
   imu_calib: number | null; // BNO085 fused-orientation calibration level, 0-3
   gps: GpsStatus | null; // null when the robot has GPS disabled
   shooter?: ShooterStatus | null; // absent unless shooter_align is active
+  encoder?: EncoderStatus | null; // absent unless the flywheel has a tachometer
   mech?: Record<string, MechStatus> | null; // absent unless the layout has any
   routine?: RoutineStatus | null; // absent unless `routine` is active
   /** Live closed-loop traces, keyed by the loop's own tuning path
@@ -164,7 +189,8 @@ export interface ActuatorSpec {
   deadband?: number;
   max_forward?: number;
   max_reverse?: number;
-  speed_scale?: number; // per-motor speed trim, both directions
+  speed_scale_forward?: number; // per-motor speed trim, forward
+  speed_scale_reverse?: number; // per-motor speed trim, reverse
 }
 
 export type DriveKind = "tank" | "servo_steer" | "single" | "none";

@@ -122,47 +122,107 @@ def test_shooter_runs_its_intake_in_at_minus_thirty():
     assert _angle(cfg, "intake", "out") == pytest.approx(40.0)
 
 
-def test_shooter_spins_its_flywheel_to_minus_fifty():
-    """Direction matters as much as magnitude: this wheel launches the wrong
-    way at +50."""
+def test_shooter_leaves_channel_2_free_for_the_built_in_shooter():
+    """Its flywheel is NOT a mechanism, and that is the whole point.
+
+    A mechanism can only hold a throttle; holding an RPM needs the closed-loop
+    controller, which lives in the built-in shooter (robot/drive/shooter.py).
+    The two cannot share the channel — layout.apply reserves the shooter's, and
+    a mechanism on it is an ERROR, which refuses the WHOLE document and boots
+    the rover on compiled-in defaults with no mechanisms at all.
+
+    So this pins the absence, because the absence is load-bearing: putting a
+    `dumper` back here silently costs this rover its intake, feeder, agitator
+    and drivetrain trim the moment RS_SHOOTER_ENABLED=1.
+    """
     cfg = _config("shooter")
-    assert _angle(cfg, "dumper", "run") == pytest.approx(-50.0)
+    used = {a.channel for m in cfg.mechanisms.values() for a in m.actuators.values()}
+    assert 2 not in used, f"channel 2 is claimed by a mechanism: {sorted(used)}"
+
+    # And prove it: the real validator, with the shooter holding channel 2.
+    real = RobotConfig()
+    real.shooter.enabled = True
+    real.shooter.channel = 2
+    with open(os.path.join(LAYOUTS, "shooter.json")) as fh:
+        result = layout.apply(real, json.load(fh))
+    assert result.ok, result.errors
+    assert set(real.mechanisms) == {"intake", "feeder", "agitator"}
+    assert real.drive.actuators["right"].speed_scale_forward == pytest.approx(0.75)
 
 
-def test_shooter_runs_its_feeder_at_plus_fifty():
+def test_east_still_drives_channel_2_as_a_mechanism():
+    """The opposite arrangement, and also correct: east's ch2 really is a
+    dumper — it runs until switched off and has no speed to hold — so it keeps
+    the mechanism and leaves the built-in shooter off."""
+    cfg = _config("east")
+    assert _angle(cfg, "dumper", "run") == pytest.approx(-30.0)
+
+
+def test_shooter_runs_its_feeder_at_the_top_of_the_throttle_band():
     cfg = _config("shooter")
-    assert _angle(cfg, "feeder", "run") == pytest.approx(50.0)
+    assert _angle(cfg, "feeder", "run") == pytest.approx(45.0)
 
 
-def test_the_flywheel_winds_up_on_a_ramp_and_nothing_else_does():
-    """A step from neutral to full is what trips this ESC's protection. The
-    other three are low-inertia and want to be instant."""
+@pytest.mark.parametrize("name", ["east", "shooter"])
+def test_no_esc_is_ever_commanded_outside_1000_to_2000_microseconds(name):
+    """The fault above, pinned for the whole fleet rather than one mechanism.
+
+    An ESC listens to 1000..2000us and treats anything else as a lost signal.
+    The HAT's -90..+90 spans 500..2500us, so an angle is easy to write and
+    impossible to notice: it looks like more authority and behaves like a
+    motor that stops partway through the throw. Every preset on every rover is
+    checked here, at the angle actually commanded.
+    """
+    cfg = _config(name)
+    def pulse(angle):
+        return 1500.0 + angle * (1000.0 / 90.0)
+
+    for mname, mcfg in cfg.mechanisms.items():
+        for preset in mcfg.presets:
+            for aname, angle in _angles(cfg, mname, preset).items():
+                if mcfg.actuators[aname].kind != "esc":
+                    continue
+                us = pulse(angle)
+                assert 1000.0 <= us <= 2000.0, (
+                    f"{mname}.{aname} preset {preset!r}: {angle}deg = {us:.0f}us")
+
+    for aname, actuator in cfg.drive.actuators.items():
+        for angle in (actuator.min_angle, actuator.max_angle, actuator.neutral_angle):
+            assert 1000.0 <= pulse(angle) <= 2000.0, f"drive {aname}: {angle}deg"
+
+
+def test_no_shooter_mechanism_needs_a_ramp():
+    """The flywheel was the one load with enough inertia to need one, and it is
+    no longer a mechanism — its wind-up rate is now the PID's MAX_ANGLE_CHANGE
+    (robot/drive/shooter.py), which limits throttle change per control step.
+    The three that remain are low-inertia and want to be instant."""
     cfg = _config("shooter")
-    assert cfg.mechanisms["dumper"].slew_rate > 0
     for name in ("intake", "feeder", "agitator"):
         assert cfg.mechanisms[name].slew_rate == 0, name
 
 
 def test_shooter_agitates_both_ways():
     """Direction is what matters here, not the magnitude: it only has to stir.
-    Neutral 5 means +-90 is not reachable both ways, since the throw is the
-    narrower side of neutral."""
+    Neutral 5 means the throw is the narrower side of neutral, and +-45 is the
+    whole of what an ESC accepts — so 40 each way is all there is."""
     cfg = _config("shooter")
     forward = _angle(cfg, "agitator", "run")
     reverse = _angle(cfg, "agitator", "reverse")
     assert forward > NEUTRAL and reverse < NEUTRAL
-    assert forward == pytest.approx(90.0)
+    assert forward == pytest.approx(45.0)
     assert forward - NEUTRAL == pytest.approx(NEUTRAL - reverse), "same speed"
 
 
 def test_the_held_mechanisms_carry_a_dead_man_and_the_toggles_do_not():
     """auto_stop_seconds only protects controls something is refreshing. The
-    feeder and agitator are held (R1, D-pad); the flywheel is a toggle, and a
-    dead-man there would stop it a moment after every press."""
+    feeder and agitator are held (R1, D-pad) and want it; the intake's toggled
+    IN direction does not, and a dead-man there would stop it a moment after
+    every press."""
     cfg = _config("shooter")
     assert cfg.mechanisms["feeder"].auto_stop_seconds > 0
     assert cfg.mechanisms["agitator"].auto_stop_seconds > 0
-    assert cfg.mechanisms["dumper"].auto_stop_seconds == 0
+    east = _config("east")
+    assert east.mechanisms["dumper"].auto_stop_seconds == 0, "a toggle, so no dead-man"
 
 
 # --- the drivetrain trim -----------------------------------------------------
@@ -176,10 +236,20 @@ def test_shooter_trims_its_faster_right_track():
     left, right = dt.motors["left"], dt.motors["right"]
     assert left.throttle == right.throttle == pytest.approx(1.0)
     assert right.servo._last < left.servo._last
-    assert cfg.drive.actuators["right"].speed_scale == pytest.approx(0.9)
+    right_cfg = cfg.drive.actuators["right"]
+    assert right_cfg.speed_scale_forward == pytest.approx(0.75)
+    assert right_cfg.speed_scale_reverse == pytest.approx(0.8)
+
+
+def test_shooter_trims_forward_harder_than_reverse():
+    """Its right track runs away worse going forward than backing up, so one
+    compromise number would be wrong in both directions."""
+    right_cfg = _config("shooter").drive.actuators["right"]
+    assert right_cfg.speed_scale_forward < right_cfg.speed_scale_reverse < 1.0
 
 
 def test_east_is_not_trimmed():
     cfg = _config("east")
     for actuator in cfg.drive.actuators.values():
-        assert actuator.speed_scale == pytest.approx(1.0)
+        assert actuator.speed_scale_forward == pytest.approx(1.0)
+        assert actuator.speed_scale_reverse == pytest.approx(1.0)

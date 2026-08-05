@@ -13,7 +13,9 @@
         "min_angle": -25.0,
         "name": "left",
         "neutral_angle": 5.0,
-        "speed_scale": 1.0
+        "speed_scale": 1.0,
+        "speed_scale_forward": 1.0,
+        "speed_scale_reverse": 1.0
       },
       {
         "channel": 1,
@@ -27,7 +29,9 @@
         "min_angle": -25.0,
         "name": "right",
         "neutral_angle": 5.0,
-        "speed_scale": 0.9
+        "speed_scale": 0.75,
+        "speed_scale_forward": 0.75,
+        "speed_scale_reverse": 0.8
       }
     ],
     "arm_seconds": 2.0,
@@ -61,7 +65,9 @@
           "min_angle": -30.0,
           "name": "roller",
           "neutral_angle": 5.0,
-          "speed_scale": 1.0
+          "speed_scale": 1.0,
+          "speed_scale_forward": 1.0,
+          "speed_scale_reverse": 1.0
         }
       ],
       "auto_stop_seconds": 0.5,
@@ -82,47 +88,20 @@
     {
       "actuators": [
         {
-          "channel": 2,
-          "deadband": 0.03,
-          "inverted": false,
-          "kind": "esc",
-          "label": "Flywheel",
-          "max_angle": 60.0,
-          "max_forward": 1.0,
-          "max_reverse": 1.0,
-          "min_angle": -50.0,
-          "name": "motor",
-          "neutral_angle": 5.0,
-          "speed_scale": 1.0
-        }
-      ],
-      "auto_stop_seconds": 0.0,
-      "enabled": true,
-      "kind": "power",
-      "label": "Flywheel",
-      "name": "dumper",
-      "presets": {
-        "run": {
-          "motor": -1.0
-        }
-      },
-      "slew_rate": 1.0
-    },
-    {
-      "actuators": [
-        {
           "channel": 4,
           "deadband": 0.03,
           "inverted": false,
           "kind": "esc",
           "label": "Feeder",
-          "max_angle": 50.0,
+          "max_angle": 45.0,
           "max_forward": 1.0,
           "max_reverse": 1.0,
-          "min_angle": -40.0,
+          "min_angle": -45.0,
           "name": "feeder",
           "neutral_angle": 5.0,
-          "speed_scale": 1.0
+          "speed_scale": 1.0,
+          "speed_scale_forward": 1.0,
+          "speed_scale_reverse": 1.0
         }
       ],
       "auto_stop_seconds": 0.5,
@@ -145,13 +124,15 @@
           "inverted": false,
           "kind": "esc",
           "label": "Agitator",
-          "max_angle": 90.0,
+          "max_angle": 45.0,
           "max_forward": 1.0,
           "max_reverse": 1.0,
-          "min_angle": -80.0,
+          "min_angle": -45.0,
           "name": "agitator",
           "neutral_angle": 5.0,
-          "speed_scale": 1.0
+          "speed_scale": 1.0,
+          "speed_scale_forward": 1.0,
+          "speed_scale_reverse": 1.0
         }
       ],
       "auto_stop_seconds": 0.5,

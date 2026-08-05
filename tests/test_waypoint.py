@@ -163,6 +163,59 @@ def test_gyro_rate_lets_the_loop_run_every_tick():
     assert c.gps_heading_pid._integral != before  # stepped again on the same heading
 
 
+def test_a_frozen_heading_stops_being_steered_on():
+    """The circle bug, at the controller: a held steer is a constant curvature.
+
+    The zero-order hold is right between two fixes and wrong forever. Once the
+    heading has not moved for stale_heading_s, steering on it is open-loop — and
+    an open-loop steer drives the rover round and round, which (being slow and
+    turning) is exactly what stops the course from ever refreshing.
+    """
+    c, _ = make(heading=45.0, absolute=False, stale_heading_s=1.0)
+    turning = c.update(DT)
+    assert turning.left != turning.right  # steering on the fresh sample
+
+    for _ in range(100):  # two seconds of the same heading
+        cmd = c.update(DT)
+    assert cmd.left == pytest.approx(cmd.right)  # straight, not a circle
+    assert cmd.left == pytest.approx(c.acquire_speed)  # and moving, to re-acquire
+
+
+def test_a_frozen_heading_expires_even_with_a_live_gyro():
+    """A yaw rate keeps the loop STEPPING; it doesn't make the heading real.
+
+    The gyro path resets the "when did the PID last step" clock every tick, so
+    heading freshness has to be tracked on its own — otherwise a rover with an
+    IMU for rate and a GPS for heading never notices the heading died.
+    """
+    c, _ = make(heading=45.0, absolute=False, rate=30.0, stale_heading_s=1.0)
+    for _ in range(100):
+        cmd = c.update(DT)
+    assert cmd.left == pytest.approx(cmd.right)
+
+
+def test_a_fresh_sample_revives_the_loop():
+    """Expiry is not a latch — the next real course steers again."""
+    c, box = make(heading=45.0, absolute=False, stale_heading_s=1.0)
+    for _ in range(100):
+        c.update(DT)
+    box["heading"] = 40.0
+    cmd = c.update(DT)
+    assert cmd.left != cmd.right
+
+
+def test_a_frozen_absolute_heading_stops_the_rover():
+    """An IMU that died mid-pivot must not leave the rover spinning."""
+    c, _ = make(heading=90.0, absolute=True, stale_heading_s=1.0)
+    spinning = c.update(DT)
+    assert spinning.left == pytest.approx(-spinning.right)  # pivoting in place
+    assert spinning.left != 0.0
+
+    for _ in range(100):
+        cmd = c.update(DT)
+    assert (cmd.left, cmd.right) == (0.0, 0.0)
+
+
 # --- unchanged failsafes ---------------------------------------------------
 
 

@@ -25,6 +25,11 @@ the endpoints/clamps; whichever is closer to neutral sets the usable throw.
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+# Safe despite config being the leaf everything imports: detection.py depends on
+# nothing but the stdlib, and no module reached through robot.control's __init__
+# imports config back.
+from .control.detection import size_at_m
+
 
 @dataclass
 class MotorConfig:
@@ -42,19 +47,27 @@ class MotorConfig:
     deadband: float = 0.03  # |throttle| below this => treat as neutral
     max_forward: float = 1.0  # Safety cap on forward throttle, [0..1]
     max_reverse: float = 1.0  # Safety cap on reverse throttle, [0..1]
-    # Per-motor speed TRIM, [0..1], applied in both directions. Two motors given
-    # the same throttle rarely turn at the same rate — gearboxes, ESCs and even
-    # tyre wear differ — and on a tank drive that shows up as a robot that will
-    # not hold a straight line. Scale the FASTER side down until it matches
-    # (0.9 = "run this one at 90%"); there is no way to speed the slower one up,
-    # since it is already being asked for everything it has.
+    # Per-motor speed TRIM, [0..1], PER DIRECTION. Two motors given the same
+    # throttle rarely turn at the same rate — gearboxes, ESCs and even tyre wear
+    # differ — and on a tank drive that shows up as a robot that will not hold a
+    # straight line. Scale the FASTER side down until it matches (0.9 = "run this
+    # one at 90%"); there is no way to speed the slower one up, since it is
+    # already being asked for everything it has.
+    #
+    # Forward and reverse are separate numbers because the mismatch itself is
+    # usually different in each direction — a brushed ESC's reverse gain is not
+    # its forward gain, and gearbox backlash and tyre scrub don't load a track
+    # the same way going backwards. Trim each direction against the way the rover
+    # actually tracks in that direction; setting both to the same value is the
+    # symmetric case, not a special one.
     #
     # Deliberately separate from max_forward/max_reverse even though the
     # arithmetic overlaps: those are a directional authority LIMIT ("never let
     # this motor exceed half"), this is a calibration constant for a mechanical
     # mismatch. Keeping them apart means setting one does not silently spend
     # the other, and a trainer-mode cap still trims straight.
-    speed_scale: float = 1.0
+    speed_scale_forward: float = 1.0
+    speed_scale_reverse: float = 1.0
 
     # --- identity, for layouts with more than the two stock track motors ---
     # Trailing and defaulted on purpose: every existing MotorConfig(channel=N,
@@ -181,9 +194,18 @@ class GPSConfig:
     port: str = "/dev/ttyAMA0"
     baud: int = 9600
     fix_timeout: float = 5.0  # drop the fix (return None) after this long w/o an update
-    min_move_mps: float = (
-        0.5  # below this speed, the track angle is noise; hold last heading
-    )
+    # Below this speed the track angle is noise, so the last good heading is held
+    # instead. It has to sit UNDER the speed the rover actually makes in waypoint
+    # mode, or no course is ever accepted and the rover navigates on a heading
+    # that is either missing or frozen. This rover measures ~0.1-0.2 m/s on the
+    # base station's GPS readout at cruise, so a half-metre-per-second gate (the
+    # old default) rejected every course it ever produced.
+    min_move_mps: float = 0.15
+    # How long a held track angle stays valid once it stops being refreshed. The
+    # hold covers a slow patch between fixes; past this the heading is reported
+    # as unknown, and the waypoint controller drives straight to re-acquire a
+    # course rather than steering on a course that can no longer change.
+    heading_timeout: float = 3.0
     # Fix interval in ms (PMTK220). 1000 = 1 Hz, the module's default. Lower is a
     # fresher heading, but the sentences have to fit the link: below ~200 ms they
     # won't at 9600 baud, and truncated sentences read as "no fix". Ignored by a
@@ -313,7 +335,15 @@ class VisionConfig:
     # detection — the GPS fix_timeout idea. Also what makes a dead detector
     # thread fail safe: no new stamps -> target ages out -> the robot stops.
     target_timeout: float = 0.5
-    select: str = "largest"  # largest | confidence | centermost
+    # largest | confidence | centermost | lowest
+    #
+    # `lowest` picks the box nearest the BOTTOM of the frame, which is the right
+    # nearness proxy for something sitting on the floor: a tennis ball is small
+    # and its box height is mostly noise at range, but a ball further down the
+    # frame is unambiguously closer to the robot. It is what ball_intake wants
+    # (and what auto_chassis.py did with `max(ball_list, key=b.y)`); `largest`
+    # remains right for a bucket, which is big enough for size to mean something.
+    select: str = "largest"
     # Horizontal FOV the normalized error units span. This scales the IMU
     # yaw-rate into those units; too high and the D term is too small, too low
     # and the steering oscillates.
@@ -331,8 +361,82 @@ class VisionConfig:
     # model input height, on the edge_impulse backend). Calibrate it, don't
     # guess: park at the distance you want, run tools/detector_selftest.py, and
     # read off the printed size.
+    #
+    # Still the threshold the control loop actually compares against, even when
+    # standoff_m below is set — that one is converted INTO this. Works with no
+    # calibration of any kind, which is why it stays the fallback.
     standoff_size: float = 0.45
+    # Stop this many metres short instead, for a target of known height on a
+    # range-calibrated robot. 0 = off, use standoff_size as-is.
+    #
+    # A convenience over standoff_size, NOT a second mechanism: it is converted
+    # to a size threshold once at config time by resolved_standoff_size(), and
+    # the loop is none the wiser. Metres are the number you actually have an
+    # opinion about ("stop 1 m short"); a box height fraction is a number you
+    # have to go measure. This just does that measurement arithmetically.
+    #
+    # Needs focal_frac AND target_height_m set (they are, below, for buckets).
+    # Uncalibrated, it falls back to standoff_size rather than inventing a
+    # threshold — approach keeps working, it just stops where it always did.
+    standoff_m: float = 0.0
     search_speed: float = 0.25  # slow rotate to reacquire a lost target; 0 disables
+
+    # --- Metric range (telemetry only; standoff above needs none of this) ---
+    # Real height of the target, in metres. Buckets are a known, fixed size —
+    # that is the whole reason range is solvable from one box dimension. 0
+    # disables the distance estimate rather than reporting a made-up number.
+    target_height_m: float = 0.0
+    # Focal length in FRAME HEIGHTS (not pixels), so it pairs with the
+    # normalized `size` and survives a resolution change. 0 = uncalibrated.
+    #
+    # *** Like hfov_deg above, its correct value DEPENDS ON THE BACKEND. ***
+    # edge_impulse normalizes size against a ~50 deg center crop, imx500
+    # against the full ~66 deg frame — the same target fills a different
+    # fraction of each. Reusing one backend's constant on the other is a ~28%
+    # distance error, not a rounding one. Recalibrate when you switch.
+    #
+    # Calibrate once, don't guess — park at a tape-measured distance and run
+    #     tools/detector_selftest.py --target-height H --distance D
+    # which prints the RS_VISION_FOCAL_FRAC / RS_VISION_TARGET_HEIGHT lines to
+    # paste into robot.env. It is doing `focal_frac = size * distance_m /
+    # target_height_m` over the MEDIAN size, because the box jitters frame to
+    # frame and a single reading is not the number you want. Sanity check: it
+    # should land near 1 / (2 * tan(vfov / 2)) — ~1.07 for the edge_impulse
+    # backend's square 50 deg crop. Calibrating against REAL detector output
+    # (rather than that formula) is what folds in any systematic tight/loose
+    # box bias of the model, so no second correction factor is needed.
+    focal_frac: float = 0.0
+
+    def resolved_standoff_size(self) -> float:
+        """The box height fraction object_align should actually stop at.
+
+        `standoff_m` if it is set and the robot is range-calibrated, else
+        `standoff_size` unchanged. This is the ONLY place metres turn into the
+        units the control loop speaks, and it runs at config time — not per
+        frame — so a mid-approach calibration change can't move the goalposts
+        under a latched arrival.
+
+        Stopping at a distance and stopping at a size are the same decision,
+        because size falls monotonically with distance: `size >= threshold` is
+        `distance <= standoff_m` written in the units the detector reports. So
+        there is no second control path here, just a change of units.
+
+        Uncalibrated is a FALLBACK, not a failure: standoff_size needs no
+        calibration and is what has always worked, so a robot nobody measured
+        still approaches and still stops — at its old distance. Silently, which
+        is the right trade for a stop threshold: refusing to stop (the strict
+        reading of "never invent a number") means driving into the bucket.
+        """
+        if self.standoff_m <= 0.0:
+            return self.standoff_size
+        size = size_at_m(self.standoff_m, self.focal_frac, self.target_height_m)
+        if size is None:
+            return self.standoff_size
+        # A standoff closer than the target can be framed at asks for a box
+        # taller than the frame, which never arrives — the robot would drive
+        # into it. Clamp: stop when it fills the frame, the closest geometry
+        # allows. For our 0.368 m bucket that binds below ~0.38 m.
+        return min(size, 1.0)
 
 
 @dataclass
@@ -373,14 +477,24 @@ class ShooterConfig:
     # command toggles the wheel between this speed and stopped, and the pulse
     # state machine is not used.
     #
-    # There is no tachometer on this rover, so the loop is fed a MODELLED rpm
-    # (see Shooter._estimated_rpm) rather than a measured one. It therefore
-    # behaves as feed-forward: it holds the commanded speed, but it cannot see
-    # or correct for battery sag, ball drag or a stalling wheel. Wire a real
-    # sensor to set_measured_rpm() and it becomes genuinely closed-loop with no
-    # other change.
+    # With EncoderConfig below enabled this is genuinely CLOSED-LOOP: the
+    # encoder feeds set_measured_rpm() and the controller trims the
+    # feed-forward against a real reading, so it sees battery sag, ball drag and
+    # a stalling wheel. With no encoder it falls back to a modelled rpm (see
+    # Shooter._estimated_rpm) and behaves as pure feed-forward — it holds the
+    # commanded throttle, but is blind to all three.
     target_rpm: float = 0.0
-
+    # Hard ceiling on what may be commanded, whatever the target says. This is
+    # NOT the competition limit — it is the backstop that stops a FAILING
+    # ENCODER driving the wheel to free speed. A dying encoder reads slow, the
+    # controller adds throttle to compensate, and the wheel runs away while the
+    # dashboard stays calm; the throttle ceiling in shooter.py is the first
+    # guard against that and this is the second.
+    max_target_rpm: float = 6000.0
+    # Commanded but not turning for this long -> cut power and drop the target.
+    # A jammed wheel, a dead ESC or an unplugged encoder all land here, and all
+    # three otherwise sit at full throttle indefinitely. 0 disables.
+    stall_seconds: float = 3.0
     # --- Firing policy (consumed by ShooterAlignController, not the servo) ---
     # Hold the alignment this long before firing. This is the single most
     # important safety/accuracy knob: the detector is noisy and a single centered
@@ -396,6 +510,38 @@ class ShooterConfig:
     # arrival can never latch there — see VisionConfig.
     require_arrived: bool = True
     max_shots: int = 0  # magazine capacity; 0 = unlimited
+
+
+@dataclass
+class EncoderConfig:
+    """Quadrature encoder on the flywheel shaft (robot/sensors/encoder.py).
+
+    Off by default: it burns a thread polling two GPIO pins, which is only worth
+    it on a build that actually has the sensor. Without it the flywheel still
+    spins — the controller just runs open-loop on its feed-forward model.
+    """
+    enabled: bool = False
+    # BCM pin numbers. A and B are the two quadrature channels; only A's rising
+    # edge is counted (a flywheel turns one way, so direction is not wanted).
+    pin_a: int = 17
+    pin_b: int = 4
+    # *** MEASURE THIS. *** The bench script recorded it as UNCONFIRMED, taken
+    # over ONE hand-turned revolution. Verify over ten (expect ~160 pulses). It
+    # scales the reading linearly, so if the true value is HIGHER than this the
+    # RPM under-reports — and an under-reading wheel is one the controller
+    # pushes harder while the display looks legal.
+    pulses_per_rev: int = 16
+    # Speed is the time spanned by this many pulses, not a count in a fixed
+    # window: counting quantises to ~19 RPM steps, timing does not. Longer
+    # dilutes the ~1 ms of scheduler jitter that actually limits this.
+    window_pulses: int = 64
+    # No pulse for this long => report 0 rather than a stale speed.
+    stale_seconds: float = 0.3
+    # Poll passes between GIL yields. The script never yielded because it was
+    # the only thing running; here the 50 Hz control loop and the camera decode
+    # share the Pi. 64 keeps the achieved rate orders of magnitude above the
+    # ~1.8 kHz the wheel needs while staying fair to the rest of the process.
+    yield_every: int = 64
 
 
 @dataclass
@@ -513,6 +659,65 @@ class AlignConfig:
 
 
 @dataclass
+class IntakeConfig:
+    """Autonomous ball intake (robot/control/ball_intake.py).
+
+    Every default here is the constant Team Northeast's auto_chassis.py v2.4 was
+    running with on the robot, converted where the units differ: that script
+    thought in pixels on a 640x480 frame, and a Detection is normalized. The
+    conversions are noted per field, so a number measured on the robot with a
+    tape measure and a stopwatch is still recognisable here.
+    """
+    # Which mechanism the ball goes into, and which of its presets runs it. Named
+    # rather than assumed, because the layout decides what exists — a rover with
+    # no `intake` still enters the mode, drives, and simply never swallows.
+    mech: str = "intake"
+    preset: str = "in"
+
+    # --- approach ---
+    cruise_speed: float = 0.75   # throttle far from the ball...
+    approach_speed: float = 0.40  # ...falling to this at the stop line
+    steering_gain: float = 0.4
+    # ponytail: P-only, no integral, no derivative. A P controller with no
+    # damping overshoots by nature, and the AI Camera attaches inference to only
+    # ~25% of frames, so this loop updates at ~7.5 Hz. Lower this before reaching
+    # for a D term: D on a jittery 7.5 Hz signal amplifies detection noise more
+    # than it damps the swing. Unlike object_align there is no PID here at all,
+    # which is deliberate — the script's behaviour is what was tested on the
+    # robot, and a ball is a target you drive over, not one you stop short of.
+    stop_line: float = 0.70      # frame fraction; below this, swallow it
+    swallow_speed: float = 0.30  # creep STRAIGHT while taking the ball in
+    swallow_run_on_s: float = 0.8
+
+    # --- the tracking gate (see ball_intake.py; this is the part that matters) ---
+    confirm_frames: int = 2   # consecutive detections before the robot acts
+    memory_s: float = 0.4     # coast this long through a dropout once trusted
+    # Match radius in normalized error units, growing with the gap since the last
+    # sighting. 0.20 is the script's 60 px on a 640-wide frame (60/320 = 0.19);
+    # 2.2 is its 700 px/s (700/320 = 2.19). A FIXED radius cannot work — see the
+    # module docstring, it is why the robot used to scan forever.
+    match_tol: float = 0.20
+    match_tol_per_s: float = 2.2
+
+    # --- a ball that went under the hood ---
+    # Two timers off the same event: the ball leaves the frame well before it
+    # reaches the intake, so drive on briefly to close that gap, and keep the
+    # intake running LONGER so one already in the throat finishes going in.
+    lost_push_s: float = 1.0
+    lost_intake_s: float = 3.0
+    lost_push_speed: float = 0.3
+
+    # --- search ---
+    search_after: float = 5.0  # sit still this long before scanning
+    # Spinning in place only ever sees one circle of the field, so step forward
+    # between sweeps. Both are BLIND motion; keep the advance short.
+    scan_spin_s: float = 5.0
+    scan_advance_s: float = 1.0
+    scan_spin_speed: float = 0.25
+    scan_advance_speed: float = 0.3
+
+
+@dataclass
 class NavConfig:
     # Waypoint navigation (robot/control/waypoint.py).
     arrive_radius_m: float = 2.0  # a leg is done inside this radius
@@ -564,7 +769,9 @@ class RobotConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     fpv: FPVConfig = field(default_factory=FPVConfig)
     shooter: ShooterConfig = field(default_factory=ShooterConfig)
+    encoder: EncoderConfig = field(default_factory=EncoderConfig)
     align: AlignConfig = field(default_factory=AlignConfig)
+    intake: IntakeConfig = field(default_factory=IntakeConfig)
     nav: NavConfig = field(default_factory=NavConfig)
     # Extra subsystems declared by the layout (intake, arm, a second launcher).
     # Empty on a stock build, which is why nothing above changes shape.
@@ -585,7 +792,7 @@ class RobotConfig:
     #   gps  - the GPS track angle only; no IMU needed for heading
     #   imu  - the IMU only; no fallback to course over ground
     heading_source: str = "auto"
-    robot_id: str = "rover1"  # unique id on the shared XBee channel
+    robot_id: str = "rover2"  # unique id on the shared XBee channel
     telemetry_hz: float = (
         5.0  # rate of status frames back to the base station (0 disables)
     )

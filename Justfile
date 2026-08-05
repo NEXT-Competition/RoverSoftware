@@ -139,7 +139,7 @@ sync:
         --exclude '__pycache__' --exclude '*.pyc' \
         robot run_robot.py tools \
         {{target}}:{{app_dir}}/
-    # ssh {{target}} "sudo systemctl restart {{service}}"
+    ssh {{target}} "sudo systemctl restart {{service}}"
     @echo "==> synced to {{host}} and restarted {{service}}"
 
 # Regenerate the checked-in layout documents from packaging/layouts/*.py.

@@ -63,6 +63,22 @@ DRIVE_KINDS = ("tank", "servo_steer", "single", "none")
 MECHANISM_KINDS = ("power", "pulse")
 ACTUATOR_KINDS = ("esc", "servo")
 
+# The angles an ESC will actually listen to.
+#
+# The Fusion HAT maps -90..+90 onto a 500..2500us pulse, because that is a
+# SERVO's range: a servo travels over the whole of it. An ESC does not. The RC
+# throttle band is 1000..2000us (1500 neutral), and an ESC treats a pulse
+# outside it as an invalid signal rather than as "even more throttle" — it cuts
+# the motor and drops back to waiting for a signal, which on most ESCs means
+# replaying the arming tone the moment the pulse returns to the band.
+#
+# In HAT angles that band is +-45. An endpoint past it does not buy authority;
+# it buys a motor that spins up and then dies partway through the throw, with a
+# beep, and nothing in the robot's log to explain either. Warned about rather
+# than clamped: which endpoint to give up is a question about the build, and a
+# silently narrowed throw is how a rover ends up slower than its layout says.
+ESC_ANGLE_LIMIT = 45.0
+
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 
 # An actuator called `slew_rate` would be unreachable through
@@ -100,7 +116,19 @@ def _actuator_doc(m: MotorConfig) -> dict:
         "deadband": m.deadband,
         "max_forward": m.max_forward,
         "max_reverse": m.max_reverse,
-        "speed_scale": m.speed_scale,
+        "speed_scale_forward": m.speed_scale_forward,
+        "speed_scale_reverse": m.speed_scale_reverse,
+        # The retired both-directions key, still WRITTEN (never read — see
+        # _actuator_from_doc, where an explicit direction wins). A layout is
+        # pushed to a rover independently of the rover's code, so a document
+        # from this build routinely lands on an older one — and an older build
+        # skips keys it doesn't know, silently leaving the drivetrain
+        # UNTRIMMED. Untrimmed reads in the field as "my trim change made it
+        # worse", because it is worse than the trim that was there before. The
+        # forward value, as the direction that gets driven: a rover slightly
+        # over-trimmed in reverse still tracks straighter than one not trimmed
+        # at all. Drop this when VERSION moves past 1.
+        "speed_scale": m.speed_scale_forward,
     }
 
 
@@ -210,17 +238,51 @@ def _actuator_from_doc(raw: Any, what: str, errors: List[str]) -> Optional[Motor
 
     motor = MotorConfig(channel=channel, name=name, kind=kind,
                         label=str(raw.get("label", "") or ""))
+    # A document written before the speed trim was split per direction carries
+    # one `speed_scale` for both. Expanding it here (rather than ignoring an
+    # unknown key) means an older layout still deploys with its drivetrain
+    # calibrated — see tuning.migrate, which does the same for saved tuning.
+    fields = {k: v for k, v in raw.items() if k in _ACTUATOR_PARAMS}
+    if "speed_scale" in raw:
+        for replacement in ("speed_scale_forward", "speed_scale_reverse"):
+            fields.setdefault(replacement, raw["speed_scale"])
     # Numbers are CLAMPED, not refused — same rule as tuning.apply. A field
     # pinned at its limit is honest; dropping the whole layout because one
     # endpoint was typed a degree too far is not.
-    for fname, param in _ACTUATOR_PARAMS.items():
-        if fname == "channel" or fname not in raw:
+    for fname, value in fields.items():
+        if fname == "channel":
             continue
         try:
-            setattr(motor, fname, coerce(param, raw[fname]))
+            setattr(motor, fname, coerce(_ACTUATOR_PARAMS[fname], value))
         except (ValueError, TypeError) as e:
             errors.append(f"{what} {name!r}: {fname}: {e}")
     return motor
+
+
+def _check_esc_band(motor: MotorConfig, what: str, warnings: List[str]) -> None:
+    """Warn when an ESC's endpoints leave the RC throttle band.
+
+    Only ESCs: a positional servo really does travel the full 500..2500us, so
+    the same angle that is a dead motor on one is ordinary travel on the other.
+    See ESC_ANGLE_LIMIT.
+    """
+    if motor.kind != "esc":
+        return
+    for fname in ("min_angle", "max_angle", "neutral_angle"):
+        angle = float(getattr(motor, fname))
+        if abs(angle) > ESC_ANGLE_LIMIT:
+            warnings.append(
+                f"{what} {motor.name!r}: {fname} {angle:g} is outside the "
+                f"+-{ESC_ANGLE_LIMIT:g} an ESC accepts "
+                f"({_pulse_us(angle):.0f}us, and the band is 1000-2000us) — "
+                "the ESC will cut the motor and re-arm partway through the "
+                "throw. Bring the endpoint in; the throw is symmetric about "
+                "neutral, so widen the other side if you need it back.")
+
+
+def _pulse_us(angle: float) -> float:
+    """The pulse the Fusion HAT emits for an angle (-90..+90 -> 500..2500us)."""
+    return 1500.0 + angle * (1000.0 / 90.0)
 
 
 def _actuator_map(raw: Any, what: str, cap: int,
@@ -431,7 +493,11 @@ def _resolve_channels(drive: DriveConfig, mechanisms: Dict[str, MechanismConfig]
             if owner is not None:
                 errors.append(
                     f"channel {motor.channel} is claimed by both {owner} and "
-                    f"{mname}.{aname} — {mname!r} is disabled")
+                    f"{mname}.{aname} — this whole layout is refused, so the "
+                    f"robot will boot on its compiled-in defaults with NO "
+                    f"mechanisms at all. Move {mname!r} to a free channel, or "
+                    f"free this one (RS_SHOOTER_ENABLED=0 releases the "
+                    f"launcher's)")
                 mech.enabled = False
             else:
                 claimed[motor.channel] = f"{mname}.{aname}"
@@ -507,6 +573,12 @@ def validate(doc: Any, reserved_channels: Optional[Dict[int, str]] = None) -> Va
             mechanisms[mech.name] = mech
 
     _resolve_channels(drive, mechanisms, reserved_channels or {}, errors)
+
+    for name, motor in drive.actuators.items():
+        _check_esc_band(motor, "drive actuator", warnings)
+    for mname, mech in mechanisms.items():
+        for motor in mech.actuators.values():
+            _check_esc_band(motor, f"mechanism {mname!r} actuator", warnings)
 
     return Validated(drive, mechanisms, errors, warnings)
 

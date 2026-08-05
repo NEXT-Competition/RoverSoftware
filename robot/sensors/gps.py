@@ -26,7 +26,10 @@ rover with no IMU at all still navigates waypoints on real headings.
 Read this before you rip the IMU out, though: a track angle is the direction the
 antenna is *travelling*, not the direction the chassis is *pointing*. So:
   * It is meaningless at a standstill — the receiver keeps emitting a number, but
-    it's noise. Below `min_move_mps` we ignore it and hold the last good value.
+    it's noise. Below `min_move_mps` we ignore it and hold the last good value —
+    but only for `heading_timeout`, after which `pose()` reports no heading at
+    all. An indefinitely-held course is a heading that steering cannot move, and
+    a control loop closed around one drives in circles.
   * It can't see a pivot in place: spin the rover on the spot and the track angle
     doesn't move, because the antenna isn't going anywhere.
   * Driving in reverse reads as a heading 180 degrees off.
@@ -97,14 +100,19 @@ class GPS:
         port: str,
         baud: int = 9600,
         fix_timeout: float = 5.0,
-        min_move_mps: float = 0.5,
+        min_move_mps: float = 0.15,
         update_rate_ms: int = 1000,
+        heading_timeout: float = 3.0,
     ):
         self.port = port
         self.baud = baud
         self.fix_timeout = fix_timeout      # a fix older than this is treated as lost
         self.min_move_mps = min_move_mps    # below this, the track angle is noise
         self.update_rate_ms = update_rate_ms
+        # A held track angle older than this is no longer a heading. Holding the
+        # last good course across a brief slow patch is the point of the hold;
+        # holding it forever is what makes the rover drive circles (see pose()).
+        self.heading_timeout = heading_timeout
 
         self._serial = None
         self._gps = None
@@ -239,28 +247,49 @@ class GPS:
         observed (it only exists once we're moving). A caller must not treat a
         missing heading as "pointing North" — that's what made the rover spin in
         place. See WaypointController for how it's handled.
+
+        The track angle EXPIRES after `heading_timeout`, independently of the
+        position fix. Below `min_move_mps` we hold the last good course, which is
+        right for a moment of crawling and wrong for anything longer: a course
+        from a minute ago is a heading that cannot respond to steering, so the
+        waypoint loop closes around a constant error, holds a constant steering
+        output, and drives a perfect circle — while the turning itself keeps the
+        speed under min_move, so the course never refreshes and the circle never
+        ends. Expiring the heading breaks that loop: the controller sees "no
+        heading", drives straight, and re-acquires a real course.
         """
         with self._lock:
             if self._lat is None or self._lon is None:
                 return None
-            if (time.monotonic() - self._last_fix) > self.fix_timeout:
+            now = time.monotonic()
+            if (now - self._last_fix) > self.fix_timeout:
                 return None  # stale: satellites lost / antenna unplugged
-            heading = self._heading if self._have_heading else None
-            return (self._lat, self._lon, heading)
+            return (self._lat, self._lon, self._fresh_heading(now))
+
+    def _fresh_heading(self, now: float) -> Optional[float]:
+        """The held track angle, or None once it's older than heading_timeout.
+
+        Caller holds _lock.
+        """
+        if not self._have_heading:
+            return None
+        if (now - self._heading_at) > self.heading_timeout:
+            return None
+        return self._heading
 
     def is_running(self) -> bool:
         """True when the reader thread is up, i.e. start() actually opened the port."""
         return self._running
 
     def has_heading(self) -> bool:
-        """True once a real track angle (from motion) has been observed."""
+        """True while a real track angle (from motion) is available and fresh."""
         with self._lock:
-            return self._have_heading
+            return self._fresh_heading(time.monotonic()) is not None
 
     def track_angle(self) -> Optional[float]:
         """Last trusted course over ground in degrees (0 = North, CW+), or None."""
         with self._lock:
-            return self._heading if self._have_heading else None
+            return self._fresh_heading(time.monotonic())
 
     def speed_mps(self) -> float:
         """Ground speed in m/s as of the last fix (0.0 when unknown)."""

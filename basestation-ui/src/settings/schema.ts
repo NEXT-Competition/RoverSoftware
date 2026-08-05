@@ -135,11 +135,17 @@ function motorGroup(p: string, title: string): Group {
       f(`${p}.max_reverse`, "Reverse cap", 0, 1, 0.01, {
         help: "Safety cap on reverse throttle.",
       }),
-      f(`${p}.speed_scale`, "Speed trim", 0, 1, 0.01, {
+      f(`${p}.speed_scale_forward`, "Forward trim", 0, 1, 0.01, {
         help:
-          "Corrects a motor that runs faster than its partner, both directions. " +
+          "Corrects a motor that runs faster than its partner going FORWARD. " +
           "Scale the FASTER side down until the robot tracks straight — 0.9 runs " +
           "it at 90%. Not a safety cap; that is what the two above are.",
+      }),
+      f(`${p}.speed_scale_reverse`, "Reverse trim", 0, 1, 0.01, {
+        help:
+          "The same trim for REVERSE, which is rarely the same number — an ESC's " +
+          "reverse gain differs from its forward gain. Trim each direction " +
+          "against the way the rover actually tracks in that direction.",
       }),
       i(`${p}.channel`, "PWM channel", 0, 15, {
         live: false,
@@ -234,6 +240,75 @@ export const ROBOT_GROUPS: Group[] = [
     ],
   },
   {
+    title: "Autonomous ball intake",
+    blurb:
+      "Hunt for a ball, drive onto it, swallow it, look for the next. Steering " +
+      "is a plain proportional term, not a PID — the camera only attaches " +
+      "inference to about a quarter of its frames, so this loop sees ~7.5 Hz " +
+      "and a D term there amplifies detection noise more than it damps.",
+    fields: [
+      f("intake.cruise_speed", "Cruise speed", 0, 1, 0.01, {
+        help: "Throttle while the ball is still far down the frame.",
+      }),
+      f("intake.approach_speed", "Approach speed", 0, 1, 0.01, {
+        help: "Throttle at the stop line. Lower than cruise so the intake can grab it.",
+      }),
+      f("intake.steering_gain", "Steering gain", 0, 2, 0.01, {
+        help: "Turn per unit of horizontal error. Lower this first if it weaves.",
+      }),
+      f("intake.stop_line", "Stop line", 0.1, 1, 0.01, {
+        help:
+          "How far down the frame a ball must be before the robot stops steering " +
+          "and just creeps straight in. 0.7 = 70% down.",
+      }),
+      f("intake.swallow_speed", "Swallow speed", 0, 1, 0.01),
+      f("intake.swallow_run_on_s", "Swallow run-on", 0, 5, 0.1, { unit: "s" }),
+      i("intake.confirm_frames", "Confirm frames", 1, 10, {
+        help:
+          "Detections in a row before the robot acts on a ball. A real ball " +
+          "persists; a false positive flickers. Raise it if it chases phantoms.",
+      }),
+      f("intake.memory_s", "Ball memory", 0, 5, 0.05, {
+        unit: "s",
+        help: "Coast this long through a dropout before declaring the ball gone.",
+      }),
+      f("intake.match_tol", "Match tolerance", 0.01, 2, 0.01, {
+        help:
+          "How far a ball may move between sightings and still count as the same " +
+          "one. Raise it if telemetry sits at \"cand 1/2\" while boxes look fine — " +
+          "that is a robot seeing balls and never locking on.",
+      }),
+      f("intake.match_tol_per_s", "Match tolerance/s", 0, 10, 0.1, {
+        help:
+          "Added to the tolerance per second since the last sighting. A fixed " +
+          "radius cannot work: while scanning, the scene sweeps past faster than " +
+          "any fixed radius and nothing ever matches.",
+      }),
+      f("intake.lost_push_s", "Lost push", 0, 5, 0.1, {
+        unit: "s",
+        help: "Blind forward coast after a ball vanishes under the hood. Keep it short.",
+      }),
+      f("intake.lost_intake_s", "Lost intake run", 0, 10, 0.1, {
+        unit: "s",
+        help: "Longer than the push: a ball in the throat finishes going in after the robot stops.",
+      }),
+      f("intake.lost_push_speed", "Lost push speed", 0, 1, 0.01),
+      f("intake.search_after", "Search after", 0, 60, 0.5, {
+        unit: "s",
+        help: "Sit still this long with no ball before scanning.",
+      }),
+      f("intake.scan_spin_s", "Scan spin", 0.1, 30, 0.5, { unit: "s" }),
+      f("intake.scan_advance_s", "Scan advance", 0, 30, 0.5, {
+        unit: "s",
+        help:
+          "Step forward this long between sweeps. Spinning in place only ever " +
+          "sees one circle of the field.",
+      }),
+      f("intake.scan_spin_speed", "Scan spin speed", 0, 1, 0.01),
+      f("intake.scan_advance_speed", "Scan advance speed", 0, 1, 0.01),
+    ],
+  },
+  {
     title: "Waypoint navigation",
     blurb:
       "Point-then-go along a route: pivot onto the bearing, then cruise while " +
@@ -272,7 +347,11 @@ export const ROBOT_GROUPS: Group[] = [
         help: "Inference costs a core; cap it.",
       }),
       f("vision.standoff_size", "Standoff size", 0.05, 1, 0.01, {
-        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry.",
+        help: "Stop once the box height reaches this fraction of the frame. Calibrate it: park at your stop distance and read the size in telemetry. Ignored while Standoff distance below is nonzero.",
+      }),
+      f("vision.standoff_m", "Standoff distance", 0, 10, 0.05, {
+        unit: "m",
+        help: "Stop this far short, in metres — overrides Standoff size above. Needs the robot range-calibrated (RS_VISION_FOCAL_FRAC / _TARGET_HEIGHT); 0 falls back to Standoff size. Also where shooter_align fires.",
       }),
       f("vision.hfov_deg", "Horizontal FOV", 10, 180, 1, {
         unit: "°",
@@ -288,8 +367,11 @@ export const ROBOT_GROUPS: Group[] = [
       t("vision.target_label", "Target label", {
         help: "Empty tracks any label the model reports.",
       }),
-      e("vision.select", "Selection", ["largest", "confidence", "centermost"], {
-        help: "Which box to follow when the model reports several.",
+      e("vision.select", "Selection", ["largest", "confidence", "centermost", "lowest"], {
+        help:
+          "Which box to follow when the model reports several. \"lowest\" picks " +
+          "the one nearest the bottom of the frame — the nearest thing on the " +
+          "floor, which is what the ball hunt wants; \"largest\" suits a bucket.",
       }),
       b("vision.enabled", "Detection enabled", { live: false }),
       e("vision.backend", "Backend", ["auto", "edge_impulse", "imx500"], {
@@ -361,7 +443,11 @@ export const ROBOT_GROUPS: Group[] = [
       }),
       f("gps.min_move_mps", "Min move speed", 0, 5, 0.05, {
         unit: "m/s",
-        help: "Below this the track angle is noise, so the last heading is held.",
+        help: "Below this the track angle is noise, so the last heading is held. Must sit under the speed the rover actually makes, or no course is ever accepted.",
+      }),
+      f("gps.heading_timeout", "Heading timeout", 0.5, 60, 0.5, {
+        unit: "s",
+        help: "Drop the held track angle after this long without a fresh one, rather than steering on a course that can no longer change.",
       }),
       b("gps.enabled", "GPS enabled", { live: false }),
       t("gps.port", "Serial port", { live: false }),

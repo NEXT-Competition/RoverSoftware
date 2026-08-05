@@ -12,10 +12,15 @@ configured via /etc/roversoftware/robot.env), then overridden by CLI flags:
     RS_IMU_ENABLED/ADDRESS/OFFSET/SAVE_CALIB,
     RS_CAMERA_ENABLED/DEVICE/WIDTH/HEIGHT/FPS,
     RS_VISION_ENABLED/BACKEND/MODEL/LABEL/CONF/FPS/STANDOFF/HFOV/SEARCH_SPEED,
+    RS_VISION_TARGET_HEIGHT/FOCAL_FRAC (metric range; see detector_selftest.py),
+    RS_VISION_STANDOFF_M (stop this many metres short; needs the two above),
     RS_VISION_IMX500_MODEL/LABELS/IOU/MAX_DET,
     RS_FPV_ENABLED/HOST/PORT/FPS/QUALITY,
     RS_SHOOTER_ENABLED/CHANNEL/REST/FIRE/FIRE_S/RETRACT_S/DWELL/COOLDOWN/
         MAX_SHOTS/REQUIRE_ARM/REQUIRE_ARRIVED,
+    RS_SHOOTER_TARGET_RPM/MAX_RPM/STALL_S (flywheel speed control),
+    RS_ENCODER_ENABLED/PIN_A/PIN_B/PPR (the flywheel tachometer),
+    RS_INTAKE_MECH/PRESET (ball_intake mode),
     RS_ROUTINE_ALLOW_ARM/STATE_TIMEOUT
 
 Two files are read after all of that, in this order:
@@ -79,7 +84,7 @@ def main():
                         default=int(os.environ.get("RS_BASE_PORT", cfg.comms.base_port)),
                         help="base station TCP port for WiFi bulk transfers")
     parser.add_argument("--mode", default=os.environ.get("RS_START_MODE", cfg.start_mode),
-                        choices=["teleop", "object_align", "shooter_align",
+                        choices=["teleop", "object_align", "shooter_align", "ball_intake",
                                  "waypoint", "routine"])
     parser.add_argument("--hz", type=float,
                         default=float(os.environ.get("RS_LOOP_HZ", cfg.loop_hz)))
@@ -193,11 +198,33 @@ def main():
     cfg.vision.max_fps = float(os.environ.get("RS_VISION_FPS", cfg.vision.max_fps))
     cfg.vision.standoff_size = float(os.environ.get("RS_VISION_STANDOFF", cfg.vision.standoff_size))
     cfg.vision.hfov_deg = float(os.environ.get("RS_VISION_HFOV", cfg.vision.hfov_deg))
+    # Which box to follow when the model reports several. Env-settable like the
+    # label beside it, because the two are chosen together and a rover set up for
+    # the ball hunt needs both before it has ever talked to a base station.
+    # Unknown values are left to the detector, which falls through to 'largest'.
+    cfg.vision.select = os.environ.get("RS_VISION_SELECT", cfg.vision.select)
     cfg.vision.search_speed = float(os.environ.get("RS_VISION_SEARCH_SPEED", cfg.vision.search_speed))
+    # Metric range. Env-settable because it is calibrated in the field with a
+    # tape measure — a knob you can only change by editing source and rebuilding
+    # the .deb is a knob nobody calibrates.
+    cfg.vision.target_height_m = float(
+        os.environ.get("RS_VISION_TARGET_HEIGHT", cfg.vision.target_height_m))
+    cfg.vision.focal_frac = float(os.environ.get("RS_VISION_FOCAL_FRAC", cfg.vision.focal_frac))
+    # Stop distance in metres, converted to a size threshold at config time.
+    # Needs the two above; without them it is ignored and STANDOFF applies.
+    cfg.vision.standoff_m = float(
+        os.environ.get("RS_VISION_STANDOFF_M", cfg.vision.standoff_m))
     cfg.vision.imx500_labels = os.environ.get("RS_VISION_IMX500_LABELS", cfg.vision.imx500_labels)
     cfg.vision.imx500_iou = float(os.environ.get("RS_VISION_IMX500_IOU", cfg.vision.imx500_iou))
     cfg.vision.imx500_max_detections = int(
         os.environ.get("RS_VISION_IMX500_MAX_DET", cfg.vision.imx500_max_detections))
+    # Autonomous ball intake. Only the two that name HARDWARE are env-settable:
+    # which mechanism the ball goes into and which preset runs it, because those
+    # follow the layout and differ per rover. Everything else about this mode is
+    # a tuning value — it is adjusted while watching the robot chase a ball, and
+    # the Settings page is where that belongs (see robot/tuning.py, `intake.*`).
+    cfg.intake.mech = os.environ.get("RS_INTAKE_MECH", cfg.intake.mech)
+    cfg.intake.preset = os.environ.get("RS_INTAKE_PRESET", cfg.intake.preset)
     cfg.fpv.enabled = args.fpv
     cfg.fpv.base_host = args.fpv_host
     cfg.fpv.base_port = int(os.environ.get("RS_FPV_PORT", cfg.fpv.base_port))
@@ -212,6 +239,17 @@ def main():
     cfg.shooter.fire_seconds = float(os.environ.get("RS_SHOOTER_FIRE_S", cfg.shooter.fire_seconds))
     cfg.shooter.retract_seconds = float(os.environ.get("RS_SHOOTER_RETRACT_S", cfg.shooter.retract_seconds))
     cfg.shooter.target_rpm = float(os.environ.get("RS_SHOOTER_TARGET_RPM", cfg.shooter.target_rpm))
+    cfg.shooter.max_target_rpm = float(
+        os.environ.get("RS_SHOOTER_MAX_RPM", cfg.shooter.max_target_rpm))
+    cfg.shooter.stall_seconds = float(
+        os.environ.get("RS_SHOOTER_STALL_S", cfg.shooter.stall_seconds))
+    # Flywheel tachometer. Pins and pulses-per-rev are wiring, so env-only; the
+    # window and staleness are measurement choices that stay put once set.
+    cfg.encoder.enabled = os.environ.get("RS_ENCODER_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+    cfg.encoder.pin_a = int(os.environ.get("RS_ENCODER_PIN_A", cfg.encoder.pin_a))
+    cfg.encoder.pin_b = int(os.environ.get("RS_ENCODER_PIN_B", cfg.encoder.pin_b))
+    cfg.encoder.pulses_per_rev = int(
+        os.environ.get("RS_ENCODER_PPR", cfg.encoder.pulses_per_rev))
     cfg.shooter.dwell = float(os.environ.get("RS_SHOOTER_DWELL", cfg.shooter.dwell))
     cfg.shooter.cooldown = float(os.environ.get("RS_SHOOTER_COOLDOWN", cfg.shooter.cooldown))
     cfg.shooter.max_shots = int(os.environ.get("RS_SHOOTER_MAX_SHOTS", cfg.shooter.max_shots))
@@ -275,7 +313,17 @@ def main():
         if cfg.vision.target_label:
             vision += f" [{cfg.vision.target_label}]"
     fpv = f"{cfg.fpv.base_host}:{cfg.fpv.base_port}" if cfg.fpv.enabled else "off"
-    shooter = f"ch{cfg.shooter.channel}" if cfg.shooter.enabled else "off"
+    # Which of the two mechanisms is named, not just the channel: a flywheel and
+    # a servo launcher share this channel, this config and this button, and they
+    # behave completely differently (latch vs one pulse). Printing only "ch2"
+    # left the one question an operator actually has — "why does my wheel stop
+    # after a second" — unanswerable from the log. See RS_SHOOTER_TARGET_RPM.
+    if not cfg.shooter.enabled:
+        shooter = "off"
+    elif cfg.shooter.target_rpm > 0:
+        shooter = f"ch{cfg.shooter.channel} flywheel@{cfg.shooter.target_rpm:.0f}rpm"
+    else:
+        shooter = f"ch{cfg.shooter.channel} servo-launcher (pulse)"
     bulk = (f"{cfg.comms.base_host}:{cfg.comms.base_port}"
             if cfg.comms.base_host else "off (not configurable until set)")
     print(f"[Robot] id={cfg.robot_id} port={cfg.comms.port} baud={cfg.comms.baud} "

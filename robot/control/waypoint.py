@@ -102,6 +102,7 @@ class WaypointController(Controller):
         heading_rate_provider: Optional[RateProvider] = None,
         gps_heading_pid: Optional[PID] = None,
         absolute_heading_provider: Optional[SourceProvider] = None,
+        stale_heading_s: float = 3.0,
     ):
         self.pose_provider = pose_provider
         self.heading_rate_provider = heading_rate_provider
@@ -132,11 +133,22 @@ class WaypointController(Controller):
         self.gps_heading_pid = gps_heading_pid or PID(
             kp=0.008, ki=0.0, kd=0.006, out_limit=0.4, i_limit=50.0
         )
+        # How long a heading may go without changing before the loop stops
+        # steering on it. See `_steer_for`: an unchanging heading means an
+        # unchanging error, and the held steering output turns that into a
+        # circle the rover cannot leave.
+        self.stale_heading_s = stale_heading_s
         self._idx = 0
         # Zero-order-hold state for a stale heading (see _steer_for).
         self._absolute = True
         self._last_heading: Optional[float] = None
         self._since_sample = 0.0
+        # Time since the HEADING itself last changed. Distinct from
+        # _since_sample, which is time since the PID last stepped — with a gyro
+        # supplying the derivative the loop steps every tick off a heading that
+        # may not have moved in a minute, so one counter cannot answer both
+        # "may I step?" and "is this heading still real?".
+        self._since_heading = 0.0
         self._steer = 0.0
         # The bearing the loop is steering towards, kept only so the tuning
         # graphs can show a setpoint. The PID itself never sees it — it is given
@@ -158,6 +170,7 @@ class WaypointController(Controller):
         self.gps_heading_pid.reset()
         self._last_heading = None
         self._since_sample = 0.0
+        self._since_heading = 0.0
         self._steer = 0.0
         self._last_bearing = None
 
@@ -272,18 +285,36 @@ class WaypointController(Controller):
         per fresh sample — with the true elapsed time — and the output is held
         flat in between. An IMU heading changes every tick, so this degrades
         automatically to stepping every tick.
+
+        The hold has a deadline. Holding an output between two fixes a second
+        apart is a zero-order hold; holding it against a heading that has not
+        moved for `stale_heading_s` is open-loop steering, and a constant steer
+        is a circle. Past the deadline the loop gives up and returns zero — go
+        straight, which is also what re-acquires a GPS course over ground.
         """
         pid = self.heading_pid if absolute else self.gps_heading_pid
         rate = self.heading_rate_provider() if self.heading_rate_provider else None
 
         self._since_sample += dt
+        self._since_heading += dt
+        if heading != self._last_heading:
+            self._since_heading = 0.0
+        self._last_heading = heading
+
+        if self._since_heading > self.stale_heading_s:
+            # Nothing here is measuring the robot any more. Stop steering on it,
+            # and don't leave a wound-up loop behind to resume with.
+            pid.reset()
+            self._since_sample = 0.0
+            self._steer = 0.0
+            return self._steer
+
         if rate is not None:
             # A measured yaw rate is fresh every tick even when the heading
             # isn't, so the loop can run at full rate off it.
             self._steer = pid.update(err, dt, -rate)
             self._since_sample = 0.0
-        elif heading != self._last_heading:
+        elif self._since_heading == 0.0:
             self._steer = pid.update(err, self._since_sample)
             self._since_sample = 0.0
-        self._last_heading = heading
         return self._steer

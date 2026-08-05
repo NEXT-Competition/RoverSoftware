@@ -249,11 +249,18 @@ def test_a_layout_reaches_all_the_way_to_the_hardware():
 
 # --- per-motor speed trim ----------------------------------------------------
 
-def _trimmed(scale, throttle=1.0):
-    """One motor at `throttle`, trimmed by `scale`. Returns its servo angle."""
+def _trimmed(scale, throttle=1.0, reverse=None):
+    """One motor at `throttle`, trimmed by `scale`. Returns its servo angle.
+
+    `reverse` trims the backwards direction when it differs; by default both
+    directions get `scale`, which is the symmetric case the old single trim
+    covered.
+    """
     from robot.drive.motor import ESCMotor
     m = ESCMotor(MotorConfig(channel=0, name="m", neutral_angle=5.0,
-                             max_angle=40.0, min_angle=-30.0, speed_scale=scale))
+                             max_angle=40.0, min_angle=-30.0,
+                             speed_scale_forward=scale,
+                             speed_scale_reverse=scale if reverse is None else reverse))
     m.set_throttle(throttle)
     return m.servo._last
 
@@ -266,10 +273,23 @@ def test_the_speed_trim_scales_the_angle_away_from_neutral():
 
 
 def test_the_speed_trim_applies_in_both_directions():
-    """It corrects a mechanical mismatch, which does not care which way the
-    motor turns — a side trimmed only going forward would still pull in
-    reverse."""
+    """Set both to the same number and it corrects the mismatch either way — a
+    side trimmed only going forward would still pull in reverse."""
     assert _trimmed(0.9, -1.0) == pytest.approx(5.0 - 0.9 * 35.0)
+
+
+def test_each_direction_carries_its_own_trim():
+    """The mismatch is rarely the same forwards as backwards: an ESC's reverse
+    gain differs from its forward gain, and one compromise number is wrong in
+    both directions."""
+    assert _trimmed(0.75, 1.0, reverse=0.8) == pytest.approx(5.0 + 0.75 * 35.0)
+    assert _trimmed(0.75, -1.0, reverse=0.8) == pytest.approx(5.0 - 0.8 * 35.0)
+
+
+def test_a_reverse_trim_does_not_touch_forward():
+    """Trimming one direction must not spend the other — that is the whole
+    reason these are two fields and not one."""
+    assert _trimmed(1.0, 1.0, reverse=0.5) == pytest.approx(5.0 + 35.0)
 
 
 def test_the_speed_trim_does_not_move_the_dead_band():
@@ -291,7 +311,8 @@ def test_trimming_the_faster_side_evens_a_tank_drive_up():
     """The actual use: same command, two motors, matched output."""
     cfg = DriveConfig(actuators={
         "left": MotorConfig(channel=0, name="left"),
-        "right": MotorConfig(channel=1, name="right", speed_scale=0.9),
+        "right": MotorConfig(channel=1, name="right", speed_scale_forward=0.9,
+                             speed_scale_reverse=0.9),
     }, roles=DriveRoles(left=["left"], right=["right"]), slew_rate=0)
     dt = TankDrivetrain(cfg)
     dt.drive(1.0, 1.0)
@@ -307,7 +328,50 @@ def test_the_trim_survives_a_round_trip_through_a_layout():
     """It is a layout field, so a saved document has to carry it — a trim that
     silently reset to 1.0 on reboot would read as the robot drifting again."""
     cfg = RobotConfig()
-    cfg.drive.actuators["right"].speed_scale = 0.9
+    cfg.drive.actuators["right"].speed_scale_forward = 0.75
+    cfg.drive.actuators["right"].speed_scale_reverse = 0.8
     result = layout.apply(RobotConfig(), layout.to_doc(cfg))
     assert result.ok, result.errors
-    assert result.drive.actuators["right"].speed_scale == pytest.approx(0.9)
+    right = result.drive.actuators["right"]
+    assert right.speed_scale_forward == pytest.approx(0.75)
+    assert right.speed_scale_reverse == pytest.approx(0.8)
+
+
+def test_the_document_still_carries_the_retired_key_for_older_robots():
+    """A layout is pushed independently of the rover's code, so a document from
+    this build lands on older ones — which skip keys they don't know and end up
+    UNTRIMMED, i.e. worse than before the trim was ever touched."""
+    cfg = RobotConfig()
+    cfg.drive.actuators["right"].speed_scale_forward = 0.75
+    cfg.drive.actuators["right"].speed_scale_reverse = 0.8
+    doc = layout.to_doc(cfg)
+    right = next(a for a in doc["drive"]["actuators"] if a["name"] == "right")
+    assert right["speed_scale"] == pytest.approx(0.75)  # the driven direction
+
+
+def test_the_retired_key_never_wins_on_read_back():
+    """It is written for old robots and ignored by this one — a doc carrying
+    both must not have the compatibility value undo the real one."""
+    cfg = RobotConfig()
+    cfg.drive.actuators["right"].speed_scale_reverse = 0.8
+    doc = layout.to_doc(cfg)
+    result = layout.apply(RobotConfig(), doc)
+    assert result.ok, result.errors
+    assert result.drive.actuators["right"].speed_scale_reverse == pytest.approx(0.8)
+
+
+def test_a_pre_split_layout_still_carries_its_trim():
+    """`speed_scale` was one number for both directions. A document written
+    before the split — a rover's saved layout, a hand-edited file — must not
+    come back un-calibrated, pulling to one side with nothing in the log."""
+    doc = layout.to_doc(RobotConfig())
+    for actuator in doc["drive"]["actuators"]:
+        actuator.pop("speed_scale_forward")
+        actuator.pop("speed_scale_reverse")
+        if actuator["name"] == "right":
+            actuator["speed_scale"] = 0.9
+    result = layout.apply(RobotConfig(), doc)
+    assert result.ok, result.errors
+    right = result.drive.actuators["right"]
+    assert right.speed_scale_forward == pytest.approx(0.9)
+    assert right.speed_scale_reverse == pytest.approx(0.9)

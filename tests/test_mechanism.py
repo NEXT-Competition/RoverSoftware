@@ -335,9 +335,8 @@ def test_shutdown_parks_every_mechanism(rover):
 
 
 def test_mechanism_state_reaches_telemetry(rover):
-    from robot.control.commands import DriveCommand
     rover.mechanisms["intake"].apply_preset("in")
-    telemetry = rover._telemetry(DriveCommand.stopped())
+    telemetry = telemetry_with(rover, "mech")
     assert telemetry["mech"]["intake"]["values"]["roller"] == 1.0
 
 
@@ -431,3 +430,23 @@ def test_a_ramp_restarts_from_where_the_output_actually_is():
     time.sleep(0.3)          # idle, accumulating wall-clock
     m.apply_preset("run")
     assert m.motors["motor"].throttle == 0.0, "the idle gap became a free step"
+
+
+def telemetry_with(rover, block, cmd=None):
+    """A telemetry frame carrying `block`.
+
+    The robot rotates its bulky blocks one per frame so the core stays inside a
+    single XBee RF packet (see Robot._telemetry), so any ONE frame probably
+    isn't the one carrying the block you asked about. This spins the rotation
+    until it comes round — which is also the assertion that it comes round at
+    all, rather than having been dropped from the rotation entirely.
+    """
+    from robot.control.commands import DriveCommand
+    from robot.robot import _TELEM_BLOCKS
+    cmd = cmd if cmd is not None else DriveCommand.stopped()
+    for _ in range(len(_TELEM_BLOCKS) * 3):
+        rover._telem_block_at = 0.0      # this frame may carry a block
+        frame = rover._telemetry(cmd)
+        if block in frame:
+            return frame
+    raise AssertionError(f"{block!r} never appeared over three rotations")

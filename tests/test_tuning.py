@@ -196,6 +196,44 @@ def test_saved_unknown_keys_are_dropped_on_load(tmp_path):
     assert tuning.load_overrides(str(path)) == {"align.pid.kp": 1.0}
 
 
+def test_a_saved_pre_split_trim_survives_the_upgrade(tmp_path):
+    """`speed_scale` retired into a forward/reverse pair. An unknown path is
+    DROPPED, and dropping a trim un-calibrates a drivetrain — the rover comes
+    back from the upgrade pulling to one side with nothing in the log."""
+    path = tmp_path / "tuning.json"
+    path.write_text(json.dumps({"drive.right.speed_scale": 0.9}))
+    assert tuning.load_overrides(str(path)) == {
+        "drive.right.speed_scale_forward": 0.9,
+        "drive.right.speed_scale_reverse": 0.9,
+    }
+
+
+def test_an_explicit_direction_beats_the_retired_alias(tmp_path):
+    """Once a direction has been tuned on its own, the old both-directions
+    value must not overwrite it on the next boot."""
+    path = tmp_path / "tuning.json"
+    path.write_text(json.dumps({
+        "drive.right.speed_scale": 0.9,
+        "drive.right.speed_scale_forward": 0.75,
+    }))
+    assert tuning.load_overrides(str(path)) == {
+        "drive.right.speed_scale_forward": 0.75,
+        "drive.right.speed_scale_reverse": 0.9,
+    }
+
+
+def test_a_retired_path_still_reaches_the_config():
+    """The same rewrite on the live path, not just the saved one — an old base
+    station build sends the retired name over the radio."""
+    cfg = RobotConfig()
+    applied, rejected = tuning.apply(cfg, {"drive.right.speed_scale": 0.8})
+    assert not rejected
+    assert cfg.drive.actuators["right"].speed_scale_forward == pytest.approx(0.8)
+    assert cfg.drive.actuators["right"].speed_scale_reverse == pytest.approx(0.8)
+    assert set(applied) == {"drive.right.speed_scale_forward",
+                            "drive.right.speed_scale_reverse"}
+
+
 def test_save_failure_is_reported_not_raised(tmp_path):
     """A read-only filesystem must not undo tuning that already took effect."""
     blocked = tmp_path / "afile"

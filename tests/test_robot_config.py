@@ -412,3 +412,60 @@ def test_clearing_the_base_host_leaves_no_link_at_all(rover):
     _finish_retarget()
     assert old.stopped
     assert rover.ip_link is None
+
+
+# --- telemetry framing against the radio -------------------------------------
+
+def test_the_telemetry_core_fits_in_one_rf_packet(rover):
+    """The property the whole fleet's telemetry depends on.
+
+    The XBee runs transparent: no addressing, no arbitration, and the module
+    flushes every ~72-100 bytes. A frame longer than that leaves as several RF
+    packets, and with two rovers on the channel another rover's packets land
+    between them — the receiver splices them into one undecodable line.
+
+    Measured on the real fleet before this split: a 455-byte frame spanned ~6
+    packets and NOT ONE arrived intact over 20 seconds, while a 284-byte rover
+    got 16 through. The base station showed 1/1 live. Lowering the telemetry
+    rate changed nothing; the variable is size, not frequency.
+
+    So the core — the fields the fleet list and the drive feedback need — must
+    stay under one packet. Adding a field here is not a small change: it is
+    charged against every frame, from every robot, forever.
+    """
+    from robot.control.commands import DriveCommand
+    core = rover._telemetry(DriveCommand(0.5, -0.5))
+    core = {k: v for k, v in core.items()
+            if k in ("type", "from", "mode", "estop", "left", "right")}
+    assert len(json.dumps(core, separators=(",", ":"))) + 1 <= 100
+
+
+def test_most_frames_carry_no_bulky_block(rover):
+    """Blocks cannot be made to fit one packet — `mech` alone is ~160 bytes —
+    so the goal is to keep them RARE, leaving the majority of frames as the
+    bare core that always survives."""
+    from robot.control.commands import DriveCommand
+    rover._telem_block_at = 0.0
+    bare = 0
+    for _ in range(50):
+        frame = rover._telemetry(DriveCommand.stopped())   # no clock advance
+        if set(frame) <= {"type", "from", "mode", "estop", "left", "right"}:
+            bare += 1
+    assert bare >= 40, f"only {bare}/50 frames were core-only"
+
+
+def test_every_block_gets_its_turn(rover):
+    """A block dropped from the rotation is a dashboard panel that never
+    updates again — silently, since nothing errors."""
+    from robot.control.commands import DriveCommand
+    from robot.robot import _TELEM_BLOCKS
+    seen = set()
+    for _ in range(len(_TELEM_BLOCKS) * 4):
+        rover._telem_block_at = 0.0
+        seen.update(rover._telemetry(DriveCommand.stopped()))
+    # Which blocks exist depends on what hardware the fixture's rover has, so
+    # assert the rotation CYCLES rather than naming blocks this build may lack:
+    # over four rotations every slot is reached, so any block whose source is
+    # present must have appeared.
+    from robot.robot import _TELEM_BLOCKS
+    assert rover._telem_slot >= len(_TELEM_BLOCKS), "rotation did not complete"

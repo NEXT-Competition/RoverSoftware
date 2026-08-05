@@ -51,6 +51,10 @@ class RobotState:
     # is in shooter_align. Unlike the fields above this one is NOT sticky — see
     # update_from_telemetry for why a stale arm indicator would be dangerous.
     shooter: Optional[dict] = None
+    # Flywheel tachometer {ok, rpm, pulses, poll_khz}. Follows `shooter`'s
+    # non-sticky rule: a stale copy would show a wheel still turning on a robot
+    # that has stopped reporting one.
+    encoder: Optional[dict] = None
     # Layout mechanisms {name: {kind, ...}} and the live FSM state
     # {id, state, t, drive, done}. Both follow `shooter`'s non-sticky rule for
     # the same reason: the robot omits them when they don't apply, and a stale
@@ -142,14 +146,35 @@ class FleetManager:
                 st.imu_calib = int(msg["imu_calib"])
             if msg.get("gps") is not None:
                 st.gps = msg["gps"]
-            # Assigned unconditionally, breaking the "only overwrite when present"
-            # pattern above on purpose. The robot omits this field entirely once
-            # shooter_align is no longer active, and a sticky copy would leave the
-            # UI showing ARMED for a mode the robot has already left — the one
-            # piece of stale telemetry here that could get someone hurt.
-            st.shooter = msg.get("shooter")
-            st.mech = msg.get("mech")
-            st.routine = msg.get("routine")
+            # These used to be assigned unconditionally — absence meant "not
+            # active any more", which is what kept a stale ARMED off the screen.
+            # That reading is no longer available: the robot now rotates its
+            # bulky blocks one per frame so the core fits in a single RF packet
+            # (see Robot._telemetry), so absence usually just means "not this
+            # rover's turn". Holding the last value is what makes the rotation
+            # invisible to the dashboard.
+            #
+            # The safety property is kept, and kept HONESTLY, by deriving it
+            # from `mode` instead — which is in every core frame and therefore
+            # always current. A shooter status only means anything while the
+            # robot is in shooter_align; the moment it reports any other mode,
+            # the panel is cleared whether or not a block arrived to say so.
+            if msg.get("shooter") is not None:
+                st.shooter = msg["shooter"]
+            if st.mode != "shooter_align":
+                st.shooter = None
+            if msg.get("routine") is not None:
+                st.routine = msg["routine"]
+            if st.mode != "routine":
+                st.routine = None
+            # Mode-independent: a flywheel is spun up from teleop and an intake
+            # runs while driving, so these stay valid until the next block.
+            if msg.get("encoder") is not None:
+                st.encoder = msg["encoder"]
+            if msg.get("mech") is not None:
+                st.mech = msg["mech"]
+            # Traces are not rotated (they would draw a curve the robot never
+            # ran), so absence here still means the robot stopped sending them.
             st.pid = msg.get("pid")
             if msg.get("lat") is not None and msg.get("lon") is not None:
                 st.lat, st.lon = float(msg["lat"]), float(msg["lon"])
@@ -405,6 +430,7 @@ class FleetManager:
                     "imu_calib": st.imu_calib,
                     "gps": st.gps,
                     "shooter": st.shooter,
+                    "encoder": st.encoder,
                     "mech": st.mech,
                     "routine": st.routine,
                     "pid": st.pid,

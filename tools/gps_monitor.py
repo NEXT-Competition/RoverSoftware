@@ -43,7 +43,7 @@ def main():
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--rate-ms", type=int, default=1000,
                    help="ms between fixes (PMTK220); below ~200 won't fit 9600 baud")
-    p.add_argument("--min-move", type=float, default=0.5,
+    p.add_argument("--min-move", type=float, default=0.15,
                    help="m/s below which the track angle is treated as noise")
     p.add_argument("--rate", type=float, default=2.0, help="print rate (Hz)")
     args = p.parse_args()

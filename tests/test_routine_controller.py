@@ -561,7 +561,7 @@ def test_the_live_state_reaches_telemetry(rover):
     put(rover, DOC)
     deliver(rover, {"type": "mode", "mode": "routine"})
     rover.manager.update(0.02)
-    telemetry = rover._telemetry(DriveCommand.stopped())
+    telemetry = telemetry_with(rover, "routine")
     assert telemetry["routine"]["state"] == "spin"
 
 
@@ -610,3 +610,23 @@ def test_routines_survive_a_restart(rover, tmp_path):
     assert (tmp_path / "routines.json").exists()
     reborn = Robot(rover.cfg)
     assert "demo" in reborn.manager.controllers["routine"].routines
+
+
+def telemetry_with(rover, block, cmd=None):
+    """A telemetry frame carrying `block`.
+
+    The robot rotates its bulky blocks one per frame so the core stays inside a
+    single XBee RF packet (see Robot._telemetry), so any ONE frame probably
+    isn't the one carrying the block you asked about. This spins the rotation
+    until it comes round — which is also the assertion that it comes round at
+    all, rather than having been dropped from the rotation entirely.
+    """
+    from robot.control.commands import DriveCommand
+    from robot.robot import _TELEM_BLOCKS
+    cmd = cmd if cmd is not None else DriveCommand.stopped()
+    for _ in range(len(_TELEM_BLOCKS) * 3):
+        rover._telem_block_at = 0.0      # this frame may carry a block
+        frame = rover._telemetry(cmd)
+        if block in frame:
+            return frame
+    raise AssertionError(f"{block!r} never appeared over three rotations")

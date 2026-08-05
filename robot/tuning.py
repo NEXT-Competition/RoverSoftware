@@ -116,7 +116,8 @@ def _actuator_params(prefix: str, group: str = "", label: str = "") -> Tuple[Par
         _f(f"{prefix}.deadband", 0, 0.5, **meta("dead band", step=0.005)),
         _f(f"{prefix}.max_forward", 0, 1, **meta("forward cap", step=0.01)),
         _f(f"{prefix}.max_reverse", 0, 1, **meta("reverse cap", step=0.01)),
-        _f(f"{prefix}.speed_scale", 0, 1, **meta("speed trim", step=0.01)),
+        _f(f"{prefix}.speed_scale_forward", 0, 1, **meta("forward trim", step=0.01)),
+        _f(f"{prefix}.speed_scale_reverse", 0, 1, **meta("reverse trim", step=0.01)),
         _i(f"{prefix}.channel", 0, 15, live=False, **meta("PWM channel")),
     )
 
@@ -139,7 +140,8 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("loop_hz", 1, 200),
     _f("telemetry_hz", 0, 20),
     _e("heading_source", ("auto", "gps", "imu")),
-    _e("start_mode", ("teleop", "object_align", "shooter_align", "waypoint", "routine"), live=False),
+    _e("start_mode", ("teleop", "object_align", "shooter_align", "ball_intake",
+                      "waypoint", "routine"), live=False),
     _t("robot_id", live=False),
 
     # --- comms ---
@@ -173,6 +175,31 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("align.pid.out_limit", 0, 1),
     _f("align.pid.i_limit", 0, 5),
 
+    # --- autonomous ball intake ---
+    # `intake.mech` / `intake.preset` are deliberately absent: they name hardware
+    # the layout declares, and a slider that can point the mode at a mechanism
+    # that does not exist is a mode that silently stops swallowing.
+    _f("intake.cruise_speed", 0, 1),
+    _f("intake.approach_speed", 0, 1),
+    _f("intake.steering_gain", 0, 2),
+    _f("intake.stop_line", 0.1, 1),
+    _f("intake.swallow_speed", 0, 1),
+    _f("intake.swallow_run_on_s", 0, 5),
+    # The confirm gate. Raise confirm_frames if the robot chases phantoms; raise
+    # match_tol if it sees balls but never locks on (telemetry stuck at "cand").
+    _i("intake.confirm_frames", 1, 10),
+    _f("intake.memory_s", 0, 5),
+    _f("intake.match_tol", 0.01, 2),
+    _f("intake.match_tol_per_s", 0, 10),
+    _f("intake.lost_push_s", 0, 5),
+    _f("intake.lost_intake_s", 0, 10),
+    _f("intake.lost_push_speed", 0, 1),
+    _f("intake.search_after", 0, 60),
+    _f("intake.scan_spin_s", 0.1, 30),
+    _f("intake.scan_advance_s", 0, 30),
+    _f("intake.scan_spin_speed", 0, 1),
+    _f("intake.scan_advance_speed", 0, 1),
+
     # --- waypoint navigation ---
     _f("nav.arrive_radius_m", 0.2, 50),
     _f("nav.cruise_speed", 0, 1),
@@ -197,11 +224,15 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("vision.min_confidence", 0, 1),
     _f("vision.max_fps", 0.5, 60),
     _f("vision.standoff_size", 0.05, 1),
+    # Stop distance in metres. Overrides standoff_size above when nonzero and
+    # the robot is range-calibrated; 0 hands control back to it. Upper bound is
+    # a sanity rail, not a range limit — confidence falls off well before 10 m.
+    _f("vision.standoff_m", 0, 10),
     _f("vision.hfov_deg", 10, 180),
     _f("vision.search_speed", 0, 1),
     _f("vision.target_timeout", 0.1, 10),
     _t("vision.target_label"),
-    _e("vision.select", ("largest", "confidence", "centermost")),
+    _e("vision.select", ("largest", "confidence", "centermost", "lowest")),
     _b("vision.enabled", live=False),
     _e("vision.backend", ("auto", "edge_impulse", "imx500"), live=False),
     _t("vision.model_path", live=False),
@@ -223,6 +254,19 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("shooter.retract_seconds", 0.05, 5),
     _f("shooter.dwell", 0, 10),
     _f("shooter.cooldown", 0, 60),
+    # The flywheel speed the spin button holds. Live, because it is set while
+    # watching the wheel — but see MAX_LEGAL_RPM in drive/shooter.py: above
+    # ~3008 rpm this 3 inch wheel passes the 12.0 m/s competition limit, and the
+    # telemetry marks it `over` rather than refusing.
+    _f("shooter.target_rpm", 0, 6000),
+    # Backstop against a failing encoder, not a competition limit. See
+    # ShooterConfig; lowering it below target_rpm caps the target.
+    _f("shooter.max_target_rpm", 0, 8000),
+    _f("shooter.stall_seconds", 0, 30),
+    # Pulses per rev is the one encoder value worth a slider: it was measured
+    # over a single hand-turned revolution and scales the reading linearly, so
+    # it is exactly the number you correct once you have counted properly.
+    _i("encoder.pulses_per_rev", 1, 400, live=False),
     _i("shooter.max_shots", 0, 999),
     _b("shooter.require_arm"),
     _b("shooter.require_arrived"),
@@ -232,6 +276,7 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     # --- GPS ---
     _f("gps.fix_timeout", 0.5, 60),
     _f("gps.min_move_mps", 0, 5),
+    _f("gps.heading_timeout", 0.5, 60),
     _b("gps.enabled", live=False),
     _t("gps.port", live=False),
     _i("gps.baud", 1200, 921600, live=False),
@@ -497,6 +542,30 @@ def coerce(param: Param, value: Any) -> Any:
     return str(value)
 
 
+def migrate(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Rewrite retired parameter paths onto their replacements.
+
+    `<actuator>.speed_scale` was one trim for both directions before forward and
+    reverse got their own (see MotorConfig); it expands to both. This matters
+    because the old path lives in files we don't control — a tuning.json saved
+    on a rover, a layout document hand-edited in the field — and an unknown path
+    is DROPPED. Silently dropping a trim un-calibrates a drivetrain: the rover
+    comes back from an upgrade pulling to one side, with nothing in the log
+    saying why. An explicit value for either replacement wins over the alias.
+    """
+    if not isinstance(updates, dict):
+        return updates
+    legacy = [p for p in updates if isinstance(p, str) and p.endswith(".speed_scale")]
+    if not legacy:
+        return updates
+    out = dict(updates)
+    for path in legacy:
+        value = out.pop(path)
+        for replacement in (f"{path}_forward", f"{path}_reverse"):
+            out.setdefault(replacement, value)
+    return out
+
+
 def apply(cfg: RobotConfig, updates: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """Write `updates` (dotted path -> value) into `cfg`.
 
@@ -508,6 +577,7 @@ def apply(cfg: RobotConfig, updates: Dict[str, Any]) -> Tuple[Dict[str, Any], Di
     rejected: Dict[str, str] = {}
     if not isinstance(updates, dict):
         return applied, {"*": "expected an object of path -> value"}
+    updates = migrate(updates)
     # Built per call rather than cached: this runs only when a config frame
     # arrives, never in a control tick, and a stale map after a layout change
     # would silently reject the operator's own actuators.
@@ -566,7 +636,9 @@ def load_overrides(path: Optional[str] = None,
     if not isinstance(data, dict):
         print(f"[tuning] ignoring {path}: expected an object")
         return {}
-    return {k: v for k, v in data.items() if k in known}
+    # Retired paths first: the filter below drops anything `known` doesn't have,
+    # and a trim saved under the old name would go with it (see migrate).
+    return {k: v for k, v in migrate(data).items() if k in known}
 
 
 def save_overrides(values: Dict[str, Any], path: Optional[str] = None) -> Optional[str]:

@@ -18,6 +18,7 @@ from .comms.xbee_link import XBeeLink
 from .comms import wifi
 from .control.controller import Controller
 from .control.manager import ControlManager
+from .control.ball_intake import BallIntakeController
 from .control.object_align import ObjectAlignController
 from .control.pid import PID
 from .control.routine_controller import RoutineController
@@ -32,6 +33,7 @@ from .drive.shooter import Shooter
 from .sensors.bno085 import IMU
 from .sensors.camera import Camera
 from .sensors.detector import MockDetector, ObjectDetector
+from .sensors.encoder import FlywheelEncoder
 from .sensors.fpv import FPVStreamer
 from .sensors.gps import GPS
 from .sensors.imx500 import IMX500Detector, resolve_backend
@@ -40,6 +42,25 @@ from .sensors.pose import PoseEstimator
 # Log a warning if a control tick's work (excluding the sleep) exceeds this. A
 # healthy tick is a few ms; a stall points at blocking I/O (serial or I2C).
 SLOW_TICK_S = 0.1
+
+# The bulky telemetry blocks, one per frame in this order. See Robot._telemetry:
+# the core frame must fit in ONE XBee RF packet or two rovers interleave it into
+# garbage, so everything that does not fit takes a turn instead. Six blocks at
+# 5 Hz telemetry refreshes each about once a second.
+#
+# Order is not arbitrary — it interleaves big blocks with small ones so no two
+# consecutive frames are both long. Adding a block here costs every other block
+# refresh rate; adding a field to the CORE costs the whole fleet its telemetry.
+_TELEM_BLOCKS = ("pose", "mech", "gps", "vision", "encoder", "shooter", "routine")
+
+# How often a frame may carry a block at all. The blocks themselves cannot be
+# made to fit one RF packet — `mech` alone is 160 bytes — so the goal is not to
+# shrink them but to keep them RARE, leaving most frames as the bare 90-byte
+# core that always survives. At 5 Hz telemetry this makes roughly two frames in
+# three core-only, and refreshes each block every ~3.5 s: slow for a dashboard
+# panel, invisible for the fleet list and the drive feedback, which is the trade
+# this whole split exists to make.
+_TELEM_BLOCK_INTERVAL_S = 0.5
 
 # Ceiling on queued bulk frames. The outbox is only ever fed by an explicit
 # request from the base station, so in normal use it holds one document; this
@@ -84,6 +105,15 @@ class Robot:
         self.shooter: Optional[Shooter] = (
             Shooter(config.shooter) if config.shooter.enabled else None
         )
+        # The flywheel's tachometer. Only built alongside a shooter that is
+        # actually a flywheel (target_rpm > 0) — on a servo launcher there is no
+        # speed to measure, and the poll thread would burn CPU for nothing.
+        # Without it the shooter still spins; the loop just runs open-loop on
+        # its feed-forward model. See robot/sensors/encoder.py.
+        self.encoder: Optional[FlywheelEncoder] = None
+        if (config.encoder.enabled and self.shooter is not None
+                and config.shooter.target_rpm > 0):
+            self.encoder = FlywheelEncoder(config.encoder)
 
         # Everything else that moves: intakes, arms, extra launchers. Built from
         # the layout, empty on a stock build. The built-in shooter is registered
@@ -103,6 +133,10 @@ class Robot:
             self._registry["shooter"] = self.shooter
         # Edge state for the e-stop hook in run(); see _apply_estop.
         self._estop_latched = False
+        # Which bulky telemetry block goes out next, and when the last one
+        # went; see _telemetry.
+        self._telem_slot = 0
+        self._telem_block_at = 0.0
         # Multi-frame replies (a config snapshot, a layout, a routine set) wait
         # here for the WiFi link. Each entry is (frame, radio_ok), where the flag
         # marks the one kind of frame still allowed onto the radio. See _queue.
@@ -126,7 +160,9 @@ class Robot:
                     aligned_tolerance=a.aligned_tolerance,
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
-                    standoff_size=v.standoff_size,
+                    # Resolved, not raw: vision.standoff_m (metres) wins here
+                    # when the robot is range-calibrated. See config.py.
+                    standoff_size=v.resolved_standoff_size(),
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
@@ -139,10 +175,40 @@ class Robot:
                     aligned_tolerance=a.aligned_tolerance,
                     search_after=a.search_after,
                     search_timeout=a.search_timeout,
-                    standoff_size=v.standoff_size,
+                    # Same standoff as object_align, so require_arrived gates
+                    # firing at the same metres without shooter_align needing
+                    # to know range exists at all.
+                    standoff_size=v.resolved_standoff_size(),
                     search_speed=v.search_speed,
                     hfov_deg=v.hfov_deg,
                     pid=_pid(a.pid),
+                ),
+                # Ported from Team Northeast's auto_chassis.py. It reaches the
+                # mechanism registry directly, the way RoutineController does,
+                # because swallowing a ball is half of what this mode IS — a
+                # drive-only version of it would just run balls over.
+                "ball_intake": BallIntakeController(
+                    mechanisms=self._registry,
+                    intake_mech=config.intake.mech,
+                    intake_preset=config.intake.preset,
+                    cruise_speed=config.intake.cruise_speed,
+                    approach_speed=config.intake.approach_speed,
+                    steering_gain=config.intake.steering_gain,
+                    stop_line=config.intake.stop_line,
+                    swallow_speed=config.intake.swallow_speed,
+                    swallow_run_on_s=config.intake.swallow_run_on_s,
+                    confirm_frames=config.intake.confirm_frames,
+                    memory_s=config.intake.memory_s,
+                    match_tol=config.intake.match_tol,
+                    match_tol_per_s=config.intake.match_tol_per_s,
+                    lost_push_s=config.intake.lost_push_s,
+                    lost_intake_s=config.intake.lost_intake_s,
+                    lost_push_speed=config.intake.lost_push_speed,
+                    search_after=config.intake.search_after,
+                    scan_spin_s=config.intake.scan_spin_s,
+                    scan_advance_s=config.intake.scan_advance_s,
+                    scan_spin_speed=config.intake.scan_spin_speed,
+                    scan_advance_speed=config.intake.scan_advance_speed,
                 ),
                 "waypoint": WaypointController(
                     arrive_radius_m=config.nav.arrive_radius_m,
@@ -192,7 +258,7 @@ class Robot:
         self.gps: Optional[GPS] = (
             GPS(config.gps.port, config.gps.baud,
                 config.gps.fix_timeout, config.gps.min_move_mps,
-                config.gps.update_rate_ms)
+                config.gps.update_rate_ms, config.gps.heading_timeout)
             if config.gps.enabled else None
         )
 
@@ -292,6 +358,11 @@ class Robot:
                 if isinstance(c, ObjectAlignController):
                     c.set_detection_provider(self.detector.detection)
                     c.set_rate_provider(self.pose_estimator.heading_rate)
+                elif isinstance(c, BallIntakeController):
+                    # Same detector, no rate provider: this one steers on a
+                    # plain proportional term with no D, so it has nothing to
+                    # feed a gyro rate to. See ball_intake.py.
+                    c.set_detection_provider(self.detector.detection)
 
         # The FSM's own sensing. Its conditions read the controllers' published
         # state (aligned, arrived, route_done) rather than re-deriving any of
@@ -901,7 +972,10 @@ class Robot:
                 c.aligned_tolerance = cfg.align.aligned_tolerance
                 c.search_after = cfg.align.search_after
                 c.search_timeout = cfg.align.search_timeout
-                c.standoff_size = cfg.vision.standoff_size
+                # Resolved here too, or a live edit to standoff_m would take
+                # effect only on the next boot — and a live edit to
+                # standoff_size would silently override it.
+                c.standoff_size = cfg.vision.resolved_standoff_size()
                 c.search_speed = cfg.vision.search_speed
                 c.hfov_deg = cfg.vision.hfov_deg
                 _retune(c.pid, cfg.align.pid)
@@ -913,6 +987,28 @@ class Robot:
                 c.require_arm = cfg.shooter.require_arm
                 c.require_arrived = cfg.shooter.require_arrived
                 c.max_shots = cfg.shooter.max_shots
+            if isinstance(c, BallIntakeController):
+                # Every field except mech/preset, which name hardware and so
+                # belong to the layout rather than to a slider.
+                i = cfg.intake
+                c.cruise_speed = i.cruise_speed
+                c.approach_speed = i.approach_speed
+                c.steering_gain = i.steering_gain
+                c.stop_line = i.stop_line
+                c.swallow_speed = i.swallow_speed
+                c.swallow_run_on_s = i.swallow_run_on_s
+                c.confirm_frames = i.confirm_frames
+                c.memory_s = i.memory_s
+                c.match_tol = i.match_tol
+                c.match_tol_per_s = i.match_tol_per_s
+                c.lost_push_s = i.lost_push_s
+                c.lost_intake_s = i.lost_intake_s
+                c.lost_push_speed = i.lost_push_speed
+                c.search_after = i.search_after
+                c.scan_spin_s = i.scan_spin_s
+                c.scan_advance_s = i.scan_advance_s
+                c.scan_spin_speed = i.scan_spin_speed
+                c.scan_advance_speed = i.scan_advance_speed
             if isinstance(c, WaypointController):
                 c.arrive_radius_m = cfg.nav.arrive_radius_m
                 c.cruise_speed = cfg.nav.cruise_speed
@@ -947,8 +1043,36 @@ class Robot:
         if self.gps is not None:
             self.gps.fix_timeout = cfg.gps.fix_timeout
             self.gps.min_move_mps = cfg.gps.min_move_mps
+            self.gps.heading_timeout = cfg.gps.heading_timeout
 
     def _telemetry(self, cmd) -> dict:
+        """One telemetry frame: a small HOT core, plus one bulky block per tick.
+
+        --- why this is split ---
+        The XBee runs in transparent mode: no addressing, no arbitration. The
+        module flushes its buffer every ~72-100 bytes, so a frame longer than
+        that leaves as SEVERAL RF packets — and with two rovers transmitting on
+        the shared channel, another rover's packets land between them. The
+        receiver reassembles the interleaving into one line, that line fails to
+        decode, and the frame is gone.
+
+        Measured on this fleet before the split: a 455-byte frame from the rover
+        with three mechanisms spanned ~6 RF packets and NOT ONE arrived intact
+        over 20 seconds (0 clean, 69 sightings inside corrupted lines), while a
+        284-byte rover managed 16. The base station showed 1/1 live and the
+        bigger rover simply did not exist as far as the fleet was concerned.
+
+        Lowering the telemetry RATE does not fix it — tested, no change. The
+        variable is frame SIZE against the packet threshold, not how often you
+        try. So the core below is kept under ~100 bytes: mode, e-stop and track
+        speeds, which are what the fleet list and the drive feedback need, in
+        ONE packet that cannot be interleaved with itself.
+
+        Everything else is a dashboard nicety that tolerates a slower refresh,
+        so the bulky blocks take turns — one per frame. Each still refreshes
+        about once a second at 5 Hz telemetry, and losing one costs nothing
+        because the base station holds the last value (see fleet.py).
+        """
         t = {
             "type": "telemetry",
             "from": self.cfg.robot_id,
@@ -957,7 +1081,25 @@ class Robot:
             "left": round(cmd.left, 3),
             "right": round(cmd.right, 3),
         }
-        if self.pose_provider is not None:
+        # Whether this frame carries a bulky block, and which. Time-based
+        # rather than every-Nth-frame so the balance holds if telemetry_hz is
+        # retuned: the core is what must never be crowded out.
+        active = self.manager.active
+        now = time.monotonic()
+        carrying = None
+        if (now - self._telem_block_at) >= _TELEM_BLOCK_INTERVAL_S:
+            self._telem_block_at = now
+            carrying = _TELEM_BLOCKS[self._telem_slot % len(_TELEM_BLOCKS)]
+            self._telem_slot += 1
+
+        def wants(name: str) -> bool:
+            """True when this frame is the one carrying `name`."""
+            return carrying == name
+
+        # Position rides the "pose" slot rather than the core: a map trail and a
+        # heading readout are fine at ~1 Hz, and lat/lon/heading together are
+        # ~40 bytes, which is nearly half the core's packet budget.
+        if wants("pose") and self.pose_provider is not None:
             pose = self.pose_provider()
             if pose is not None:
                 t["lat"], t["lon"], t["heading"] = pose
@@ -965,33 +1107,45 @@ class Robot:
         # The lat/lon above says where the robot thinks it is; this says whether
         # to believe it, which is the difference between "the GPS is broken" and
         # "it has 3 satellites under a tree".
-        if self.gps is not None:
+        if wants("gps") and self.gps is not None:
             t["gps"] = self.gps.telemetry()
         # Surface IMU calibration (sys, gyro, accel, mag) so the base station can
         # tell whether the heading is trustworthy or still falling back to the
         # GPS track angle.
-        if self.imu is not None:
+        if wants("gps") and self.imu is not None:
             t["imu_calib"] = self.imu.calibration()
         # Vision summary (target, error, size, fps) so the base station can see
         # what the model sees — this is what makes standoff tunable in the field.
         # A summary, never boxes or frames: the radio is 57600 baud and shared.
-        if self.detector is not None:
+        if wants("vision") and self.detector is not None:
             t["vision"] = self.detector.telemetry()
         # Shooter state (armed, shots, dwelling, cooldown). Only while the mode
         # is active — an operator needs to see the arm latch before it matters,
         # and it's dropped on exit anyway, so there's nothing to report elsewhere.
-        active = self.manager.active
-        if isinstance(active, ShooterAlignController) and self.shooter is not None:
+        if wants("shooter") and isinstance(active, ShooterAlignController) \
+                and self.shooter is not None:
             t["shooter"] = active.status()
+        # Same rule for the ball hunt: only while it is the active mode. `track`
+        # is the number that matters — a robot stuck at "cand 1/2" is failing
+        # the confirm gate, not failing to see balls, and without this in the
+        # telemetry the two look identical from the driver's station.
+        if wants("shooter") and isinstance(active, BallIntakeController):
+            t["intake"] = active.status()
+        # The tachometer, whatever the mode: a flywheel is spun up from teleop
+        # while driving, not only from shooter_align. `poll_khz` is here because
+        # a starved poll thread and a stopped wheel both read 0 rpm, and only
+        # one of them is a problem worth chasing.
+        if wants("encoder") and self.encoder is not None:
+            t["encoder"] = self.encoder.telemetry()
         # Layout mechanisms (not the built-in launcher, which reports above via
         # the controller that owns its firing policy). Only when the build has
         # any, and only a summary — the radio is 57600 baud and shared.
-        if self.mechanisms:
+        if wants("mech") and self.mechanisms:
             t["mech"] = {name: m.status() for name, m in self.mechanisms.items()}
         # Which state the FSM is in, so the Routines tab can highlight the live
         # card. Rides the hot path because that is the whole point of it — a
         # state highlight that lags by a second is worse than none.
-        if isinstance(active, RoutineController):
+        if wants("routine") and isinstance(active, RoutineController):
             t["routine"] = active.status()
         # Whatever closed loops the active mode is running: setpoint, error,
         # output and the P/I/D split, so a gain can be tuned against a picture
@@ -1001,6 +1155,10 @@ class Robot:
         # only while `nav.pid_trace` is on. It is off by default: this is ~60
         # bytes per loop per frame on a radio shared with driving, and a graph
         # nobody is looking at is not worth the airtime a graph costs.
+        # Deliberately NOT in the rotation: a tuning graph exists to show the
+        # shape of a loop's response, and decimating it to 1 Hz would draw a
+        # different curve from the one the robot ran. It is off by default and
+        # turned on for one job at a time, so the airtime is affordable then.
         if self.cfg.nav.pid_trace:
             traces = active.pid_traces() if active is not None else {}
             if traces:
@@ -1033,6 +1191,8 @@ class Robot:
             self.detector.start()
         if self.fpv is not None:
             self.fpv.start()
+        if self.encoder is not None:
+            self.encoder.start()
         self._running = True
 
     def run(self) -> None:
@@ -1062,6 +1222,14 @@ class Robot:
                 # and the servo must still retract instead of stalling against
                 # its stop. See robot/drive/shooter.py. The same argument applies
                 # to every mechanism, so they are all ticked here.
+                #
+                # The tachometer feeds the flywheel first: one reading per tick,
+                # taken before Shooter.update() runs its 10 Hz control step, so
+                # the loop trims against this tick's speed rather than last
+                # tick's. This single call is what makes the loop genuinely
+                # closed — see Shooter._pid_has_sensor.
+                if self.encoder is not None and self.shooter is not None:
+                    self.shooter.set_measured_rpm(self.encoder.rpm())
                 for mech in self._all_mechanisms().values():
                     mech.update()
                 t2 = time.monotonic()
@@ -1115,3 +1283,8 @@ class Robot:
             self.gps.stop()
         if self.imu is not None:
             self.imu.stop()
+        # After the mechanisms are parked: the wheel is already commanded to
+        # neutral by then, and stopping the tachometer first would only blind
+        # the stall guard while it was still spinning down.
+        if self.encoder is not None:
+            self.encoder.stop()

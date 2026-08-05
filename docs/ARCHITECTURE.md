@@ -103,6 +103,7 @@ robot/                        # runs on the rover Pi (also imported by the base 
     teleop.py                 drive from base-station commands (+ link failsafe)
     object_align.py           Edge Impulse object alignment — inject a detection provider
     shooter_align.py          object_align + a trigger: align, settle, fire
+    ball_intake.py            the `ball_intake` mode: chase a ball, swallow it, repeat
     detection.py              the Detection contract the controller consumes
     waypoint.py               GPS waypoint navigation — inject a pose provider
     routine_controller.py     the `routine` mode: runs a UI-authored state machine
@@ -173,11 +174,12 @@ from environment variables / CLI flags, and hands it to `Robot`.
 | `RoutineConfig` | `state_timeout_default=60`, `allow_arm=False` | What a UI-authored state machine is allowed to do. |
 | `CommsConfig` | `port="/dev/ttyUSB0"`, `baud=57600`, `command_timeout=0.5` | XBee serial + teleop failsafe window. Must match the base station and the radios' `BD`. |
 | `ShooterConfig` | `enabled=False`, `channel=2`, `rest_angle=-30`, `fire_angle=30`, `fire_seconds=0.35`, `retract_seconds=0.35`, `dwell=0.5`, `cooldown=2.0`, `require_arm=True`, `require_arrived=True`, `max_shots=0` | Servo launcher geometry + the firing policy for `shooter_align`. Off by default. |
-| `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.5`, `update_rate_ms=1000` | Adafruit Ultimate GPS reader settings. |
+| `GPSConfig` | `enabled`, `port="/dev/ttyAMA0"`, `baud=9600`, `fix_timeout=5.0`, `min_move_mps=0.15`, `heading_timeout=3.0`, `update_rate_ms=1000` | Adafruit Ultimate GPS reader settings. |
 | `PIDConfig` | `kp`, `ki`, `kd`, `out_limit`, `i_limit` | Gains for one loop, so they are tunable rather than edit-and-redeploy constants. |
 | `AlignConfig` | `forward_speed=0.25`, `pivot_threshold=0.25`, `aligned_tolerance=0.05`, `search_after=0.5`, `search_timeout=10`, `pid` | The `object_align` / `shooter_align` state machine. |
+| `IntakeConfig` | `mech="intake"`, `preset="in"`, `cruise_speed=0.75`, `approach_speed=0.40`, `steering_gain=0.4`, `stop_line=0.70`, `confirm_frames=2`, `memory_s=0.4`, `match_tol=0.20`, `match_tol_per_s=2.2`, lost/scan timers | The `ball_intake` mode, ported from Team Northeast's `auto_chassis.py`. Defaults are the constants that were tuned on the robot; the confirm gate is the load-bearing part. |
 | `NavConfig` | `arrive_radius_m=2.0`, `cruise_speed=0.35`, `acquire_speed=0.4`, `pivot_threshold_deg=25`, `heading_pid`, `gps_heading_pid` | Waypoint navigation. Two heading loops: `heading_pid` for an absolute IMU heading, the slower `gps_heading_pid` for a GPS course over ground. |
-| `RobotConfig` | `drive`, `comms`, `gps`, `align`, `nav`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5`, `heading_source="auto"` | Top-level composition. `heading_source`: `auto` (IMU, else the GPS track angle) \| `gps` \| `imu`. |
+| `RobotConfig` | `drive`, `comms`, `gps`, `align`, `intake`, `nav`, `loop_hz=50`, `start_mode`, `robot_id`, `telemetry_hz=5`, `heading_source="auto"` | Top-level composition. `heading_source`: `auto` (IMU, else the GPS track angle) \| `gps` \| `imu`. |
 
 > **ESC-as-servo mapping.** An ESC takes the same PWM as a servo — neutral pulse
 > = stop, longer = forward, shorter = reverse. Throttle `-1..+1` maps onto servo
@@ -744,9 +746,17 @@ never blocks on serial. Details:
   true-North heading with no compass, no calibration and no declination
   correction. It's what `pose()` returns whenever the IMU isn't supplying one.
   But it's the direction the antenna is *travelling*, so it's noise at a
-  standstill and blind to a pivot in place. Below `min_move_mps` (0.5 m/s) it's
+  standstill and blind to a pivot in place. Below `min_move_mps` (0.15 m/s) it's
   ignored and the last good value is held; until the rover has moved once,
   heading is `None` (never `0°` — that would read as "pointing North").
+- **The hold has a deadline** — a held track angle older than `heading_timeout`
+  (3 s) is reported as no heading at all. Held indefinitely it becomes a heading
+  that steering cannot move, and the waypoint loop closes around a constant
+  error, holds a constant steering output and drives a circle — while the
+  turning itself keeps the rover under `min_move_mps`, so the course never
+  refreshes and the circle never ends. `min_move_mps` must also sit UNDER the
+  speed the rover actually makes in waypoint mode (check the base station's GPS
+  readout), or no course is ever accepted in the first place.
 - **A position needs a fix.** `adafruit_gps` keeps writing `latitude`/`longitude`
   through a no-fix sentence, so the reader gates every update on `has_fix` and
   drops null-island `(0, 0)`.
@@ -1265,6 +1275,8 @@ Each maps to a CLI flag on the respective entry point.
 | `RS_VISION_IMX500_LABELS` / `_IOU` / `_MAX_DET` | `` / `0.65` / `10` | Labels file (empty = embedded in the `.rpk`), NMS overlap, boxes per frame. |
 | `RS_VISION_LABEL` / `RS_VISION_CONF` | `` / `0.6` | Label to track (empty = any); score floor. |
 | `RS_VISION_STANDOFF` / `RS_VISION_HFOV` | `0.45` / `50` | **Both backend-dependent** — calibrate with `tools/detector_selftest.py`; HFOV is post-crop on Edge Impulse, the real ~66° on the IMX500. |
+| `RS_VISION_TARGET_HEIGHT` / `RS_VISION_FOCAL_FRAC` | `0` / `0` | Metric range (telemetry `dist`, metres) to a known-size target. **Backend-dependent**, both `0` = uncalibrated and `dist` is omitted. Calibrate: `tools/detector_selftest.py --target-height 0.368 --distance 3.00`. |
+| `RS_VISION_STANDOFF_M` | `0` | Stop this many metres short, instead of at `RS_VISION_STANDOFF`'s box-height fraction. Converted to that fraction once at startup, so the align loop is unchanged; needs the two above, and falls back to `RS_VISION_STANDOFF` without them. Also where `shooter_align` fires. |
 | `RS_CAMERA_DEVICE` | `auto` | `auto` \| `imx500` \| `picamera2` \| `/dev/videoN` \| index. Set for you when the IMX500 backend is selected. |
 | `RS_SHOOTER_ENABLED` / `RS_SHOOTER_CHANNEL` | `0` / `2` | Servo launcher. Channels 0–1 are the drive ESCs. |
 | `RS_SHOOTER_REST` / `RS_SHOOTER_FIRE` | `-30` / `30` | Home and fire angles (find with `tools/servo_sweep.py`). |
