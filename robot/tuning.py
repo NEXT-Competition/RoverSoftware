@@ -241,6 +241,12 @@ _BASE_PARAMS: Tuple[Param, ...] = (
     _f("vision.min_confidence", 0, 1),
     _f("vision.max_fps", 0.5, 60),
     _f("vision.standoff_size", 0.05, 1),
+    # The same stop distance said in metres, converted through the calibration
+    # below. 0 hands the decision back to standoff_size. Live, because it is the
+    # form of the knob an operator reaches for while watching a rover stop too
+    # short of a bucket. The upper bound is a sanity rail, not a range limit —
+    # confidence in a box-height estimate falls off well before 10 m.
+    _f("vision.standoff_m", 0, 10),
     # The bounding-box rangefinder's one calibration pair. Live, because getting
     # it right means parking the rover at a measured distance and typing what the
     # size readout says — a round trip that a restart per attempt would make

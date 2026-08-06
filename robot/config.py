@@ -578,6 +578,20 @@ class VisionConfig:
     # names `stop_within_m` overrides it for as long as that state is current,
     # converting metres through the calibration below.
     standoff_size: float = 0.45
+    # The same standoff said in metres, for every mode rather than per routine
+    # state. 0 = off, and standoff_size decides as it always has.
+    #
+    # NOT a second mechanism: the align controllers convert it into a box-height
+    # threshold through the calibration below (ObjectAlignController.standoff_m,
+    # which is also what a routine's `stop_within_m` sets), so the loop, the
+    # arrival latch and its hysteresis are unchanged. Metres are the number an
+    # operator actually has an opinion about — "stop a metre short" — and a box
+    # height fraction is one they would have to go and measure.
+    #
+    # Needs the pair below calibrated. Without it the controller falls back to
+    # standoff_size rather than inventing a threshold: approach keeps working,
+    # it just stops where it always did.
+    standoff_m: float = 0.0
     # Bounding box -> metres, as ONE measured pair: "at range_at_m, the box
     # measured range_size". See control/rangefinder.py for why one pair is the
     # whole model (the frame height and the focal length cancel).

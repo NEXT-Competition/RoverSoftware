@@ -195,12 +195,47 @@ reformats those tensors — better here than on the rover.
 The Edge Impulse FOMO caveat in `requirements.txt` — centroids only, so the rover
 can turn to face a target but never approach it — **does not apply here**. This is
 a real bounding-box detector, so `to_detection()` reports a true `size` and
-approach/standoff work. Calibrate `RS_VISION_STANDOFF_SIZE` with
+approach/standoff work. Calibrate `RS_VISION_STANDOFF` with
 `tools/detector_selftest.py` rather than guessing.
 
 Set `RS_VISION_HFOV=66`. The 50° default is the *post-crop* figure for the Edge
 Impulse backend; the IMX500 path maps boxes back to the full frame, so it needs
 the camera's real FOV or the steering derivative is scaled wrong.
+
+## Metric range (optional)
+
+Standoff above stops on the raw `size` ratio and needs no calibration. If you
+also want **metres** — the `dist` the base station shows, and the metre standoff
+`RS_VISION_STANDOFF_M` converts through — that needs one tape measure. The model
+is a single constant (`distance × size = k`, see `robot/control/rangefinder.py`),
+so the calibration is one measured pair:
+
+```bash
+# 1. CALIBRATE — target centred, tape-measured, NOT touching the frame edge
+python tools/detector_selftest.py --backend imx500 \
+    --imx500-model /path/to/network/network.rpk \
+    --imx500-labels /path/to/labels.txt \
+    --label bucket --distance 3.00
+#    -> prints RS_VISION_RANGE_AT_M / RS_VISION_RANGE_SIZE to paste
+
+# 2. VERIFY at a distance you did NOT calibrate at
+python tools/detector_selftest.py --backend imx500 ... \
+    --range-at-m 3.00 --range-size <the number>
+#    -> `range=` per frame; a few percent off is right
+```
+
+`--imx500-labels` is **required for a custom export** — the `.rpk` this pipeline
+produces carries no embedded labels, so without it every box comes back `"0"`
+and `--label` never matches.
+
+The target's real height is folded into the constant and never asked for, which
+is why the pair belongs to *this target*: a cone and a bucket at the same
+distance give different boxes. It is also specific to *this* network at *this*
+`imgsz` — it does not carry over from the Edge Impulse backend (which normalizes
+against a ~50° crop, a ~28% difference), and re-exporting at a different
+`--imgsz` is a new calibration. A rover with an ultrasonic fitted learns the same
+constant on its own, per label; the hand-set pair is the fallback for labels it
+has not yet seen from a measurable distance.
 
 ## Sensor memory is tight at 640
 

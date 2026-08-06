@@ -15,6 +15,7 @@ Message shapes (base station -> robot):
     {"type": "disarm_shooter"}   # shooter_align: forbid firing, park the servo
     {"type": "fire"}             # shooter_align: manual shot, skips alignment
     {"type": "mech_preset", "mech": "intake", "preset": "in"}  # named state
+    {"type": "shooter_spin", "on": true}  # flywheel up/down, or one servo shot
     {"type": "restart"}          # stop cleanly; the supervisor brings it back
     {"type": "get_config"}       # ask for every tunable parameter
     {"type": "set_config", "config": {"align.pid.kp": 0.6}, "save": true}
