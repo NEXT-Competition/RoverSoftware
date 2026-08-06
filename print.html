@@ -3422,6 +3422,7 @@ Each maps to a CLI flag on the respective entry point.</p>
 <tr><td><code>RS_VISION_LABEL</code> / <code>RS_VISION_CONF</code></td><td>`` / <code>0.6</code></td><td>Label to track (empty = any); score floor.</td></tr>
 <tr><td><code>RS_VISION_STANDOFF</code> / <code>RS_VISION_HFOV</code></td><td><code>0.45</code> / <code>50</code></td><td><strong>Both backend-dependent</strong> — calibrate with <code>tools/detector_selftest.py</code>; HFOV is post-crop on Edge Impulse, the real ~66° on the IMX500.</td></tr>
 <tr><td><code>RS_VISION_RANGE_AT_M</code> / <code>RS_VISION_RANGE_SIZE</code></td><td><code>1.0</code> / <code>0.45</code></td><td>The bounding-box rangefinder's one calibration pair: "at this distance, the box measured this". <strong>Shipped values are a placeholder</strong> — measure them. <code>0</code> disables metre estimates.</td></tr>
+<tr><td><code>RS_VISION_STANDOFF_M</code></td><td><code>0</code></td><td>Stop this many metres short instead of at <code>RS_VISION_STANDOFF</code>'s box-height fraction. Converted through the pair above, so it needs that measured; without it <code>RS_VISION_STANDOFF</code> still applies. Also where <code>shooter_align</code> fires from.</td></tr>
 <tr><td><code>RS_CAMERA_DEVICE</code></td><td><code>auto</code></td><td><code>auto</code> | <code>imx500</code> | <code>picamera2</code> | <code>/dev/videoN</code> | index. Set for you when the IMX500 backend is selected.</td></tr>
 <tr><td><code>RS_SHOOTER_ENABLED</code> / <code>RS_SHOOTER_CHANNEL</code></td><td><code>0</code> / <code>2</code></td><td>Servo launcher. Channels 0–1 are the drive ESCs.</td></tr>
 <tr><td><code>RS_SHOOTER_REST</code> / <code>RS_SHOOTER_FIRE</code></td><td><code>-30</code> / <code>30</code></td><td>Home and fire angles (find with <code>tools/servo_sweep.py</code>).</td></tr>
@@ -3725,11 +3726,40 @@ reformats those tensors — better here than on the rover.</p>
 <p>The Edge Impulse FOMO caveat in <code>requirements.txt</code> — centroids only, so the rover
 can turn to face a target but never approach it — <strong>does not apply here</strong>. This is
 a real bounding-box detector, so <code>to_detection()</code> reports a true <code>size</code> and
-approach/standoff work. Calibrate <code>RS_VISION_STANDOFF_SIZE</code> with
+approach/standoff work. Calibrate <code>RS_VISION_STANDOFF</code> with
 <code>tools/detector_selftest.py</code> rather than guessing.</p>
 <p>Set <code>RS_VISION_HFOV=66</code>. The 50° default is the <em>post-crop</em> figure for the Edge
 Impulse backend; the IMX500 path maps boxes back to the full frame, so it needs
 the camera's real FOV or the steering derivative is scaled wrong.</p>
+<h2 id="metric-range-optional"><a class="header" href="#metric-range-optional">Metric range (optional)</a></h2>
+<p>Standoff above stops on the raw <code>size</code> ratio and needs no calibration. If you
+also want <strong>metres</strong> — the <code>dist</code> the base station shows, and the metre standoff
+<code>RS_VISION_STANDOFF_M</code> converts through — that needs one tape measure. The model
+is a single constant (<code>distance × size = k</code>, see <code>robot/control/rangefinder.py</code>),
+so the calibration is one measured pair:</p>
+<pre><code class="language-bash"># 1. CALIBRATE — target centred, tape-measured, NOT touching the frame edge
+python tools/detector_selftest.py --backend imx500 \
+    --imx500-model /path/to/network/network.rpk \
+    --imx500-labels /path/to/labels.txt \
+    --label bucket --distance 3.00
+#    -&gt; prints RS_VISION_RANGE_AT_M / RS_VISION_RANGE_SIZE to paste
+
+# 2. VERIFY at a distance you did NOT calibrate at
+python tools/detector_selftest.py --backend imx500 ... \
+    --range-at-m 3.00 --range-size &lt;the number&gt;
+#    -&gt; `range=` per frame; a few percent off is right
+</code></pre>
+<p><code>--imx500-labels</code> is <strong>required for a custom export</strong> — the <code>.rpk</code> this pipeline
+produces carries no embedded labels, so without it every box comes back <code>"0"</code>
+and <code>--label</code> never matches.</p>
+<p>The target's real height is folded into the constant and never asked for, which
+is why the pair belongs to <em>this target</em>: a cone and a bucket at the same
+distance give different boxes. It is also specific to <em>this</em> network at <em>this</em>
+<code>imgsz</code> — it does not carry over from the Edge Impulse backend (which normalizes
+against a ~50° crop, a ~28% difference), and re-exporting at a different
+<code>--imgsz</code> is a new calibration. A rover with an ultrasonic fitted learns the same
+constant on its own, per label; the hand-set pair is the fallback for labels it
+has not yet seen from a measurable distance.</p>
 <h2 id="sensor-memory-is-tight-at-640"><a class="header" href="#sensor-memory-is-tight-at-640">Sensor memory is tight at 640</a></h2>
 <p>Our YOLO11n at <code>imgsz=640</code> uses <strong>7.12 MB of the 8 MB on-chip budget (90%)</strong>. It
 fits, but there is not much room. If a future model doesn't fit, the first lever

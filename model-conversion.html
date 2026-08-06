@@ -336,11 +336,40 @@ reformats those tensors — better here than on the rover.</p>
 <p>The Edge Impulse FOMO caveat in <code>requirements.txt</code> — centroids only, so the rover
 can turn to face a target but never approach it — <strong>does not apply here</strong>. This is
 a real bounding-box detector, so <code>to_detection()</code> reports a true <code>size</code> and
-approach/standoff work. Calibrate <code>RS_VISION_STANDOFF_SIZE</code> with
+approach/standoff work. Calibrate <code>RS_VISION_STANDOFF</code> with
 <code>tools/detector_selftest.py</code> rather than guessing.</p>
 <p>Set <code>RS_VISION_HFOV=66</code>. The 50° default is the <em>post-crop</em> figure for the Edge
 Impulse backend; the IMX500 path maps boxes back to the full frame, so it needs
 the camera's real FOV or the steering derivative is scaled wrong.</p>
+<h2 id="metric-range-optional"><a class="header" href="#metric-range-optional">Metric range (optional)</a></h2>
+<p>Standoff above stops on the raw <code>size</code> ratio and needs no calibration. If you
+also want <strong>metres</strong> — the <code>dist</code> the base station shows, and the metre standoff
+<code>RS_VISION_STANDOFF_M</code> converts through — that needs one tape measure. The model
+is a single constant (<code>distance × size = k</code>, see <code>robot/control/rangefinder.py</code>),
+so the calibration is one measured pair:</p>
+<pre><code class="language-bash"># 1. CALIBRATE — target centred, tape-measured, NOT touching the frame edge
+python tools/detector_selftest.py --backend imx500 \
+    --imx500-model /path/to/network/network.rpk \
+    --imx500-labels /path/to/labels.txt \
+    --label bucket --distance 3.00
+#    -&gt; prints RS_VISION_RANGE_AT_M / RS_VISION_RANGE_SIZE to paste
+
+# 2. VERIFY at a distance you did NOT calibrate at
+python tools/detector_selftest.py --backend imx500 ... \
+    --range-at-m 3.00 --range-size &lt;the number&gt;
+#    -&gt; `range=` per frame; a few percent off is right
+</code></pre>
+<p><code>--imx500-labels</code> is <strong>required for a custom export</strong> — the <code>.rpk</code> this pipeline
+produces carries no embedded labels, so without it every box comes back <code>"0"</code>
+and <code>--label</code> never matches.</p>
+<p>The target's real height is folded into the constant and never asked for, which
+is why the pair belongs to <em>this target</em>: a cone and a bucket at the same
+distance give different boxes. It is also specific to <em>this</em> network at <em>this</em>
+<code>imgsz</code> — it does not carry over from the Edge Impulse backend (which normalizes
+against a ~50° crop, a ~28% difference), and re-exporting at a different
+<code>--imgsz</code> is a new calibration. A rover with an ultrasonic fitted learns the same
+constant on its own, per label; the hand-set pair is the fallback for labels it
+has not yet seen from a measurable distance.</p>
 <h2 id="sensor-memory-is-tight-at-640"><a class="header" href="#sensor-memory-is-tight-at-640">Sensor memory is tight at 640</a></h2>
 <p>Our YOLO11n at <code>imgsz=640</code> uses <strong>7.12 MB of the 8 MB on-chip budget (90%)</strong>. It
 fits, but there is not much room. If a future model doesn't fit, the first lever
